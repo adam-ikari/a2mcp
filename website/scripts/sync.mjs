@@ -57,11 +57,11 @@ cpSync(join(REPO, "docs"), CONTENT, { recursive: true });
 // from what that page actually says.
 const PAGE_DESCRIPTIONS = {
 	"protocol.md":
-		"桥实现的 MCP 2025-11-25 Streamable HTTP 子集：处理顺序、会话生命周期、错误码总表、POST /blob 的原始字节上传与它放弃的东西。",
+		"桥实现的 MCP 2025-11-25 Streamable HTTP 子集：处理顺序、会话生命周期、错误码总表、POST /blob 的原始字节上传、POST /host-llm 的宿主推理切换，以及它们各自放弃的东西。",
 	"testing.md":
-		"核验矩阵：117 单测、35 项原始字节上传、35 项加固、28 项发布包与端到端、10 个端到端场景，另有审批边界判别。顺手量的还有宿主 RSS、审计轮转与逐层脱敏；插件发现与 HOME 的实测结论在正文。",
+		"核验矩阵：138 单测、35 项原始字节上传、35 项加固、28 项发布包与端到端、28 项宿主推理 deny/restore、10 个端到端场景，另有审批边界判别。顺手量的还有宿主 RSS、审计轮转与逐层脱敏；插件发现与 HOME 的实测结论在正文。",
 	"computer-use.md":
-		"computer use 让模型看屏幕猜坐标去点按，本桥让调用方按名字调工具。执行走的是宿主原生工具的实现，目录由 tools/list 一条条给出名字和参数。",
+		"computer use 让模型看屏幕猜坐标去点按，本桥让调用方按名字调工具。执行走的是本机工具自己的实现，目录由 tools/list 一条条给出名字和参数。",
 };
 for (const [file, description] of Object.entries(PAGE_DESCRIPTIONS)) {
 	const target = join(CONTENT, file);
@@ -113,7 +113,7 @@ const changelog = readFileSync(join(REPO, "CHANGELOG.md"), "utf8")
 	.replaceAll("](docs/testing.md)", "](./testing.md)");
 writeFileSync(
 	join(CONTENT, "changelog.md"),
-	`---\ntitle: 变更日志\ndescription: 从 v0.1.0 起的改动记录：POST /blob 为什么收原始字节、哪些端到端核验被推倒重测、安装方式怎么收到一条，每条都写明实测数字与代价。\n---\n\n# 变更日志\n\n${changelog}`,
+	`---\ntitle: 变更日志\ndescription: 从 v0.1.0 起的改动记录：POST /blob 为什么收原始字节、宿主推理为什么靠 POST /host-llm 整体关掉、哪些端到端核验被推倒重测、安装方式怎么收到一条，每条都写明实测数字与代价。\n---\n\n# 变更日志\n\n${changelog}`,
 );
 
 // protocol.md: repo-relative links -> site form
@@ -135,7 +135,7 @@ layout: home
 hero:
   name: omp A2A Bridge
   text: 把本机的工具开给远程的 agent
-  tagline: 扩展把本机跑着的这个 omp 开成一个 MCP 接口，远程 agent 指过来就能在这台机器上跑 adb、idf.py、串口工具。宿主不做模型推理：收请求、跑工具、回结果。
+  tagline: 一个 omp 扩展。装上后，本机 omp 多开出一个 MCP 接口，别的 agent 从远程调用这台机器上的 read、bash、edit——命令在本机真跑，文件在本机真改。推理归调用方，桥自己从不请求模型。
   actions:
     - theme: brand
       text: 接上远程 agent
@@ -146,25 +146,28 @@ hero:
 
 features:
   - title: 远程烧一块板子
-    details: adb、idf.py、串口工具、烧录器都是本机 PATH 上的命令。远程 agent 调 bash，执行落在本机 shell；装了 Android SDK 就调得到 adb，装了 ESP-IDF 就能 idf.py flash。
+    details: adb、idf.py、串口工具、烧录器都是本机 PATH 上的命令。远程 agent 调 bash，命令就在这台机器的 shell 里跑；装了 Android SDK 就调得到 adb，装了 ESP-IDF 就能 idf.py flash。
     link: /intro#设备
-  - title: 驱动挂在宿主上的设备
-    details: 宿主挂出来的 xd://debug（DAP 调试器）、xd://lsp 这些设备不进工具目录，用 read/write 的 path 参数读写与执行。清单跟着宿主装了哪些扩展、接了什么设备走。
+  - title: 驱动接在本机上的设备
+    details: DAP 调试器（xd://debug）、LSP（xd://lsp）这类设备不进工具目录，远程 agent 用 read/write 的 path 参数就能读写和执行。有什么设备，跟着本机 omp 装了哪些扩展走。
     link: /intro#设备
-  - title: 把固件放上宿主机
-    details: POST /blob 收原始字节，不 base64。实测 100 MB 镜像一次请求传完，字节一致。只做上传，GET 一律 405，理由在协议页。
+  - title: 把固件传上这台机器
+    details: POST /blob 收原始字节，不用 base64。实测 100 MB 的镜像一个请求传完，落盘字节一致。这个端点只做上传，GET 一律 405，理由写在协议页。
     link: /intro#传文件
+  - title: 宿主推理可以整体关掉
+    details: 远程调用可能唤醒宿主自己的 agent，花宿主的 token。host_llm 配置与 POST /host-llm 把这件事变成开关：deny 在位时宿主的会话发不出任何模型请求，核验探针对着一个真在听的计数 sink 数过——零是数出来的。
+    link: /intro#宿主推理接管
   - title: 接上远程 agent
-    details: 宿主首次启动时广播桥地址并生成 token，复制进远程客户端的 mcp.json 就连上。跨机走 SSH 端口转发，桥默认只绑回环。
+    details: 本机 omp 首次启动时广播接口地址并生成 token，抄进远程客户端的 mcp.json 就连上。默认只监听 127.0.0.1，跨机器走 SSH 端口转发。
     link: /intro
   - title: 与 computer use 的区别
-    details: computer use 让模型看屏幕猜坐标去点按，本桥发的是工具名加参数，执行落在宿主原生工具的实现上。要推理的那一方也不同：宿主不推理，推理全在调用方的模型里。
+    details: computer use 让模型看屏幕猜坐标去点按；本桥的请求直接带着工具名和参数，执行走本机工具自己的实现。推理也在调用方的模型里做。
     link: /computer-use
   - title: 协议参考
     details: 客户端要实现的全部约定：处理顺序、会话生命周期、错误码总表。
     link: /protocol
   - title: 测试与核验
-    details: 单测之外，六个核验起真实的宿主 omp 跑完整流程，发布包那一个装回去跑通才算过。审批核验给出 VERDICT A/B/C。
+    details: 138 项单测之外，七个核验全都拉起真实的 omp 跑完整流程；宿主推理那一个让宿主真连进计数 sink，发布包那一个装回去跑通才算过。各项覆盖什么、怎么判读，测试页写着。
     link: /testing
 ---
 `;

@@ -4,18 +4,19 @@
 
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 117 pass / 0 fail（9 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 138 pass / 0 fail（10 文件） |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，35 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，34 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
+| `bun run test:takeover` | 宿主推理 deny/restore 核验，28 项，约 60 秒 | 是 | `takeover probe: all assertions met` |
 | `bun run test:blob` | 原始字节上传（`POST /blob`），35 项 | 是 | `BLOB OK` |
 | `bun run test:install` | 发布包自包含 + 端到端，28 项 | 是 | `PACKAGE OK` |
 | `bun run test:scenario` | 端到端场景，10 个叙事 / 54 步，约 45 秒 | 是 | `SCENARIOS: 54 steps, 0 failed` |
 
-统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:install` 的端到端那半程是例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，blob 核验失败时还要多留 100 MB 级别的上传，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（七个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程是另一个例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，blob 核验失败时还要多留 100 MB 级别的上传，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
-六个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
+七个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
 ## `test:install` — 发布包自包含核验 + 端到端（28 项）
 
@@ -26,7 +27,7 @@
 | manifest | 6 | 有 `name`；有 `version`（否则 omp 显示 `@undefined`）；声明 `pi.extensions`（加载开关）；**无 runtime 依赖**（`@oh-my-pi/*` 由宿主 shim 提供）；`files[]` 同时含 `extensions/` 与 `src/` |
 | 打包 | 3 | `npm pack` 出 tarball；体积 < 500KB（不含 `node_modules`）；解开是 `package/` 根 |
 | 内容 | 8 | 入口 `extensions/a2a-bridge.ts` 与 5 个 `src/*.ts` 都在 tarball 里；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块） |
-| 端到端 | 11 | 每次先卸载再 `omp install .`——装的是链接，所以宿主加载的就是工作区；断言该路径不是实体拷贝；桥被发现并广播监听地址；首次启动只写 `host`/`port`/`token`；`initialize` 返回协议版本；`tools/list` 非空且无 `a2a_*`（不断言具体数量——宿主装几个扩展就变几个，写死会静默过期）；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
+| 端到端 | 11 | 每次先卸载再 `omp install .`——装的是链接，所以宿主加载的就是工作区；断言该路径不是实体拷贝；桥被发现并广播监听地址；首次启动只写 `host`/`host_llm`/`port`/`token`；`initialize` 返回协议版本；`tools/list` 非空且无 `a2a_*`（不断言具体数量——宿主装几个扩展就变几个，写死会静默过期）；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
 
 第三组是关键：入口 import 的是 `../src/*.ts`，`files[]` 漏掉任何一个都会**装得上、加载时才炸**。逐个断言文件名会被新增的模块绕过，走 import 图才抓得到。
 
@@ -45,7 +46,7 @@
 
 坏探针错在哪：它只往临时 HOME 的 agent 目录放标记，没往 plugins 目录放；而且**没给临时 HOME 写 `models.yml`**。
 
-第二点是关键，也单独吃过一次亏：**宿主没有模型配置就不创建 session，扩展在 `session_start` 加载，于是桥永远不广播**。这个症状与「插件发现忽略了我的 HOME」完全一样。写「桥没起来」的失败信息时，先看有没有这句 `No models available`。所有起宿主的核验都走 `test/harness.ts` 播种 `models.yml`（不可达 provider，够启动即可，桥不推理）。
+第二点是关键，也单独吃过一次亏：**宿主没有模型配置就不创建 session，扩展在 `session_start` 加载，于是桥永远不广播**。这个症状与「插件发现忽略了我的 HOME」完全一样。写「桥没起来」的失败信息时，先看有没有这句 `No models available`。所有起宿主的核验都走 `test/harness.ts` 播种 `models.yml`（不可达 provider，够启动即可，桥不推理）。这个播种的边界要写清：它证明的是「桥不靠模型回答也能跑」，证不了「宿主不发模型请求」——不可达的请求静默失败，计数看不见。现实里确实有一条链从这个盲区漏出去：远程 `bash` 超过宿主 300 秒超时会被宿主转成后台任务，任务完成的 `async-result` 通知进会话，唤醒宿主自己的 agent 开始推理（远程 Windows 宿主实测，见 [computer-use](./computer-use.md)）。当时现有核验没有一条走后台任务路径——审批探针把 `bash` 挂住就看结论，超时转后台这条路没碰过。这条盲区由 2026-10-12 的第七核验收口：`test:takeover` 在带接管与撤掉接管两种状态下各测一次长 `bash`，唤醒链在负控那侧被真实地跑起来并数到（见「test:takeover」一节）。
 
 所以端到端这组**不假装自己验证了干净机器**——插件发现确实无法用环境变量改道。
 
@@ -91,7 +92,7 @@
 
 写失败用 `/dev/full` 来触发：open 成功，写时 ENOSPC，这是无 root 权限下唯一干净的路子。把 `/dev/shm` 填满也能达到目的，但那是全机范围的破坏，不做。
 
-内存那组只断言「上传确实成了」，不断言 RSS 阈值，原因写在探针文件头，这里记结论：同一个 8 MB 请求的宿主 RSS 安顿增量二十三轮里从 −157 MB 跨到 +171 MB，其中三轮是负的（上传完宿主 RSS 比上传前还低）；两个并发那一项落在 −141 到 +168 MB，峰值最高 +264 MB。逐轮的数与近六轮基线不抄在这里——抄过的那份停在第十六轮就再没人更新，序列只在协议页那张内存表里维护。负值来自测量本身的位置：`空闲`基线在探针末尾取样，此刻前一步那次 100 MB 上传仍有内存没还给操作系统，基线自己一路往下衰减，每个增量量到的都是衰减的进度，量不到那一次上传。分布的宽度由 Bun 分配器决定（arena 增长加延迟归还），跟本桥有没有把 body 留在内存里无关。拿它们设阈值，测的是分配器，且会在忙碌的 CI runner 上因与桥无关的原因变红。探针每轮把实测覆盖写进 `test/rss-<宿主版本>.json`，`docs/protocol.md` 的内存表从它刷新——那页的数此前只在 18.6.1 上量过一次，没人复核就会烂在文档里。没有 `/proc` 时这组打印 SKIP 并保留旧文件，不会把上一台机器的数当本轮的。
+内存那组只断言「上传确实成了」，不断言 RSS 阈值，原因写在探针文件头，这里记结论：同一个 8 MB 请求的宿主 RSS 安顿增量二十五轮里从 −157 MB 跨到 +171 MB，其中三轮是负的（上传完宿主 RSS 比上传前还低）；两个并发那一项落在 −141 到 +168 MB，峰值最高 +264 MB。逐轮的数与近六轮基线不抄在这里——抄过的那份停在第十六轮就再没人更新，序列只在协议页那张内存表里维护。负值来自测量本身的位置：`空闲`基线在探针末尾取样，此刻前一步那次 100 MB 上传仍有内存没还给操作系统，基线自己一路往下衰减，每个增量量到的都是衰减的进度，量不到那一次上传。分布的宽度由 Bun 分配器决定（arena 增长加延迟归还），跟本桥有没有把 body 留在内存里无关。拿它们设阈值，测的是分配器，且会在忙碌的 CI runner 上因与桥无关的原因变红。探针每轮把实测覆盖写进 `test/rss-<宿主版本>.json`，`docs/protocol.md` 的内存表从它刷新——那页的数此前只在 18.6.1 上量过一次，没人复核就会烂在文档里。没有 `/proc` 时这组打印 SKIP 并保留旧文件，不会把上一台机器的数当本轮的。
 
 ## `test:hardening` — 加固核验（35 项）
 
@@ -238,6 +239,29 @@
 | 审计不可见 | 无 start 记录；或判 B 却有 done | 派发期审计被破坏 | 1 |
 
 setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 打印宿主日志尾部。**失败时临时目录保留**（`evidence kept at <path>`）供事后检查；成功才清理。
+
+## `test:takeover` — 宿主推理 deny/restore 核验（28 项）
+
+**要回答的问题**：deny 在位时宿主自己的会话是不是真的发不出模型请求，远程把它撤掉之后恢复是不是真的生效。此前的核验答不了这个问题，原因在测量而不在覆盖：被测宿主用的是故意不可达的 provider，请求失败不出声，「零模型请求」就只是一个缺席、不是一个数。这个探针把不可达换成一个真在听的计数 sink（`Bun.serve`，答 503）——仓库里第一个真让宿主连进来的 listener。于是断言变成算术：命中数该还是命中数。
+
+宿主按 rpc 模式起在隔离 HOME：配置 `host_llm: "deny"`，`models.yml` 的 provider 指向 sink，`bash.autoBackground.thresholdMs` 压到 1500（让唤醒链最容易触发），命令超时 120 秒。
+
+| 组 | 项 | 断言 |
+| --- | --- | --- |
+| 启动装配 | 4 | deny-from-config 在 `session_start` 装上；装例行报告影子数与绊线键数（本轮实测 75 providers / 69 keys）；sink 的目的地在绊线键里；当前模型行被推进影子位（`model pushed: a2a-takeover-sink/small`） |
+| 桥照常工作 | 1 | 装了在位时 `initialize` 照样签发会话——接管限制的是宿主推理，不是 MCP |
+| 被拒的轮次 | 4 | `prompt_result` 以 `status:"error"` 终止（不是幻影成功）；sink 零命中；恰好一行拒绝（哨兵文本不命中任何重试触发条件，所以只有一次尝试、`retryable:false`）；哨兵文本确实回到调用方 |
+| 降噪 | 3 | 远程 3 秒 `bash` 同步跑完、没变成后台任务；期间 sink 仍零 |
+| 状态读回 | 2 | 再发一次 `{"enabled": false}` 不报错，回包读回 `enabled:false` 与非零计数 |
+| 恢复与负控 | 3 | `enabled:true` 回到 allow 并在 stderr 留下 `takeover restored`；**负控**：恢复后发出的宿主轮次打到 sink（这一条不绿，上面所有的零都只是「连不上」的错觉）；ON 窗口只开到数出第一个命中就切回 |
+| 重装 | 4 | 轮次在途时切回 `{"enabled": false}`，回包报 deny；被打断的 ON 轮次照样 settle（在途重试多打了几个命中，本轮 11 个）；第二次装配在注册表层拒掉新轮次（拒绝计数 +1）；sink 计数不再增长 |
+| 旁路 lane | 2 | 远程发 `task`（执行器自建注册表、不问会话的那类调用者）：子代理的请求没到 sink，且子代理是被明确终止、不是安静成功。实测的死法值得单记——子代理在独立进程里，拿到的模型行写着 deny api，它自己的注册表分发不了，约 250ms 内以 `Unhandled API in mapOptionsForApi: a2a-deny` 退出：fail-closed 成立，封死的方式是崩溃，不是拦截 |
+| 审计 | 2 | 每次切换一条 `host_llm` 记录（实测 ≥3 次切换都有）；每条记录携带发起切换的那个 MCP 会话 id |
+| pi-native | 3 | 另起一个宿主：配置里带 `transport: "pi-native"` 的 provider——装配在启动时被拒，拒绝点名拦不住的 transport，且没有「报了装上却没影子」的半状态 |
+
+两处坑是写了探针才现形的。第一处在 rpc 协议：`prompt` 发出去先回来的 `{"type":"response","command":"prompt","success":true}` 只是 ack，结果帧是后到的 `prompt_result`、按 `id` 配对。把 ack 当结果读，被拒的轮次也会读成「成功」——第一版探针就是这样，全绿，什么都没测到。第二处在 `transport: "pi-native"` 的摆放：它是 provider 级的键，写进 model 行会被 schema 静默丢掉；往配置里埋这一条的时候别猜，去看宿主 `models-config-schema-bundle` 的行号。
+
+失败语义与其他探针一致：任何一项 FAIL → exit 1，临时目录保留并打印路径；全过 → `takeover probe: all assertions met`。
 
 ## `test:scenario` — 端到端场景核验（10 个叙事 / 54 步）
 

@@ -6,7 +6,7 @@
 
 ## v0.1.0 — 首次发布
 
-这个扩展在宿主 `session_start` 时起一个 MCP 服务器（`2025-11-25`，Streamable HTTP，默认只绑 `127.0.0.1`），把宿主会话里的工具暴露给远程 MCP 客户端。执行落在宿主真实的文件与 shell 上，宿主不做模型推理。
+这个扩展在宿主 `session_start` 时起一个 MCP 服务器（`2025-11-25`，Streamable HTTP，默认只绑 `127.0.0.1`），把宿主会话里的工具暴露给远程 MCP 客户端。执行落在宿主真实的文件与 shell 上，桥自己从不请求模型（宿主侧会话级副作用与接管开关见 2026-10-12 两节）。
 
 - **安装**：`omp install https://github.com/adam-ikari/pi-a2a-ext.git`。只这一条路，不发 npm
 - **`tools/list`** 返回宿主注册表，原样透传，不过滤
@@ -16,6 +16,25 @@
 - 核验：54 单测 / 19 blob / 29 hardening / 28 install / smoke / approval，另有站点的 34 项渲染与 SEO 核验
 
 下面各节按日期倒序，含 v0.1.0 之后的演进。
+
+## 2026-10-12 — 宿主推理接管：`POST /host-llm`，第七核验把「零」数出来
+
+- feat: 接管落两条裁决——宿主不允许任何自主 LLM 调用，且宿主能不能推理这个开关本身也归远程。保证是两层的并集：会话模型注册表枚举出的每个 provider 影子化到 deny 实现（`api: "a2a-deny"`），被拒时回哨兵文本 `a2a-bridge takeover: host inference is disabled in this mode`——措辞避开全部四类重试触发器（`TRANSIENT_TRANSPORT_PATTERN`、strict-tools-400、oauth、codex），真实宿主实测被拒的一轮恰好一次尝试、`retryable:false`、`sessionSettled:true`；再把宿主进程的 `globalThis.fetch` 按目的地绊线，键取 models.yml 全部 `baseUrl` 的 host+port，盖的是 task 执行器、web 搜索这类自建注册表、不问会话的旁路。降噪层给自动转后台、宿主重试、advisor、ttsr、prewalk、autolearn、cache warming、自动压缩挂运行时 override，不落盘。实测在位时远程 3 秒 `bash` 同步跑完、不变后台任务
+- feat: 控制面。配置 `host_llm: "deny"|"allow"`（缺省 `allow`）只决定启动状态；运行中的开关是 `POST /host-llm` 带 `{"enabled": bool}`，回包 `{enabled, denied}`。同 token，每次切换一条审计（`tool: "host_llm"`，拒绝装配同样记）。这条路刻意不进 `tools/list`：目录透传的是宿主注册表，而这是桥对宿主做的事，不是宿主的工具。装配排在端口绑定之前（否则早到的调用方有一个宿主仍能自己推理的窗口），且每次 `session_start` 重装——revive/ACP/子代理 runner 带来的是没被影子的新注册表。切换不落盘，重启回操作员配置；`/a2a` 显示 `host_llm=deny denied=N`
+- feat: 拦不住的直说，不半装：配置里有 `transport: "pi-native"` 的 provider（provider 级键；写成 model 级会被 schema 静默丢掉，探针埋雷时踩过）时 `applyTakeover` 在改动任何状态之前抛错。`/login` 把模型所有权交回宿主，deny 随之失效。运行中新出现的 provider、`title.generator` 枚举里没有关、被拒轮次在会话历史留错误消息，这几条残差全部写进协议页「它放弃了什么」
+- test: 单测 117 → 138（10 文件）。`test/takeover.test.ts` 覆盖 deny overlay 形状、哨兵文本不被重试谓词命中、绊线键集、pi-native 拒绝、restore 幂等；`test/host-llm-route.test.ts` 覆盖路由的方法→鉴权→body→动作顺序与两种状态的审计落盘。变异核验各红各名
+- test: 第七宿主核验 `test:takeover`（28 项，约 60 秒）。上一节那条「值不值得加第七个核验，待裁决」的裁决是加，且加法是数数：探针自建计数 sink（`Bun.serve`，答 503），本仓库第一个真让宿主连进来的 listener，「零模型请求」从缺席声明变成算术。正负一对：deny 在位时 sink 恒零、拒绝恰好一条；恢复的负控里宿主轮次真的打到 sink（这一条不绿，前面所有的零都只是「连不上」的错觉）。task 旁路实测封着——子代理在独立进程，拿到 deny api 的模型行后自己的注册表分发不了，约 250ms 内以 `Unhandled API in mapOptionsForApi: a2a-deny` 退出：fail-closed 成立，封死的方式是崩溃，不是绊线拦截，文案照实写。rpc 的坑记一条：`prompt` 发出去先回的 `{"type":"response","command":"prompt","success":true}` 只是 ack，结果帧是后到的 `prompt_result`、按 `id` 配对——第一版探针把 ack 当结果读，全绿且什么都没测到
+- test: `test:install` 的「首次启动只写 host/port/token」改成四个字段——`saveConfig` 现在连缺省的 `host_llm: "allow"` 一起写，这条在 takeover 落地后第一跑就如实红了
+- ci: `host-probes` 加 `test:takeover` 一步，job 头注释同步改——六个核验用占位 provider 就能 boot，这一个要可达的 sink，不然零数不出来
+- docs: README 中英新增「宿主推理接管」一节与配置表 clarifier；「安全与边界」里 blob 那条从「是例外」改成「是一个例外」，新加 `POST /host-llm` 条，唤醒条补「这一半是开关，不是既成事实」；故障排查两条；开发计数与文件布局加 `src/takeover.ts`。协议页新增「宿主推理切换」（响应表、生命周期重装、「它放弃了什么」六条）。computer-use 的宿主账改口「花不花取决于接管在不在位」。testing 页加第七核验一节，并把 harness 盲那段收尾成「已收口」。站点加「宿主推理可以整体关掉」卡片，页面 description 与计数同步。AGENTS.md「The one exception on record」改成两条例外记录
+- 回归：`lint` / `tsc` / `bun test` 138/138；七个宿主核验在 18.8.7 上跑了两遍全绿，文档落的是后一遍——takeover 28 项 65.6 秒（装例行实测 75 providers / 69 keys）、`SMOKE OK`、`HARDEN OK` 35 项、`BLOB OK` 35 项（RSS 表按第二十五轮重落：空闲 477 MB、单个安顿 +18、并发安顿 +20，单个那项峰值与安顿相等、并发那项峰值高 19 MB）、`SCENARIOS 54 steps, 0 failed`、`PACKAGE OK`、审批 `VERDICT: B` 挂起 90001ms；站点构建 + 渲染核验 34 项全过
+
+## 2026-10-12 — 推广期文案重写；「不消耗 token」被远程实测推翻，全线收窄
+
+- docs: 文案按推广期重写——读者第一眼要能看懂这是什么，不是开发者给自己看的备忘。README（中英）导语改成 outsider 说法：装上的 omp 多开一个 MCP 接口（MCP 是 agent 调用外部工具的标准协议），任何说 MCP 的程序都能调这台机器上的 `read`/`bash`/`edit`；首页 hero 与七张 feature 卡片把「宿主」这类内部词换成「本机/这台机器」，测试卡片写实数（117 项单测、六个拉起真实 omp 的核验）；`SITE_DESC` 与逐页 description 同步
+- docs: 「宿主不做模型推理，一个 token 不花」这条绝对说法被远程 Windows 宿主的实测日志推翻，收窄为「桥自己从不请求模型」。实测链条：一条远程 `bash` 超过宿主 300 秒命令超时，宿主把它转成后台任务；任务完成时 omp 往会话注入一条 `async-result` 通知（"Background job bg_1 has completed. Resume your work…"），宿主会话自己的 agent loop 被唤醒，从 04:36:31 起发出真实推理（model stack/medium，单轮输入从 8,309 token 起，此后几十轮）。桥的请求路径本身没问题——唤醒之前那约 28 次远程工具调用只以 UUID custom event 渲染，会话消息数为 0。定性：这是工具执行落在宿主真实会话的会话级副作用，与 `/blob` 同属「桥放弃了不碰宿主会话状态」那类代价。收窄落点：README（中英）导语与「工作原理」bullet、站点 tagline、`SITE_DESC`、`docs/computer-use.md` 的两处表格与「一处容易误解的地方」整段重写；README「安全与边界」新增「远程调用可能唤醒宿主自己的 agent」条目，带完整时间戳
+- test: 记下探针的结构性盲区——`test/harness.ts` 播种的不可达 provider 证明的是「桥不靠模型回答也能跑」，证不了「宿主不发模型请求」：被拒绝的请求静默失败，计数看不见尝试本身。这条链正是从盲区漏出去的：六个宿主核验没有一条走超时转后台路径（审批探针把 `bash` 挂住就看结论）。补法是种一个可达但只记账的 sink provider 数模型请求次数，值不值得为它加第七个核验，待裁决。盲区写进 `docs/testing.md` 的 harness 段
+- 回归：站点构建 + 渲染核验、`lint` / `tsc` / `bun test` 全绿
 
 ## 2026-10-11 — 单测补掉分派层与 `auditBlob`，pin 跟到 18.8.7
 

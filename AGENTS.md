@@ -31,12 +31,21 @@ These follow from that one job, not from taste:
 
 The test for a proposed change: does it make the bridge more transparent, or does it give the bridge an opinion? Anything that gives it an opinion is a second omp.
 
-## The one exception on record
+## The exceptions on record
 
-`POST /blob` gives the bridge two opinions it does not otherwise have: it resolves the path
-itself (no root, no allowlist) and it writes without asking the host's approval gate. Both
-are known costs, listed in `docs/protocol.md` under what the endpoint gives up. Everything
-else here still decides.
+Two paths give the bridge an opinion it does not otherwise have, and both are paid for
+with auditing and documentation:
+
+- `POST /blob` resolves the path itself (no root, no allowlist) and writes without asking
+  the host's approval gate. The costs are listed in `docs/protocol.md` under what the
+  endpoint gives up.
+- `POST /host-llm` reaches into the host session directly: shadowing registry rows,
+  overriding settings, replacing the process `fetch`. What it limits is the host's own
+  inference, and it acts only on the word of whoever holds the token. Its two-layer
+  guarantee and its residuals (pi-native refusal, in-process tripwire) are in
+  `docs/protocol.md` under 宿主推理切换.
+
+Everything else here still decides.
 
 ## Writing voice
 

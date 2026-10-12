@@ -18,7 +18,8 @@ const SITE_NAME = "omp A2A Bridge";
 // One description, used for config.description and as the per-page fallback in
 // transformHead. Two copies drifted before: the site description said one thing
 // and every og:description said another.
-const SITE_DESC = "让任意 MCP 客户端调用本机 omp 会话里的工具，执行落在真实的文件与 shell 上，宿主不做模型推理";
+const SITE_DESC =
+	"omp 扩展：把本机的 read、bash、edit 开成一个 MCP 接口，远程的 agent（另一个 omp、Claude Code、任何 MCP 客户端）都能在这台机器上真实执行命令。推理在调用方，桥自己从不请求模型";
 
 // Mermaid settings, handed to the diagram component as a virtual module. This
 // replaces withMermaid(), whose Vite plugin injected a *statically imported*
