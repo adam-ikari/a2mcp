@@ -32,9 +32,11 @@ jobs:
   # The real-host probes. These boot an actual omp and drive the bridge over
   # MCP, so they are the only checks that exercise the real execution path.
   # They used to be unrunnable off a developer machine: each one copied
-  # ~/.omp/agent/models.yml, i.e. a real provider and a real API key. The bridge
-  # runs tools and never calls a model, so a placeholder provider is enough for
-  # the host to boot — see test/harness.ts.
+  # ~/.omp/agent/models.yml, i.e. a real provider and a real API key. The
+  # request path of the bridge asks the model nothing, so a placeholder
+  # provider is enough for six of them to boot — see test/harness.ts.
+  # test:takeover is the exception: it arms a reachable counting sink, because
+  # counting what the host's own session dials is the thing under test.
   host-probes:
     runs-on: ubuntu-latest
     steps:
@@ -91,6 +93,13 @@ jobs:
         run: bun run test:install
       - name: test:approval — approval boundary (expects VERDICT B)
         run: bun run test:approval
+      # The takeover probe is the only check that lets the host dial a real
+      # listener: a counting sink replaces the dead-port provider, so "zero
+      # model requests" becomes a countable fact instead of an absence. It
+      # carries its own negative control (toggle on -> the sink hears), which
+      # is the half that the 2026-10-12 wake-up finding proved necessary.
+      - name: test:takeover — host inference deny/restore with counting sink
+        run: bun run test:takeover
 
   site:
     runs-on: ubuntu-latest

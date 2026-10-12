@@ -13,6 +13,7 @@ const VALID: BridgeConfig = {
 	port: 1234,
 	token: "unit-test-token-0123456789abcdef",
 	host: "127.0.0.1",
+	host_llm: "allow",
 };
 
 beforeAll(async () => {
@@ -34,6 +35,7 @@ describe("loadConfig", () => {
 		const cfg = await loadConfig(env);
 		expect(cfg.port).toBe(0);
 		expect(cfg.host).toBe("127.0.0.1");
+		expect(cfg.host_llm).toBe("allow");
 		expect(cfg.token).toHaveLength(43); // 32 random bytes, base64url
 	});
 
@@ -77,6 +79,27 @@ describe("loadConfig", () => {
 	test("host of the wrong type -> fail-closed", async () => {
 		await writeFile(file, JSON.stringify({ ...VALID, host: "" }));
 		await expect(loadConfig(env)).rejects.toThrow(`field 'host' must be a non-empty string`);
+	});
+
+	test("host_llm absent -> the startup state is allow", async () => {
+		// The shared-host default: a bridge that was never told otherwise leaves
+		// the host's own reasoning alone.
+		await writeFile(file, JSON.stringify({ port: 1234, token: VALID.token, host: VALID.host }));
+		expect((await loadConfig(env)).host_llm).toBe("allow");
+	});
+
+	test("host_llm deny loads, and round-trips through save", async () => {
+		await saveConfig({ ...VALID, host_llm: "deny" }, env);
+		expect((await loadConfig(env)).host_llm).toBe("deny");
+	});
+
+	test("host_llm of any other shape -> fail-closed, not defaulted", async () => {
+		// A typo here ("denied", "ALLOW") must stop startup rather than silently
+		// come up allowing inference: the field is the operator's own no-LLM vow.
+		for (const bad of ["denied", "ALLOW", true, 1, ""]) {
+			await writeFile(file, JSON.stringify({ ...VALID, host_llm: bad }));
+			await expect(loadConfig(env)).rejects.toThrow(`field 'host_llm' must be 'deny' or 'allow'`);
+		}
 	});
 
 	test("a token too short to be a secret -> fail-closed, not healed", async () => {

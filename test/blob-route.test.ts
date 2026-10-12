@@ -117,7 +117,7 @@ afterAll(() => {
 });
 
 async function withServer(fn: (base: string) => Promise<void>): Promise<void> {
-	const s = await startServer({ port: 0, host: "127.0.0.1", token: TOKEN }, makeDeps());
+	const s = await startServer({ port: 0, host: "127.0.0.1", token: TOKEN, host_llm: "allow" as const }, makeDeps());
 	try {
 		await fn(`http://127.0.0.1:${s.port}/`);
 	} finally {

@@ -278,8 +278,8 @@ try {
 	const cfg = JSON.parse(readFileSync(join(e2eAgent, "a2a-bridge.json"), "utf8"));
 	e2eToken = cfg.token as string;
 	check(
-		Object.keys(cfg).sort().join(",") === "host,port,token",
-		"first start writes only host/port/token — no path sandbox fields",
+		Object.keys(cfg).sort().join(",") === "host,host_llm,port,token",
+		"first start writes only host/host_llm/port/token — no path sandbox fields",
 		JSON.stringify(cfg),
 	);
 
