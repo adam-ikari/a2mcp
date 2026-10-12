@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { auditHostLlm } from "./audit.ts";
 import { authorize } from "./auth.ts";
 import { type BlobDeps, handleBlob } from "./blob.ts";
 import type { BridgeConfig } from "./config.ts";
@@ -11,10 +12,17 @@ export interface McpTool {
 	inputSchema: Record<string, unknown>;
 }
 
+/** The switch behind `POST /host-llm` — see src/takeover.ts for what arming costs. */
+export interface TakeoverDeps {
+	setEnabled(enabled: boolean): { enabled: boolean; denied: number };
+}
+
 export interface BridgeDeps {
 	getTools(): Promise<McpTool[]>;
 	callTool(name: string, args: unknown, sid: string | null): Promise<{ content: McpContent[]; isError: boolean }>;
 	serverInfo(): { name: string; version: string };
+	/** Absent when the bridge runs without takeover wiring; the route then answers 501. */
+	takeover?: TakeoverDeps;
 	/** Clock override for tests (session TTL / eviction). Defaults to Date.now. */
 	now?(): number;
 }
@@ -151,12 +159,47 @@ export async function startServer(
 				return r.body === undefined ? new Response(null, { status: r.status }) : json(r.status, r.body);
 			}
 
+			// The takeover switch. Same shape as `/blob` in every respect that
+			// matters: one token, one raw path outside JSON-RPC, audited, POST only.
+			// It lives at a raw path rather than as a `tools/list` entry because the
+			// catalog is the host registry verbatim, and this is not a host tool —
+			// it is the bridge acting on the host, and the bridge does not get to
+			// hide that in a tool list (src/takeover.ts).
+			if (new URL(req.url).pathname === "/host-llm" && req.method === "POST") {
+				const sid = issuedSession(req.headers.get("mcp-session-id"));
+				if (!deps.takeover) {
+					return json(501, { error: "host-llm takeover is not wired on this bridge" });
+				}
+				let body: unknown;
+				try {
+					body = await req.json();
+				} catch {
+					return json(400, { error: "expected a JSON body with a boolean 'enabled'" });
+				}
+				const enabled = (body as Record<string, unknown> | null)?.enabled;
+				if (typeof enabled !== "boolean") {
+					return json(400, { error: "field 'enabled' must be a boolean" });
+				}
+				try {
+					const state = deps.takeover.setEnabled(enabled);
+					auditHostLlm(sid, enabled, null);
+					return json(200, state);
+				} catch (e) {
+					// Refusals are audited too: "someone tried to arm the deny and the
+					// bridge said no" is exactly the kind of thing the log exists for.
+					const msg = (e as Error)?.message ?? String(e);
+					auditHostLlm(sid, enabled, msg);
+					return json(500, { error: msg });
+				}
+			}
+
 			if (req.method === "DELETE") {
-				// `/blob` never accepts DELETE — a write endpoint has no business
-				// ending an MCP session, and answering 204 here would report a
-				// session teardown the caller never asked for.
-				if (new URL(req.url).pathname === "/blob") {
-					return json(405, { error: "/blob accepts POST only" });
+				// `/blob` and `/host-llm` never accept DELETE — a write endpoint has
+				// no business ending an MCP session, and answering 204 here would
+				// report a session teardown the caller never asked for.
+				const p = new URL(req.url).pathname;
+				if (p === "/blob" || p === "/host-llm") {
+					return json(405, { error: `${p} accepts POST only` });
 				}
 				const sid = req.headers.get("mcp-session-id");
 				if (sid) sessions.delete(sid);

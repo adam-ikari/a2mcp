@@ -4,6 +4,7 @@ import { buildCallTool, buildToolCatalog, hasMainSession } from "../src/bridge.t
 import type { BridgeConfig } from "../src/config.ts";
 import { configPath, generateToken, loadConfig, saveConfig } from "../src/config.ts";
 import { startServer } from "../src/server.ts";
+import { hostLlmState, rearmMainSession, setEnabled } from "../src/takeover.ts";
 
 let server: { port: number; fellBack: boolean; stop(): void } | null = null;
 let cfg: BridgeConfig | null = null;
@@ -17,6 +18,17 @@ let bringingUp: Promise<void> | null = null;
 
 export default function a2aBridge(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_ev, ctx) => {
+		// A rebuilt `Main` session arrives with a fresh model registry that nothing
+		// has shadowed, so the operator's startup state is re-applied on every
+		// start — before the endpoint guard, since the endpoint being up says
+		// nothing about the registry being denied.
+		if (cfg?.host_llm === "deny") {
+			try {
+				rearmMainSession();
+			} catch (e) {
+				ctx.ui.notify(`A2A takeover failed to arm: ${(e as Error)?.message ?? String(e)}`, "error");
+			}
+		}
 		if (server) return; // one endpoint per process
 		if (bringingUp) {
 			// Ride along with the start already in flight rather than bind a second one.
@@ -27,10 +39,21 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 			try {
 				cfg = await loadConfig();
 				if (!existsSync(configPath())) await saveConfig(cfg);
+				if (cfg.host_llm === "deny") {
+					// Deny the host's inference before the port opens: a caller that
+					// arrives between the bind and the arming would otherwise see one
+					// window where the host could still reason on its own.
+					try {
+						rearmMainSession();
+					} catch (e) {
+						ctx.ui.notify(`A2A takeover failed to arm: ${(e as Error)?.message ?? String(e)}`, "error");
+					}
+				}
 				server = await startServer(cfg, {
 					getTools: buildToolCatalog(pi),
 					callTool: buildCallTool(pi, ctx),
 					serverInfo: () => ({ name: "omp-a2a-bridge", version: "0.1.0" }),
+					takeover: { setEnabled },
 				});
 				if (!hasMainSession()) {
 					// The session this start was for ended while the bind was in flight, and its
@@ -113,7 +136,12 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 					return;
 				}
 				const url = `http://${cfg.host}:${server.port}/`;
-				ctx.ui.notify(`A2A bridge on ${url} (token ${cfg.token.slice(0, 6)}…, port ${server.port})`);
+				// `host_llm` is the runtime state, not the config value: a remote toggle
+				// diverges from the startup config until the next restart.
+				const st = hostLlmState();
+				ctx.ui.notify(
+					`A2A bridge on ${url} (token ${cfg.token.slice(0, 6)}…, port ${server.port}) host_llm=${st.enabled ? "allow" : "deny"} denied=${st.denied}`,
+				);
 			} catch (e) {
 				ctx.ui.notify(`A2A command failed: ${(e as Error)?.message ?? String(e)}`, "error");
 			}

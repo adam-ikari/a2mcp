@@ -11,11 +11,17 @@ import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
  * and executes through the host's own tools, so the host's permission model is
  * the only one. A second list here could disagree with the host's, and there is
  * no defined precedence between the two.
+ *
+ * `host_llm` is not an exception to that: it decides nothing about which tools
+ * run or what they touch. It sets the *startup* state of the takeover switch
+ * (src/takeover.ts) — whether the host may issue model requests at all — which
+ * is a statement about the host's own inference, not about tool permissions.
  */
 export interface BridgeConfig {
 	port: number; // 0 = random
 	token: string; // base64url 32B; loadConfig rejects anything shorter than MIN_TOKEN_CHARS
 	host: string; // default "127.0.0.1"
+	host_llm: "deny" | "allow"; // startup state of the takeover switch (src/takeover.ts); runtime toggles never persist
 }
 
 /**
@@ -36,6 +42,7 @@ export function configPath(env: NodeJS.ProcessEnv = process.env): string {
 const DEFAULTS: Omit<BridgeConfig, "token"> = {
 	port: 0,
 	host: "127.0.0.1",
+	host_llm: "allow",
 };
 
 function fieldError(file: string, field: string, expect: string): Error {
@@ -86,6 +93,15 @@ export async function loadConfig(env?: NodeJS.ProcessEnv): Promise<BridgeConfig>
 			throw fieldError(file, "host", "a non-empty string");
 		}
 		cfg.host = p.host;
+	}
+	if ("host_llm" in p) {
+		// Same fail-closed rule as `port` and `host`: this field decides whether the
+		// host may reason at all, so a typo like "denied" must stop startup, not
+		// silently fall back to "allow".
+		if (p.host_llm !== "deny" && p.host_llm !== "allow") {
+			throw fieldError(file, "host_llm", "'deny' or 'allow'");
+		}
+		cfg.host_llm = p.host_llm;
 	}
 
 	if (typeof p.token === "string" && p.token.length > 0) {

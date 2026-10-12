@@ -187,3 +187,36 @@ export function auditBlob(
 		env,
 	);
 }
+
+/**
+ * One record per `POST /host-llm` toggle.
+ *
+ * Same single-record shape as `auditBlob`: the action is one state write with an
+ * immediate answer, there is no approval gate that could leave it half-done, so
+ * a `start`/`done` pair would only add a way to lose the second line. The
+ * `deny` half of the switch is worth a record precisely because it is the one
+ * thing the bridge does *to the host* rather than *for the caller*: whoever
+ * flipped it should be findable by `sid`, and whoever tripped the takeover's
+ * refusal (a pi-native config, a dead session) shows up with `error` set.
+ */
+export function auditHostLlm(
+	sid: string | null,
+	enabled: boolean,
+	error: string | null,
+	env?: NodeJS.ProcessEnv,
+): void {
+	const args = { enabled };
+	appendLine(
+		`${JSON.stringify({
+			ts: new Date().toISOString(),
+			id: randomUUID(),
+			sid,
+			phase: "done",
+			tool: "host_llm",
+			isError: error !== null,
+			args: serializeArgs(args),
+			...(error ? { error: error.slice(0, 200) } : {}),
+		})}\n`,
+		env,
+	);
+}
