@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-11T03:30:03"
+updated: "2026-10-12T11:08:05"
 ---
 
 <!-- compiled_truth -->
@@ -655,4 +655,26 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 - time: 2026-10-11T03:30:03
   kind: note
   summary: "Version state 2026-10-11: host omp auto-updated to 18.8.7; test/versions.test.ts guard fired red, pins + bun.lock synced 18.8.6 -> 18.8.7. Full regression green on 18.8.7: tsc, biome, unit 117/117, six host probes (SMOKE, HARDEN 35, BLOB 35, SCENARIOS 54/0, approval VERDICT B hang 90001ms, PACKAGE). RSS round 23 measured on 18.8.7: idle 549 MB, all four 8 MB deltas negative (settled -57/-56, peaks -1/-32) — baseline-sampling artifact, same explanation as prior negatives; protocol.md table refreshed from test/rss-18.8.7.json."
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-12T04:59:47
+  kind: reversal
+  summary: "「宿主不做模型推理、不消耗 token」被远程实测推翻其绝对形式，收窄为「桥自身从不请求模型」。链条：远程 bash 超过宿主 300 秒命令超时 → 宿主转成后台任务 bg_1 → 任务完成时 omp 注入 custom_message async-result（\"Background job bg_1 has completed. Resume your work…\"）→ 宿主会话自己的 agent loop 被唤醒，发出真实推理（provider omni、model stack/medium，单轮 input 8,309 起，几十轮）。时间戳：04:35:23 转后台、04:36:27 通知进会话、04:36:31 首批带 usage 消息；此前桥渲染的约 28 次 UUID 工具事件全程未进消息流（会话 0 消息），桥的请求路径确实零模型请求。定性：这是工具执行落在宿主真实会话的会话级副作用，不是桥在推理，与 /blob 同属「桥放弃不碰宿主会话状态」一类代价。文档已同步收窄：README（中英）导语与安全节新增唤醒条目、docs/computer-use.md 表格与「容易误解」节、docs/testing.md 探针边界。"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-12T04:59:47
+  kind: evidence
+  summary: "宿主探针存在结构性盲区：test/harness.ts 播种的 FAKE_MODELS_YML 指向不可达 provider，它证明的是「桥不靠模型回答也能跑」，证不了「宿主零模型请求」——被拒绝的请求静默失败，没有任何计数能看到尝试本身。后台任务唤醒宿主这条链（见前条 reversal）正是从这个盲区漏出去的：现有六个宿主核验没有一条走超时转后台路径（审批探针把 bash 挂住就看结论）。若要补，方向是三文鱼式 sink provider：种一个可达但只记账的 provider，数宿主发出的模型请求次数。待裁决。"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-12T11:07:11
+  kind: reversal
+  summary: "10-12 待裁决的「第七核验」裁决为加，且实现比补盲更大：接管功能（POST /host-llm + host_llm 配置）直接把「宿主零自主推理」变成可执行的不变量，探针从「要不要数」变成「数给接管看」。原 evidence 说的盲区（不可达 provider 静默失败、计数看不见尝试）由计数 sink 关闭：test/takeover-probe.ts 起 Bun.serve 答 503，deny 在位时断言命中恒零，恢复侧负控断言轮次真打到 sink——没有负控，一切零读数都只是「连不上」。同时被推翻的还有绝对化表述的另一半：不是「证不了宿主不发请求」，而是现在可以承诺不发并当场核验。harness 不可达 provider 对其余六个核验仍是正确的默认。"
+  source: "test/takeover-probe.ts · docs/testing.md"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-12T11:08:05
+  kind: decision
+  summary: "宿主推理接管（2026-10-12，用户两条裁决：宿主不允许任何自主 LLM 调用；开关本身归远程）。分层保证是并集不是交集：(a) 注册表影子化——枚举 session.modelRegistry 全部 provider，重注册到 deny 实现（api=a2a-deny），并把影子行经 agent.setModel 推进主循环（agent 持捕获的 Model 对象，不换行就拦不到在途会话）；(b) 宿主进程 globalThis.fetch 按目的地绊线，键=models.yml 全部 baseUrl 的 host+port，盖 task/websearch/commit 等自建注册表的旁路；(c) 降噪 override（autoBackground/retry/advisor/ttsr/prewalk/autolearn/cacheWarming/compaction），全运行时不落盘。哨兵文本刻意避开四类重试触发器，实测被拒轮次恰好一次尝试、retryable:false。控制面：host_llm 配置只决定启动状态；POST /host-llm {enabled} 是第二条非工具 HTTP 路（同 /blob 先例，鉴权前判、审计 tool:host_llm、不落盘、重启回配置），刻意不进 tools/list——目录透传宿主注册表，桥对宿主做的事不是宿主的工具。装配在 bind 之前、每次 session_start 重装（新 runner 带新注册表）。诚实边界（残差全部文档化）：pi-native transport 拦不住则拒绝装配、不改任何状态；绊线只在宿主进程内——task 子代理在独立进程实测靠影子行崩溃封死（Unhandled API in mapOptionsForApi，约250ms 退出），是 fail-closed by crash 不是拦截；运行中新加 provider 到下次装配才进 deny；/login 交回所有权即解除 deny；title.generator 枚举无关。AGENTS.md 的例外记录由此变为两条（/blob 与 /host-llm），framing：takeover 限制的是宿主自己，且只在持有 token 者的指令下。"
+  source: "src/takeover.ts · docs/protocol.md「宿主推理切换」 · AGENTS.md exceptions"
   affects: [a2a-mcp-bridge]

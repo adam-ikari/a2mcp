@@ -2,6 +2,15 @@
 slug: background
 title: Project background
 role: project background
+updated: "2026-10-12T04:59:37"
+---
+
+# Project background
+
+---
+slug: background
+title: Project background
+role: project background
 updated: "2026-10-07T08:43:36"
 ---
 
@@ -18,7 +27,7 @@ updated: "2026-10-07T08:43:36"
 ## Goals
 
 - 任意 MCP 客户端（另一个 omp、Claude Code、一个 curl 脚本）把 `mcp.json` 指向端点，即可调用宿主 `Main` 会话的工具
-- 执行落在宿主真实的文件与 shell 上。宿主不做模型推理，不消耗 token
+- 执行落在宿主真实的文件与 shell 上。桥自己从不请求模型，推理在调用方那边；工具在宿主会话留下的副作用（后台任务完成通知）会唤醒宿主自己的 agent，那次花的是宿主的 token（2026-10-12 实测修正）
 - 桥不加自己的意见：不替 omp 实现沙盒、不按权限过滤、不长出第二个系统
 - 一次安装（`omp install <git-url>`），不发 npm，没有第二条安装路径
 - 每次远程调用可审计到 token 持有者以外的具体客户端会话
