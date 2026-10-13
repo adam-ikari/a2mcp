@@ -4,6 +4,28 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。
 
+## 2026-10-13 — 评审：接管不再抢 provider 声明、装配改成事务，第八核验把接管架在真实注册表上
+
+评审用探针打，不是读出来的。两个 P1 与两个 P2 都在 138 个单测全绿、代码也全绿的状态下成立，根因都在宿主的数据结构里。缺的那一档探针这次补上：`bun run test:registry`（新增，22 项，秒级，不需要 omp 也不需要凭据）把接管直接架在**真实** `ModelRegistry` 上跑——`AuthStorage.create` 加 `new ModelRegistry(...)` 对着 `/tmp` 的临时 agent 目录，18.8.7 上是 5457 行、七十多个 provider，不起宿主、不开 TUI、不连网。下面几条都是它在同一轮里量出来的。
+
+- fix: **抢走别人的 provider，而且不还。** 宿主的 `registerProvider(name, …, sourceId)` 会把 `sourceId` 记成这个名字的所有者，别人已经拥有时先把在位者的运行期状态清掉再接管；而公开 API 里唯一的撤销 `clearSourceRegistrations` 是「这个扩展卸载了」，不是「撤销那一次调用」。旧机制把目录里 73 个 provider 全影子化，等于删掉别的扩展注册过的每一个 provider，一次装配删一次、永不恢复。实测：另一个 source 注册的两行 provider，一次 arm/restore 之后变成零行。修法不是想办法还回去（公开面做不到），是**不抢**：判据改成「每条推理请求最后从哪个口出去」，只有不是 fetch 的道才声明 provider 名字。读宿主源码定出两条——cowork 道（`anthropic` + `anthropic-messages` 时宿主换 `node:https` 直连，`pi-ai/src/utils/transport-fetch.ts`）和 Codex 的 websocket 道（`api: openai-codex-responses`，且宿主把 `providers.openaiWebsockets` 逐次转发给 provider 调用，所以按 api 判而不是按行上的标志判）。默认装法下声明 2 个而不是 73 个，装配耗时 288ms → 16ms（不再重算整份目录）
+- fix: deny 的第一层从「影子化 provider」换成 **deny api + 宿主 agent 手里那一行的 deny 副本**（`registerCustomApi` + `agent.setModel`，deny 副本不带 `resolveHeaders`，否则 pi-ai 在 api 分派之前会先跑 provider 的 `!command` 取密钥程序）。子代理那条旁路不再靠崩溃封死——它自建注册表、自选模型，请求在 fetch 边界被拒，一次本地拒绝，不出网，协议页与测试页那两处「以 `Unhandled API in mapOptionsForApi` 退出」照实改掉
+- fix: **装配途中抛错留下「已全量拒绝但报 enabled」的死局。** 旧顺序是「注册影子 → 推模型行 → 压设置 override → 换 fetch → 最后才记 `armed`」，1-4 步任何一步抛错，残局已改完而 `restoreTakeover` 第一行 `if (!armed) return` 空转。实测：抛错后 5457 行全部处于 deny，端点对「恢复」的回答是 `{"enabled": true}` 且救不回来，只有重启宿主能了事（第一次写探针时根本没打算触发它，`Settings.init()` 没调、`setting.override` 自己抛了，同一个洞自己撞上来）。修法是把记录提到第一次改动之前，抛错时整体回滚再把错误抛出去
+- fix: **宿主自己的扩展源对账会把影子剪掉，桥还报 deny。** 合成 source id 会进 `#registeredProviderSources`，而 `createAgentSessionScoped` 每次建 session 都跑 `syncExtensionSources(扩展路径表)`，路径表里没有 `a2a-bridge`——它被当成已卸载的扩展剪掉。实测：一次调用之后 deny 行从 5457 变 0，而 `enabled` 仍读 `false`，只剩绊线一层，正好是「绕过 `globalThis.fetch` 的那几条道」需要影子兜底的那些。修法两条：装配改成幂等（重装保留第一次存下的那一行，不会恢复出一个 deny 副本），入口在**开关开着时**每次 `session_start` 都重装，不再只看配置值
+- fix: **恢复会抹掉接管期间宿主换模型的选择。** 旧恢复无条件把快照那行推回去；现在只在 agent 手里仍是桥的 deny 行时才推回去——被换成真行也没用，它落在绊线上，但那是操作员的选择，不是桥该抹掉的状态
+- fix: 恢复不再假设撤销一定干净：拿快照逐个核对被声明的 provider，没回来的在宿主 stderr 点名（`takeover restore left N provider(s) unregistered … restart the host to recover`），README 中英的故障排查各加一条。这是公开 API 做不到的那一半，能做的是不装懂
+- fix: `applyTakeover` 的拒绝规则从「见到 `transport` 就拒」收到「见到**不在被声明名单里**的 provider 带 `transport` 就拒」——被声明的 provider 整份行都被换成不带 transport 的 overlay，没有东西可短路。同时 `transport` 这条从只认 `pi-native` 变成认任何在 api 分派之前短路的 transport
+- fix: `/blob` 的两条 409（offset 与当前大小不符、上传途中文件被别人改了）此前一个字节没写、审计里也一个字没有，而分块上传时 offset 漂掉正是最常见的失败，审计里因此留着一段和「什么都没发生」分不开的空洞。现在两条都按失败写（`bytes: 0` + `error`），五条出口口径一致
+- fix: 审计日志补 `chmod 0600`——`appendFile` 的 `mode` 只在创建时生效，从备份恢复或手工建出来的日志会一直宽权限读到进程结束。配置那边早就为同一件事写了 chmod（`src/config.ts`），这边补上
+- fix: 启动时（配置就是 `deny`）装配被拒此前只有一条会滚走的界面提示，现在 stderr 一行 + 一条 `sid: null` 的 `host_llm` 审计记录——那台机器本来配了 deny、现在没有，这件事此后仍然查得到
+- fix: `tools/call` 的执行器不再钉死在第一次 `session_start` 那个 `ExtensionContext` 上（会话重建后 `ui`/`abort`/`isIdle`/`hasPendingMessages` 全部来自已经死掉的会话，死会话的 abort 信号是已 aborted 的，于是新会话里每个远程工具调用一进门就失败）。入口每次 `session_start` 换一个执行器，服务器读到的是活的。宿主自己在 `runner.ts` 写过同一句话的注记：「a saved context must not retain a completed handler's stale signal」
+- test: 单测 138 → 157（10 → 12 文件）。新建 `test/takeover-arm.test.ts`（7 项）盯装配这个事务：推进 deny 行、deny api 注册与注销、fetch 换回、中途抛错三样都不残留、`enabled` 读回 true、重装保留第一次存下的行、接管期间的模型选择不被抹掉、换 session 时先恢复旧的、未覆盖的道在改动任何状态之前就被拒。三项变异各红各名（把 `armed` 赋值挪回末尾 → 只有回滚那条红；去掉「已持 deny 行」的判断 → 只有重装那条红；恢复改成无条件推回 → 只有模型选择那条红）
+- test: `test/takeover.test.ts` 补 12 项纯函数层：非 fetch 道的判定（cowork 与 websocket 两条，含「websocket 按 api 判而不是按行标志判」这条）、`transport` 拒绝在「声明名单内/外」的两种结果、deny 副本保留身份字段而摘掉凭据解析器、声明 provider 时整份行一起进 overlay
+- test: 新增 `test:registry`（22 项，秒级，CI 的 `check` job 收——它不需要 omp，也不该占 `host-probes` 的分钟数）。变异核验：把声明面改回「每个 provider 都声明」，本探针红 5 项，决定性的一项是 `myprov rows 2 -> 0`。写它的时候顺手现形两件不是探针毛病的事：默认目录里有一条 `preferWebsockets: true` 的 Codex 行，所以「碰到 websocket 行就拒绝装配」会让 deny 在开箱状态下根本装不上；deny 副本必须摘掉 `resolveHeaders`，否则被拒的一轮会先去跑取密钥程序
+- test: `test/takeover-probe.ts` 两处随机制改：pi-native 那条的拒绝文案（`transport 'pi-native'` 而非 `pi-native transport`，探针的匹配跟着改，否则它会红）；task 旁路那条的注记改成现在真实的死法
+- docs: README 中英「宿主推理接管」整节重写（三层分工按「请求从哪个口出去」划、为什么不全量影子化、恢复核对与点名、启动拒绝的三处留痕）；协议页「宿主推理切换」同步，含「装配途中抛错整体回滚」一段与「它放弃了什么」重排（新条目：provider 所有权抢不回来、恢复不抹掉模型选择）；testing 页加 `test:registry` 一节与总览表两行；故障排查中英各加/改两条；开发计数与文件布局说明同步
+- 回归：`lint` / `tsc` / `bun test` 157/157；八个核验在 18.8.7 上全绿——`test:registry` 22 项（5457 行、装配 16–24ms）、`test:takeover` 28 项 64.2 秒（装例行实测 2 providers / 69 keys；子代理那条旁路现在是被绊线按下去而不是崩掉，拒绝计数 2 → 3，sink 命中不变）、`SMOKE OK` 21 tools、`HARDEN OK` 35 项、`BLOB OK` 35 项（RSS 表按第二十六轮重落：空闲 491 MB、单个安顿与峰值同为 +14、并发同为 +38）、`SCENARIOS 54 steps, 0 failed`、`PACKAGE OK`、审批 `VERDICT: B` 挂起 90002ms；站点构建 + 渲染核验 34 项全过
+
 ## v0.1.0 — 首次发布
 
 这个扩展在宿主 `session_start` 时起一个 MCP 服务器（`2025-11-25`，Streamable HTTP，默认只绑 `127.0.0.1`），把宿主会话里的工具暴露给远程 MCP 客户端。执行落在宿主真实的文件与 shell 上，桥自己从不请求模型（宿主侧会话级副作用与接管开关见 2026-10-12 两节）。

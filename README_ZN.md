@@ -167,21 +167,26 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 实测的唤醒链（见「安全与边界」）说明了同一件事的另一半：宿主会话会在没人要求的时候花掉自己的 token。接管开关把这个决定交到持 token 的人手里。
 
-**`deny` 的含义是宿主自己的会话发不出任何模型请求。** 两层，因为调用者有两种：
+**`deny` 的含义是宿主自己的会话发不出任何模型请求。** 三层，分工按「每条推理请求最后从哪个口出去」划（判据读自宿主自己的代码）：
 
-- 会话模型注册表里能枚举到的每个 provider 都被重新注册到一份 deny 实现后面：每次尝试都计数、往宿主 stderr 打一行，并收到错误 `a2a-bridge takeover: host inference is disabled in this mode`。这段文本不命中宿主的任何重试触发条件——真实宿主上实测，被拒的一轮只发起一次尝试，以 `retryable: false` 结束。
-- 宿主进程的 `globalThis.fetch` 上按目的地挂绊线：URL 主机名匹配模型配置里任一 `baseUrl` 的请求一律拒绝。这一层盖住的是自建注册表的调用者（task 子代理、web 搜索、commit 消息），它们不问会话的注册表。
+- **deny API + 宿主当前持有的模型行**：`a2a-deny` 注册成一个只计数、只失败的实现，宿主 agent 手里那一行换成同一行的 deny 副本。宿主自己那一轮因此在建请求之前就被拒：一次尝试、一次 stderr 行、错误 `a2a-bridge takeover: host inference is disabled in this mode`。这段文本不命中宿主的任何重试触发条件——真实宿主上实测，被拒的一轮只发起一次尝试，以 `retryable: false` 结束。deny 副本不带凭据解析器，所以被拒的一轮连 provider 的取密钥程序都不会跑。
+- **按目的地的绊线**：宿主进程的 `globalThis.fetch` 包一层，URL 主机名匹配模型配置里任一 `baseUrl` 的请求一律拒绝。pi-ai 取 fetch 的顺序是 `options.fetch ?? globalThis.fetch`，取的是全局绑定、每次调用现读，所以这层盖住所有走 fetch 的推理请求，包括自建注册表的调用者（task 子代理、web 搜索、commit 消息）。
+- **只声明不得不声明的两个 provider**：有两条道不是 fetch——cowork 道（`anthropic` + `anthropic-messages` 时宿主换 `node:https` 直连）和 Codex 的 websocket 道（`api: openai-codex-responses`，宿主把 `providers.openaiWebsockets` 逐次转发给 provider 调用）。这两者的 provider 名字被放到 deny 后面；默认装法下是七十多个 provider 里的 2 个。
+
+**为什么不是「每个 provider 都影子化」。** 宿主的 `registerProvider(name, …, sourceId)` 会把 `sourceId` 记成这个名字的所有者，别人已经拥有时先把在位者的运行期状态清掉再接管；而公开 API 里唯一的撤销是「这个扩展卸载了」，不是「撤销那一次调用」。所以全量影子化等于删掉别的扩展注册过的每一个 provider，一次装配删一次、永不恢复——2026-10-13 在真实注册表上实测：一个扩展注册的两行 provider，一次装配/恢复之后变成零行。恢复时桥会拿快照核对被声明的 provider，没回来的逐个点名。
 
 降噪层把会让宿主自己忙起来、说个不停的设置按住（长命令自动转后台、宿主侧重试、advisor、TTSR、prewalk、autolearn、cache warming、自动压缩），全部是运行时 override，不落盘。实测：接管在位时，一条远程 3 秒 `bash` 跑完就结束，不会变成后台任务。
 
-**归谁控制。** 配置里的 `host_llm` 只决定启动状态（缺省 `allow`）。运行中用 `POST /host-llm` 带 `{"enabled": false}` 装 deny，带 `{"enabled": true}` 按 takeover 的快照恢复（原始注册、fetch 引用、settings overrides），回包是 `{enabled, denied}`。鉴权与其他路径同一个 Bearer token，每次切换写一条 `tool: "host_llm"` 审计。这个端点刻意**不是**工具：`tools/list` 保持宿主注册表原样。`/a2a` 显示当前状态（`host_llm=deny denied=2`）。切换从不落盘，重启回到操作员的配置。
+**归谁控制。** 配置里的 `host_llm` 只决定启动状态（缺省 `allow`）。运行中用 `POST /host-llm` 带 `{"enabled": false}` 装 deny，带 `{"enabled": true}` 按 takeover 的快照恢复（deny API 注销、被声明的 provider 恢复、原始模型行放回、fetch 引用还原、settings overrides），回包是 `{enabled, denied}`。鉴权与其他路径同一个 Bearer token，每次切换写一条 `tool: "host_llm"` 审计；装配被拒也写一条（`sid: null`，因为没有调用方），外加宿主 stderr 一行——提示条会滚走，审计不会。这个端点刻意**不是**工具：`tools/list` 保持宿主注册表原样。`/a2a` 显示当前状态（`host_llm=deny denied=2`）。切换从不落盘，重启回到操作员的配置。装配在每一次 `session_start` 重装（配置里的 `deny` 与远端打开的 deny 都一样）：会话重建会带一份没被影子化的新注册表出来，而端口开着说明不了注册表的状态。
 
 **它放弃了什么，什么在承诺之外。**
 
-- `transport: "pi-native"` 在宿主内部先于扩展注册的任何实现分派，桥拦不住。配置里有这样的 provider 时 takeover **拒绝装配**：错误可见，绝不半装。真需要 deny 的地方，改的是配置，不是桥。
-- 绊线盯的是宿主进程。`bash` 工具里的 `curl` 和 task 子代理跑在别的进程里，`deny` 不是网络沙箱，也不自称是。（实测：deny 状态下 task 子代理在发出第一个请求之前就退出，因为它拿到的模型行指向 deny API，而它自己的注册表不认识这个 api——封死了，但封死的方式是崩溃，不是拦截。）
-- 桥运行期间往 `models.yml` 新增的 provider，要等下一次装配才进 deny；`/login` 把模型所有权交回宿主，deny 随之失效。
-- `title.generator` 的枚举里没有关（只有 `fork | tiny`），宿主仍会尝试生成会话标题；这些尝试在影子层失败关闭，错误通知可能出现在会话里。
+- `transport`（`pi-native` 及任何在 API 分派之前短路的 transport）在宿主内部先于扩展注册的任何实现分派，桥排不到它前面。配置里有这样一个**不在被声明名单里**的 provider 时 takeover **拒绝装配**：错误可见，绝不半装。真需要 deny 的地方，改的是配置，不是桥。
+- 被声明的那两个 provider 若本来就是某个扩展运行期注册的（不是 `models.yml` 里配的），恢复之后那份注册不会回来——撤销原语没有这个能力。恢复时点名，要回来得重启宿主。
+- 绊线盯的是宿主进程。`bash` 工具里的 `curl` 跑在别的进程里，`deny` 不是网络沙箱，也不自称是。（实测：deny 状态下 task 子代理的请求在 fetch 边界被拒，一次本地拒绝，不出网。）
+- 桥运行期间往 `models.yml` 新增的 provider，要等下一次装配才进快照、才被绊线盯上；`/login` 把模型所有权交回宿主，被声明的 provider 影子随之失效。
+- 接管期间宿主把模型行换回真行也没用，它落在绊线上；但恢复时桥不会把它换回 deny 副本——那是操作员的选择。
+- `title.generator` 的枚举里没有关（只有 `fork | tiny`），宿主仍会尝试生成会话标题；这些尝试在 deny 层失败关闭，错误通知可能出现在会话里。
 - 被拒的轮次仍然是轮次：宿主会话历史里会留下一条错误消息。接管限制的是宿主能做什么，不是它记得什么。
 
 ## 传文件
@@ -273,7 +278,8 @@ v1 边界：
 - **401 `unauthorized`**：token 不匹配。远程 `mcp.json` 的 `Authorization` 头必须与配置 `token` 一致；`/a2a rotate` 之后要同步改远程侧。宿主 stderr 会在第一次失败以及此后每五十次打一行 `[a2a-bridge] N unauthorized attempt(s)`；这些尝试刻意不进审计日志（理由见「安全与边界」的审计日志条目）。
 - **桥拒绝启动，报 `field 'token' must be at least 32 characters`**：有人往 `a2a-bridge.json` 里写了个短的 token。放真正的密钥进去，或者删掉该字段让桥自己生成并持久化一个——桥不会替换交到它手里的那份。
 - **桥拒绝启动，报 `field 'host_llm' must be 'deny' or 'allow'`**：这个字段被写成了别的值（`"false"`、`"ALLOW"`、布尔量）。它决定接管的启动状态；含糊的值一律拒绝，不猜（见「宿主推理接管」）。
-- **takeover 装配失败**（`/a2a` 通知或宿主 stderr 里的 `A2A takeover failed to arm: … pi-native transport …`）：模型配置里有 `transport: "pi-native"` 的 provider，桥拦不住它，于是拒绝装配，推理照常归宿主自己的规则管。确实需要 deny，就删掉或改掉那个 provider。
+- **takeover 装配失败**（`/a2a` 通知、宿主 stderr 里的 `[a2a-bridge] takeover failed to arm: …`，以及一条带 `error` 的 `host_llm` 审计记录）：模型配置里有落在被声明名单之外的 provider 带 `transport`（`pi-native` 或任何在 API 分派之前短路的 transport），桥排不到它前面，于是拒绝装配，推理照常归宿主自己的规则管。确实需要 deny，就删掉或改掉那个 provider。
+- **宿主 stderr 出现 `takeover restore left N provider(s) unregistered … restart the host to recover`**：被声明的那两个 provider 里，有一个本来就是别的扩展在运行期注册的（不是 `models.yml` 里配的），而注册表的撤销原语没法重放别人的注册。deny 本身已经装回去了，缺的只是那个 provider，要回来得重启宿主。
 - **审计一条没有、调用也没有失败**：日志路径写不进去——`$A2A_BRIDGE_AUDIT` 指向不存在的目录、权限不对，或磁盘满。宿主 stderr 里有 `[a2a-bridge] audit record not written to <路径>（<原因>）`。修好路径拿不回已经丢掉的那些记录。
 - **400 `missing mcp-session-id` / 404 `unknown session`**：除 `initialize` 外都要带会话头。会话是宿主进程内存态——宿主重启即全部失效、空闲超 24h 也回收；重新 `initialize` 拿新会话即可（正规 MCP 客户端库会自动处理）。
 - **连不上 / 端口对不上**：宿主启动时配置端口被占用会回退到随机端口并在通知栏告警——以通知栏或 `/a2a` 显示的实际端口更新 `mcp.json`。
@@ -289,7 +295,8 @@ bun install
 
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
-bun test              # 单测：test/*.test.ts（138 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/blob 分派/takeover 形状/host-llm 路由）
+bun test              # 单测：test/*.test.ts（157 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/blob 分派/takeover 形状/装配事务/host-llm 路由）
+bun run test:registry # 真实模型注册表上驱动接管，22 项，秒级（不需要本机 omp，也不需要凭据）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，35 项（需本机 omp）
 bun run test:blob      # POST /blob 原始字节上传，35 项（需本机 omp）
@@ -314,7 +321,7 @@ bun run website        # 文档站（VitePress）本地预览，端口见输出�
 | `src/config.ts` | 配置加载/保存、字段校验、token 生成 |
 | `src/auth.ts` | Bearer token 校验（timing-safe 比较） |
 | `src/audit.ts` | 远程调用审计日志（JSONL 两阶段 `start`/`done`，轮转） |
-| `src/takeover.ts` | 宿主推理接管：注册表影子化、fetch 绊线、降噪 overrides、快照与恢复 |
+| `src/takeover.ts` | 宿主推理接管：deny api 与宿主当前模型行、按目的地 fetch 绊线、只声明非 fetch 道的 provider、降噪 overrides、快照与恢复 |
 
 变更历史见 [CHANGELOG.md](CHANGELOG.md)。
 

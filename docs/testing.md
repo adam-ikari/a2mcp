@@ -4,7 +4,8 @@
 
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 138 pass / 0 fail（10 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 157 pass / 0 fail（12 文件） |
+| `bun run test:registry` | 真实模型注册表核验，22 项，秒级 | 否 | `registry probe: all assertions met` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，35 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，34 项 | 否 | `render-check: all pages OK` |
@@ -14,7 +15,7 @@
 | `bun run test:install` | 发布包自包含 + 端到端，28 项 | 是 | `PACKAGE OK` |
 | `bun run test:scenario` | 端到端场景，10 个叙事 / 54 步，约 45 秒 | 是 | `SCENARIOS: 54 steps, 0 failed` |
 
-统一前置（七个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程是另一个例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，blob 核验失败时还要多留 100 MB 级别的上传，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（七个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程是另一个例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，blob 核验失败时还要多留 100 MB 级别的上传，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
 七个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
@@ -248,20 +249,42 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 | 组 | 项 | 断言 |
 | --- | --- | --- |
-| 启动装配 | 4 | deny-from-config 在 `session_start` 装上；装例行报告影子数与绊线键数（本轮实测 75 providers / 69 keys）；sink 的目的地在绊线键里；当前模型行被推进影子位（`model pushed: a2a-takeover-sink/small`） |
+| 启动装配 | 4 | deny-from-config 在 `session_start` 装上；装例行报告影子数与绊线键数；sink 的目的地在绊线键里；当前模型行被推进 deny 位（`model pushed: a2a-takeover-sink/small`） |
 | 桥照常工作 | 1 | 装了在位时 `initialize` 照样签发会话——接管限制的是宿主推理，不是 MCP |
 | 被拒的轮次 | 4 | `prompt_result` 以 `status:"error"` 终止（不是幻影成功）；sink 零命中；恰好一行拒绝（哨兵文本不命中任何重试触发条件，所以只有一次尝试、`retryable:false`）；哨兵文本确实回到调用方 |
 | 降噪 | 3 | 远程 3 秒 `bash` 同步跑完、没变成后台任务；期间 sink 仍零 |
 | 状态读回 | 2 | 再发一次 `{"enabled": false}` 不报错，回包读回 `enabled:false` 与非零计数 |
 | 恢复与负控 | 3 | `enabled:true` 回到 allow 并在 stderr 留下 `takeover restored`；**负控**：恢复后发出的宿主轮次打到 sink（这一条不绿，上面所有的零都只是「连不上」的错觉）；ON 窗口只开到数出第一个命中就切回 |
 | 重装 | 4 | 轮次在途时切回 `{"enabled": false}`，回包报 deny；被打断的 ON 轮次照样 settle（在途重试多打了几个命中，本轮 11 个）；第二次装配在注册表层拒掉新轮次（拒绝计数 +1）；sink 计数不再增长 |
-| 旁路 lane | 2 | 远程发 `task`（执行器自建注册表、不问会话的那类调用者）：子代理的请求没到 sink，且子代理是被明确终止、不是安静成功。实测的死法值得单记——子代理在独立进程里，拿到的模型行写着 deny api，它自己的注册表分发不了，约 250ms 内以 `Unhandled API in mapOptionsForApi: a2a-deny` 退出：fail-closed 成立，封死的方式是崩溃，不是拦截 |
+| 旁路 lane | 2 | 远程发 `task`（执行器自建注册表、自选模型、不问会话的那类调用者）：子代理的请求没到 sink，且子代理是被明确终止、不是安静成功。子代理拿到的不是 agent 那条 deny 行——它自己的注册表是现建的——拦住它的是目的地绊线：它发的请求最后都落到 `globalThis.fetch`，而那里每次调用现读全局，一次本地拒绝，不出网 |
 | 审计 | 2 | 每次切换一条 `host_llm` 记录（实测 ≥3 次切换都有）；每条记录携带发起切换的那个 MCP 会话 id |
 | pi-native | 3 | 另起一个宿主：配置里带 `transport: "pi-native"` 的 provider——装配在启动时被拒，拒绝点名拦不住的 transport，且没有「报了装上却没影子」的半状态 |
 
 两处坑是写了探针才现形的。第一处在 rpc 协议：`prompt` 发出去先回来的 `{"type":"response","command":"prompt","success":true}` 只是 ack，结果帧是后到的 `prompt_result`、按 `id` 配对。把 ack 当结果读，被拒的轮次也会读成「成功」——第一版探针就是这样，全绿，什么都没测到。第二处在 `transport: "pi-native"` 的摆放：它是 provider 级的键，写进 model 行会被 schema 静默丢掉；往配置里埋这一条的时候别猜，去看宿主 `models-config-schema-bundle` 的行号。
 
 失败语义与其他探针一致：任何一项 FAIL → exit 1，临时目录保留并打印路径；全过 → `takeover probe: all assertions met`。
+
+## `test:registry` — 真实模型注册表核验（22 项，秒级）
+
+**要回答的问题**：接管在**宿主的数据结构**上做了什么。上面七个探针问的都是一段时间里的行为——一轮对话、一个审批弹窗、一个后台任务把 agent 叫醒。这个探针问的是宿主的 `ModelRegistry` 本身，而它问得动，因为那个注册表可以在进程内直接造：`AuthStorage.create` 加一个 `new ModelRegistry(...)`，对着 `/tmp` 下的临时 agent 目录，就能拿到真实的内置目录（18.8.7 上 5457 行、七十多个 provider），不起宿主、不开 TUI、不连网。
+
+这一档是 2026-10-13 那轮评审缺的。读 `src/takeover.ts` 只会得到「它把每个 provider 重新注册一遍，恢复时清掉这些注册」；拿真实注册表一跑才知道那两次调用对**别的扩展注册过的** provider 做了什么——名字被抢走，而且不还：`clearSourceRegistrations` 是宿主的「这个扩展卸载了」，不是「撤销那一次调用」。当时 138 个单测全绿，代码也全绿。
+
+| 组 | 项 | 断言 |
+| --- | --- | --- |
+| 装配声明面 | 3 | 只声明两条非 fetch 道所属的 provider（本轮 `anthropic,openai-codex`）；其余 provider 保持自己的 api（它们归绊线管）；装配不再重算整份目录（15–17ms，旧机制 288ms） |
+| 被声明者的目的地 | 1 | 对被声明 provider 的目的地发一次 fetch，被拒 |
+| 未声明者的目的地 | 2 | 对**别的扩展**注册的那个 provider 的目的地发 fetch，同样被拒（它在绊线键里）；一个无关目的地不被拦——「不是桥该裁的」也是断言 |
+| 恢复 | 4 | 恢复后逐行比对：0 少、0 多、0 变（9 个字段 × 5457 行）；agent 拿回原来那行；deny api 注销；`enabled:true` 之后 fetch 不再被拦 |
+| 别人的注册 | 1 | **本探针存在的理由**：另一个 source 注册的 provider 在一次 arm/restore 之后行数不变（旧机制下是 2 → 0） |
+| 装配途中抛错 | 5 | `setModel` 抛错：错误传出去；agent 那行没动；deny api 没注册；fetch 已换回；`enabled` 读回 true——也就是端点对「恢复」的回答不会是在骗人 |
+| 宿主剪枝 | 1 | 宿主自己的 `syncExtensionSources` 剪掉这个合成 source 之后，重装一次仍然在位（`session_start` 的重装是幂等的） |
+
+写这一档的时候顺手现形了两件事，都不是探针的毛病：默认目录里有一条 `preferWebsockets: true` 的 Codex 行，所以「碰到 websocket 行就拒绝装配」会让 deny 在开箱状态下根本装不上——而那条道是按 **api** 判的，因为宿主把 `providers.openaiWebsockets` 这个设置逐次转发给 provider 调用，一行一个标志并不成立，于是那张表按 api 写；另外 deny 副本必须摘掉 `resolveHeaders`，否则 pi-ai 在 api 分派之前会先跑 provider 的 `!command` 取密钥程序。
+
+变异核验：把声明面改回「每个 provider 都声明」，本探针红 5 项，其中决定性的一项是 `myprov rows 2 -> 0`。
+
+失败语义与其他探针一致：任何一项 FAIL → exit 1，临时目录保留并打印路径；全过 → `registry probe: all assertions met`。CI 的 `check` job 跑它（不需要 omp，秒级），`host-probes` 不收。
 
 ## `test:scenario` — 端到端场景核验（10 个叙事 / 54 步）
 
