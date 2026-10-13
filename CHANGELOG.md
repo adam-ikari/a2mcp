@@ -45,7 +45,9 @@
 - fix: 装例行把声明的 provider 名字打出来（`2 provider(s) shadowed (anthropic, openai-codex), …`）。声明是把名字从原主人手里拿走、注册表还不回去，操作员看得见的只有这一行；探针也靠它才分得清声明表第二条那条 websocket 道在不在——数量不行，两种声明同样都报 2
 - docs: 残差措辞按实测改。原文写「绊线只按推理端点取键」，读起来会以为键内的主机一定被拒，而实测不是：注册表在构造时捕获自己的 fetch，宿主的目录与元数据 GET 到 provider 自己的 baseUrl 出得去，**那个主机名就在键里**（探针每轮 sink 收到一次非 POST，收尾行分开打印）。协议页、README 中英、模块头三处同步，并新增「不走 `globalThis.fetch` 的请求桥管不着」这条残差。`{enabled, denied}` 的响应形状加 `degraded` 一并写进协议页与 README
 - test: `test/takeover-arm.test.ts` 加两条（8 项）：拒绝发生在开关开着时读出 degraded、恢复后清掉；装例行点名了声明的 provider。两项变异各红各名——去掉 `degraded = true`、把恢复挪回拒绝检查之前，各红「降级」那一条。`test:takeover` 加两项（32 项）：装例行点名里同时有 cowork 与 websocket 两个 provider；本轮没有一次装配留下 degraded
-- 回归：`lint` / `tsc` / `bun test` 158/158；八个核验在 18.8.7 上全绿，`test:takeover` 32 项（62.2 秒，装例行 `2 provider(s) shadowed (anthropic, openai-codex)`，`inference posts=1 metadata non-POSTs=1`），`test:registry` 22 项，站点构建 + 渲染核验 34 项
+- fix: `TakeoverDeps` 的返回类型此前只声明 `{enabled, denied}`，而端点把 takeover 的状态整个回传当响应体——协议页写了三个字段，类型只承认两个，正是这类签名落后于实现的漂移。改成 `import type { HostLlmState }`，改完 `tsc` 当场把 `test/host-llm-route.test.ts` 的桩揪出来（桩少 `degraded`），桩与那条 `toEqual` 断言一起补齐。端点那条断言继续用精确相等，钉的是操作员实际读到的那份形状
+- test: **上一轮给在途 409 加的那行 `auditBlob` 此前零覆盖**——单测只有前置 409，探针也没有（`test:blob` 里那些 "in flight" 都是 RSS 采样，与它无关），而 CHANGELOG 里「五条出口口径一致」正是拿它当依据。补法：直接调 `handleBlob`，`Request` 桩的 `arrayBuffer` 由测试自己开门——那个 await 落在前置 `stat` 之后，所以在里面追加就是确定性地命中「stat 与 open 之间文件被别人改了」这个窗口，不用靠运气。单测 158 → 159。变异核验：拿掉那行 `auditBlob` → 只有新加的这条红
+- 回归：`lint` / `tsc` / `bun test` 159/159；`test:takeover` 32 项、`test:registry` 22 项、`test:blob` 35 项在 18.8.7 上全绿（内存表按第二十八轮重落：空闲 484、单个 +17、并发 +44，峰值与安顿两项相等），站点构建 + 渲染核验 34 项
 
 ## v0.1.0 — 首次发布
 
