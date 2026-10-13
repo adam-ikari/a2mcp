@@ -3,6 +3,7 @@ import { auditHostLlm } from "./audit.ts";
 import { authorize } from "./auth.ts";
 import { type BlobDeps, handleBlob } from "./blob.ts";
 import type { BridgeConfig } from "./config.ts";
+import type { HostLlmState } from "./takeover.ts";
 
 export type McpContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 
@@ -14,7 +15,14 @@ export interface McpTool {
 
 /** The switch behind `POST /host-llm` — see src/takeover.ts for what arming costs. */
 export interface TakeoverDeps {
-	setEnabled(enabled: boolean): { enabled: boolean; denied: number };
+	/**
+	 * The takeover's own state type, imported rather than restated: the route
+	 * forwards whatever comes back as the response body, so a narrower declaration
+	 * here would quietly describe a shorter response than the one the operator
+	 * reads (`degraded` was added to it and this signature still claimed two
+	 * fields).
+	 */
+	setEnabled(enabled: boolean): HostLlmState;
 }
 
 export interface BridgeDeps {

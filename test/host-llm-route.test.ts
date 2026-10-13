@@ -35,7 +35,10 @@ function makeTakeover(): TakeoverDeps & { calls: Call[]; fail: string | null } {
 			stub.calls.push({ enabled });
 			if (stub.fail) throw new Error(stub.fail);
 			stub.enabled = enabled;
-			return { enabled: stub.enabled, denied: stub.calls.length };
+			// The third field is part of the shape the endpoint forwards: the stub
+			// used to omit it and `TakeoverDeps` used not to require it, which is
+			// exactly the drift the declared type now prevents.
+			return { enabled: stub.enabled, denied: stub.calls.length, degraded: false };
 		},
 	};
 	return stub;
@@ -164,12 +167,16 @@ describe("POST /host-llm route dispatch", () => {
 			const sid = await init(base);
 			const off = await postHostLlm(base, JSON.stringify({ enabled: false }), { "mcp-session-id": sid });
 			expect(off.status).toBe(200);
-			expect(await off.json()).toEqual({ enabled: false, denied: 1 });
+			// Exact equality on purpose: the route forwards the takeover's state as
+			// the response body, so this pins the whole documented shape — including
+			// `degraded`, which is what tells a caller that deny is on over a session
+			// it never reached.
+			expect(await off.json()).toEqual({ enabled: false, denied: 1, degraded: false });
 			expect(takeover.calls).toEqual([{ enabled: false }]);
 
 			const on = await postHostLlm(base, JSON.stringify({ enabled: true }), { "mcp-session-id": sid });
 			expect(on.status).toBe(200);
-			expect(await on.json()).toEqual({ enabled: true, denied: 2 });
+			expect(await on.json()).toEqual({ enabled: true, denied: 2, degraded: false });
 
 			await flush();
 			const rec = await recordFor('enabled\\":false');
