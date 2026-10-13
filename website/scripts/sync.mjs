@@ -152,7 +152,7 @@ features:
     details: DAP 调试器（xd://debug）、LSP（xd://lsp）这类设备不进工具目录，远程 agent 用 read/write 的 path 参数就能读写和执行。有什么设备，跟着本机 omp 装了哪些扩展走。
     link: /intro#设备
   - title: 把固件传上这台机器
-    details: POST /blob 收原始字节，不用 base64。实测 100 MB 的镜像一个请求传完，落盘字节一致。这个端点只做上传，GET 一律 405，理由写在协议页。
+    details: POST /blob 收原始字节，而它的价值是「不会挂」——宿主把审批配成 prompt 而调用方无 UI 时，走 write/bash 会一直等不到应答（实测挂起 ≥90s），这条是唯一不挂的写入路径。实测 100 MB 的镜像一个请求传完，落盘字节一致。这个端点只做上传，GET 一律 405，理由写在协议页。
     link: /intro#传文件
   - title: 宿主推理可以整体关掉
     details: 远程调用可能唤醒宿主自己的 agent，花宿主的 token。host_llm 配置与 POST /host-llm 把这件事变成开关：deny 在位时宿主的会话发不出任何模型请求，核验探针对着一个真在听的计数 sink 数过——零是数出来的。

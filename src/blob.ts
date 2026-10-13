@@ -3,21 +3,30 @@
  *
  * ## Why this exists
  *
- * `tools/call` cannot carry raw binary. The host's `write` tool takes a string,
- * and its `bash` tool takes a command, so a caller has to base64 the payload
- * first. That costs 33% size, and at a 1 MB body limit it also forces chunking. This
- * endpoint takes the bytes as they are; the body limit now stands at 128 MB, so a
- * 100 MB image is one request.
+ * **Because it does not hang.** The host's writing tools (`write`, `edit`) and its
+ * `bash` all pass the approval gate, and when the host has `prompt` configured for
+ * them while the caller has no interactive UI, that gate never gets an answer —
+ * measured hanging ≥90s without returning (test/approval-probe.ts, expected
+ * `VERDICT: B`). A headless remote caller in that configuration has exactly one
+ * write path that does not hang, and this is it: bypassing the gate is the reason
+ * the endpoint exists there, not a defect riding along with it.
+ *
+ * The second reason is encoding: `tools/call` carries only text — the host's
+ * `write` takes a string, its `bash` takes a command — so a caller would otherwise
+ * base64 the payload first, at 33% more bytes and chunking under the old 1 MB
+ * limit. Here the bytes go as they are, and a 100 MB image is one request.
  *
  * ## What this gives up, and why that is a decision rather than an oversight
  *
  * A `tools/call` write goes through the host: it resolves against the session's
  * registry, executes the host's own `write`, and therefore passes the host's
- * approval gate. A direct write here does not. `ExtensionAPI` has no
+ * approval gate. A direct write here does not — see the heading above for the
+ * configuration where that is the point. `ExtensionAPI` has no
  * `requestApproval()` — only `on("tool_approval_requested", …)`, which is the
  * other direction (the host asks, the extension answers). So there is no way for
- * the bridge to raise an approval request of its own; the closest available is
- * to make a `tools/call`, which is the encoding this endpoint exists to avoid.
+ * the bridge to raise an approval request of its own; the closest available is to
+ * make a `tools/call`, which is precisely the path that hangs in the situation
+ * this endpoint serves.
  *
  * The same applies to paths. The host ships `resolvePath()` and `expandPath()`,
  * but they are internal modules of the host package, reached through no

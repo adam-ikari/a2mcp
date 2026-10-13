@@ -37,13 +37,15 @@ Two paths give the bridge an opinion it does not otherwise have, and both are pa
 with auditing and documentation:
 
 - `POST /blob` resolves the path itself (no root, no allowlist) and writes without asking
-  the host's approval gate. The costs are listed in `docs/protocol.md` under what the
-  endpoint gives up.
+  the host's approval gate. **That gate is why it exists, not just what it costs:** with
+  `prompt` configured and a headless caller it never answers (measured hanging ≥90s,
+  approval probe `VERDICT: B`), so this is the one write path that does not hang. The
+  costs are listed in `docs/protocol.md` under what the endpoint gives up.
 - `POST /host-llm` reaches into the host session directly: shadowing registry rows,
   overriding settings, replacing the process `fetch`. What it limits is the host's own
-  inference, and it acts only on the word of whoever holds the token. Its two-layer
-  guarantee and its residuals (pi-native refusal, in-process tripwire) are in
-  `docs/protocol.md` under 宿主推理切换.
+  inference, and it acts only on the word of whoever holds the token. Its guarantee, its
+  degraded state, and its residuals (lane refusals, the tripwire, and the request path
+  that is not the global `fetch`) are in `docs/protocol.md` under 宿主推理切换.
 
 Everything else here still decides.
 
