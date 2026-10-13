@@ -12,21 +12,26 @@
  *
  * What it decides, in order:
  *
- *  1. deny armed from config (`host_llm: "deny"`) — a host turn is denied at the
- *     registry layer: the sink stays at zero, the sentinel comes back, exactly
- *     one attempt (no retry loop), and a `bash` over the threshold runs to
- *     completion instead of becoming a background job (the noise layer).
+ *  1. deny armed from config (`host_llm: "deny"`) — a host turn is denied before
+ *     a request is built: the sink stays at zero, the sentinel comes back,
+ *     exactly one attempt (no retry loop), and a `bash` over the threshold runs
+ *     to completion instead of becoming a background job (the noise layer).
  *  2. the bridge itself keeps serving while armed.
  *  3. `POST /host-llm {enabled:true}` restores: the same host turn reaches the
- *     sink. This negative control is the half without which the whole check
- *     would only prove that a provider nobody can dial is never dialed.
+ *     sink, and the re-arm then still finds the provider to claim — which is how
+ *     the undo is observed, since a restore that left the rows on the deny api
+ *     silently degrades the next claim to tripwire-only. The sink is named
+ *     `anthropic` so that it is a claimed provider at all (the cowork lane keys
+ *     on the provider name); with a neutral name the claim would never be
+ *     exercised here.
  *  4. re-arming denies again — the switch is reversible at runtime.
  *  5. a bypass lane is covered too: a task sub-agent builds its own model
  *     registry, and its first request to a configured endpoint is denied by
  *     the destination tripwire (`curl` from bash is a separate process and
  *     deliberately outside what takeover covers).
  *  6. every toggle left an audit record carrying the session that asked.
- *  7. a `pi-native` row makes arming refused, and the refusal says why.
+ *  7. a `transport: pi-native` row on an unclaimed provider makes arming
+ *     refused, and the refusal names it.
  *
  * Exit 1 on any unmet assertion; evidence kept in the tmp dir on failure.
  */
@@ -60,13 +65,27 @@ async function waitFor(what: () => boolean, ms: number, label: string): Promise<
 	return false;
 }
 
-/** The sink: every model request that reaches the network lands here and is counted. */
+/**
+ * The sink: every model request that reaches the network lands here and is
+ * counted.
+ *
+ * Counted by method, and the distinction is not cosmetic. Takeover promises zero
+ * *inference* requests, and inference is a POST; the host also fetches provider
+ * *metadata* (catalog refresh, model listing) to the same configured baseUrl, and
+ * that traffic goes out through the registry's own captured fetch — outside both
+ * the deny and the tripwire, by design. A sink that counted both would report a
+ * metadata GET during the deny window as an inference leak, which reads as a deny
+ * failure and is not one. So: POSTs are the assertion, non-POSTs are tallied
+ * separately and printed at the end.
+ */
 let sinkHits = 0;
+let sinkMeta = 0;
 const sink = Bun.serve({
 	hostname: "127.0.0.1",
 	port: 0,
-	fetch: () => {
-		sinkHits++;
+	fetch: (req) => {
+		if (req.method === "POST") sinkHits++;
+		else sinkMeta++;
 		// 503, not 404: "model not found" shapes invite provider-specific retry
 		// handling. The ON-state assertions must never be able to blame a nonzero
 		// count on the sink's answer — with 503 there is no answer to react to.
@@ -98,11 +117,24 @@ const NATIVE_ROW = `  a2a-takeover-native:
         contextWindow: 100000
 `;
 
+/**
+ * The sink provider is named `anthropic` on purpose: that is the provider the
+ * cowork lane keys on (`provider === "anthropic" && api === "anthropic-messages"`
+ * — pi-ai/src/utils/transport-fetch.ts), so this probe drives the **claimed**
+ * path, not only the tripwire one. The claim is the half of the deny that
+ * replaces registry rows and has to put them back; with a neutrally named
+ * provider nothing here would exercise it, and a claim that failed to restore
+ * would leave the host unable to reason with the switch reporting allow.
+ *
+ * The http:// baseUrl is deliberate too: `coworkFetch` is TLS-only and falls
+ * back to `globalThis.fetch` for anything else, so the ON state still reaches
+ * the sink (through the fallback) while the lane itself is the one under test.
+ */
 function writeHome(extraModels = "") {
 	writeFileSync(
 		join(agentDir, "models.yml"),
 		`providers:
-  a2a-takeover-sink:
+  anthropic:
     baseUrl: ${SINK}/v1
     api: anthropic-messages
     apiKey: not-a-real-key
@@ -112,11 +144,11 @@ function writeHome(extraModels = "") {
 ${extraModels}`,
 	);
 	// The model line matters: rpc mode picks the first configured model, and the
-	// registry rows are what takeover shadows. low threshold + long command timeout
+	// registry rows are what the deny claims. low threshold + long command timeout
 	// so a 3s sleep WOULD auto-background if the noise layer did not stop it.
 	writeFileSync(
 		join(agentDir, "settings.yml"),
-		`model: a2a-takeover-sink/small
+		`model: anthropic/small
 bash:
   autoBackground:
     thresholdMs: 1500
@@ -219,9 +251,13 @@ try {
 	const arm = /takeover armed: (\d+) provider\(s\) shadowed, (\d+) tripwire key\(s\)/.exec(host.err);
 	check("the arm reports what it shadowed", !!arm, arm?.[0] ?? "(no arm line)");
 	check("the sink destination is among the tripwire keys", arm ? Number(arm[2]) >= 2 : false, `keys=${arm?.[2]}`);
+	// Which row is not pinned on purpose: naming the provider `anthropic` merges
+	// the custom model with the host's bundled catalog, and rpc mode picks the
+	// first configured row rather than settings.yml's `model:`. The claim is
+	// per-provider, so any anthropic row exercises the same path.
 	check(
-		"the arm pushed the current model onto its shadow",
-		host.err.includes("model pushed: a2a-takeover-sink/small"),
+		"the arm pushed the current model onto its deny row",
+		/model pushed: anthropic\//.test(host.err),
 		/(takeover armed[^\n]*)/.exec(host.err)?.[1] ?? "(no arm line)",
 	);
 
@@ -291,6 +327,20 @@ try {
 	// the next baseline is measured.
 	const firstHit = await waitFor(() => sinkHits > hitsBefore2, 30000, "first ON-state hit at the sink");
 	check("after restore a host turn reaches the sink", firstHit, `hits ${hitsBefore2} -> ${sinkHits}`);
+	// Whether the undo really took, which the sink hit above cannot tell: the
+	// agent's own row is restored separately and the tripwire is gone, so a host
+	// holding that row dials the sink either way (measured — this line stays green
+	// with the undo removed). The bridge's own post-restore check is the observer,
+	// and it reads a path that composes the catalog fresh rather than answering
+	// from the cached snapshot. Its absence is the assertion.
+	check(
+		"the restore found the claimed provider serving its pre-arm rows",
+		!host.err.includes("takeover restore left"),
+		host.err
+			.split("\n")
+			.find((l) => l.includes("takeover restore left"))
+			?.slice(0, 200) ?? "",
+	);
 
 	// --- 5. re-arm denies again ---
 	const re = await toggle(false, sid);
@@ -307,6 +357,18 @@ try {
 		`status=${p3?.status} denials ${denialsBefore3} -> ${(host.err.match(/takeover denied a model request/g) ?? []).length}`,
 	);
 	check("re-armed: the sink stops hearing", sinkHits === hitsBefore3, `hits ${hitsBefore3} -> ${sinkHits}`);
+	// Whether the *undo* took, observed from the only place it is visible: the
+	// next arm reads the registry snapshot to decide which providers to claim. A
+	// restore that left the rows on the deny api means the snapshot no longer has
+	// an anthropic-messages row, so the re-arm claims nothing — the claim quietly
+	// degrades to tripwire-only, which is the residual this whole probe exists to
+	// catch. Measured: with the undo removed, this reports 0.
+	const arms = [...host.err.matchAll(/takeover armed: (\d+) provider\(s\) shadowed/g)].map((m) => Number(m[1]));
+	check(
+		"re-armed: the claim still finds its providers, so the restore really undid it",
+		arms.length >= 2 && arms[arms.length - 1] >= 1,
+		`shadowed per arm: ${arms.join(", ")}`,
+	);
 
 	// --- 6. a bypass lane (task sub-agent) is covered too ---
 	// curl from a bash tool is a separate process and OUTSIDE the promise
@@ -424,6 +486,8 @@ try {
 		process.exitCode = 1;
 	} else {
 		rmSync(tmp, { recursive: true, force: true });
-		console.log(`takeover probe: all assertions met (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+		console.log(
+			`takeover probe: all assertions met (${((Date.now() - t0) / 1000).toFixed(1)}s, inference posts=${sinkHits}, metadata non-POSTs=${sinkMeta})`,
+		);
 	}
 }
