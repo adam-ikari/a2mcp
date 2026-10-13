@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { auditHostLlm } from "../src/audit.ts";
 import { buildCallTool, buildToolCatalog, hasMainSession } from "../src/bridge.ts";
 import type { BridgeConfig } from "../src/config.ts";
 import { configPath, generateToken, loadConfig, saveConfig } from "../src/config.ts";
@@ -15,20 +16,48 @@ let cfg: BridgeConfig | null = null;
  * a port nobody can stop, and the operator gets two announcements for two endpoints.
  */
 let bringingUp: Promise<void> | null = null;
+/**
+ * The `tools/call` executor the live server dispatches through, replaced on every
+ * `session_start`.
+ *
+ * The endpoint is process-level, but an `ExtensionContext` is not: the host rebuilds
+ * the session (revive, ACP, a task runner) and hands the next `session_start` a fresh
+ * one, while the first server — and the closure it was built with — lives on. A
+ * captured context is exactly the thing the host warns about ("a saved context must
+ * not retain a completed handler's stale signal", runner.ts): its `ui`, `abort`,
+ * `isIdle` and `hasPendingMessages` all read the session that is already gone, and a
+ * dead session's abort signal is aborted, so every remote tool call would fail on
+ * arrival. Rebuilding the executor per start costs one closure.
+ */
+let liveCallTool: ReturnType<typeof buildCallTool> | null = null;
+
+/** Report a takeover that could not be armed, in the three places an operator looks. */
+function reportArmFailure(ctx: ExtensionContext, e: unknown): void {
+	const why = (e as Error)?.message ?? String(e);
+	// stderr outlives the toast, and the audit outlives the process: a refusal at
+	// startup says the host was *supposed* to be denied and is not, and nothing else
+	// in the bridge's record would say so later. `sid: null` because no caller asked.
+	console.error(`[a2a-bridge] takeover failed to arm: ${why}`);
+	auditHostLlm(null, false, why);
+	ctx.ui.notify(`A2A takeover failed to arm: ${why}`, "error");
+}
 
 export default function a2aBridge(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_ev, ctx) => {
-		// A rebuilt `Main` session arrives with a fresh model registry that nothing
-		// has shadowed, so the operator's startup state is re-applied on every
-		// start — before the endpoint guard, since the endpoint being up says
-		// nothing about the registry being denied.
-		if (cfg?.host_llm === "deny") {
+		// Re-arm whenever the switch is on, not only when the config says so: the
+		// config only decides the *startup* state, while a runtime-armed takeover has
+		// to survive a rebuilt Main session (fresh registry, nothing denied) and a
+		// shared one the host's own extension-source reconciliation may have pruned
+		// the shadow out of. This runs before the endpoint guard — the endpoint being
+		// up says nothing about the registry being denied.
+		if (!hostLlmState().enabled) {
 			try {
 				rearmMainSession();
 			} catch (e) {
-				ctx.ui.notify(`A2A takeover failed to arm: ${(e as Error)?.message ?? String(e)}`, "error");
+				reportArmFailure(ctx, e);
 			}
 		}
+		liveCallTool = buildCallTool(pi, ctx);
 		if (server) return; // one endpoint per process
 		if (bringingUp) {
 			// Ride along with the start already in flight rather than bind a second one.
@@ -46,12 +75,18 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 					try {
 						rearmMainSession();
 					} catch (e) {
-						ctx.ui.notify(`A2A takeover failed to arm: ${(e as Error)?.message ?? String(e)}`, "error");
+						reportArmFailure(ctx, e);
 					}
 				}
 				server = await startServer(cfg, {
 					getTools: buildToolCatalog(pi),
-					callTool: buildCallTool(pi, ctx),
+					// Read through the live executor: the one captured here would keep
+					// answering out of the first session's context after a rebuild.
+					callTool: async (name, args, sid) => {
+						if (!liveCallTool)
+							return { content: [{ type: "text", text: "main session not available" }], isError: true };
+						return liveCallTool(name, args, sid);
+					},
 					serverInfo: () => ({ name: "omp-a2a-bridge", version: "0.1.0" }),
 					takeover: { setEnabled },
 				});
@@ -102,6 +137,7 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 		server?.stop();
 		server = null;
 		cfg = null;
+		liveCallTool = null;
 	});
 
 	pi.registerCommand("a2a", {
