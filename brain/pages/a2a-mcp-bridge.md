@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-12T11:08:05"
+updated: "2026-10-13T01:56:21"
 ---
 
 <!-- compiled_truth -->
@@ -677,4 +677,22 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "宿主推理接管（2026-10-12，用户两条裁决：宿主不允许任何自主 LLM 调用；开关本身归远程）。分层保证是并集不是交集：(a) 注册表影子化——枚举 session.modelRegistry 全部 provider，重注册到 deny 实现（api=a2a-deny），并把影子行经 agent.setModel 推进主循环（agent 持捕获的 Model 对象，不换行就拦不到在途会话）；(b) 宿主进程 globalThis.fetch 按目的地绊线，键=models.yml 全部 baseUrl 的 host+port，盖 task/websearch/commit 等自建注册表的旁路；(c) 降噪 override（autoBackground/retry/advisor/ttsr/prewalk/autolearn/cacheWarming/compaction），全运行时不落盘。哨兵文本刻意避开四类重试触发器，实测被拒轮次恰好一次尝试、retryable:false。控制面：host_llm 配置只决定启动状态；POST /host-llm {enabled} 是第二条非工具 HTTP 路（同 /blob 先例，鉴权前判、审计 tool:host_llm、不落盘、重启回配置），刻意不进 tools/list——目录透传宿主注册表，桥对宿主做的事不是宿主的工具。装配在 bind 之前、每次 session_start 重装（新 runner 带新注册表）。诚实边界（残差全部文档化）：pi-native transport 拦不住则拒绝装配、不改任何状态；绊线只在宿主进程内——task 子代理在独立进程实测靠影子行崩溃封死（Unhandled API in mapOptionsForApi，约250ms 退出），是 fail-closed by crash 不是拦截；运行中新加 provider 到下次装配才进 deny；/login 交回所有权即解除 deny；title.generator 枚举无关。AGENTS.md 的例外记录由此变为两条（/blob 与 /host-llm），framing：takeover 限制的是宿主自己，且只在持有 token 者的指令下。"
   source: "src/takeover.ts · docs/protocol.md「宿主推理切换」 · AGENTS.md exceptions"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-13T01:22:41
+  kind: evidence
+  summary: "评审（2026-10-13）用宿主真实 ModelRegistry 在进程内驱动 src/takeover.ts（5457 行目录、73 provider）核出三项读不出来的缺陷：(1) registerProvider(name,…,sourceId) 会把 provider 名字的归属转给调用方，影子化全部 provider 等于抢走别人的注册——别的扩展（含宿主 loadCliExtensionProviders 从 ~/.omp/agent/extensions 注册的）经一次 arm/restore 后该 provider 的行从目录里彻底消失且不恢复；(2) 影子化/推模型行/settings override/fetch 绊线全部在 armed 赋值之前完成，中途抛错留下「宿主已被全量拒绝但状态报 enabled:true、setEnabled(true) 也救不回」的残局；(3) 合成 sourceId \"a2a-bridge\" 会进 #registeredProviderSources，宿主每次建 session 跑 syncExtensionSources(扩展路径表) 就把它当已卸载扩展剪掉——影子层当场消失而桥仍报 deny，只剩 fetch 绊线。顺带：happy path 恢复经 9 字段 × 5457 行逐行比对为 0 missing/0 extra/0 changed，deny 覆盖与 fetch 引用还原成立。"
+  source: "review probes 2026-10-13 (.review-tmp, 未入库)"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-13T01:56:21
+  kind: reversal
+  summary: "接管第一层换机制：不再影子化目录里每个 provider。理由是宿主 ModelRegistry 的所有权语义——registerProvider(name,…,sourceId) 把 sourceId 记成名字的所有者，别人拥有时先 #clearRuntimeProviderState 再接管，而公开面唯一的撤销 clearSourceRegistrations 是「这个扩展卸载了」不是「撤销那一次调用」，所以全量影子化等于删掉别的扩展注册过的 provider 且不恢复（实测 2 行 → 0 行）。新机制三层，判据统一为「每条推理请求最后从哪个口出去」：(1) deny api + agent 手里那行的 deny 副本（deny 副本必须摘掉 resolveHeaders，否则 pi-ai 在 api 分派前先跑 !command 取密钥程序）；(2) globalThis.fetch 目的地绊线——pi-ai 取 fetch 是 options?.fetch ?? globalThis.fetch，取全局绑定、每次调用现读，所以这层盖住所有 fetch 道，包括自建注册表的 task 子代理（它们不再靠崩溃封死，而是被绊线按下去）；(3) 只声明不是 fetch 的道，按 api 判两张表：cowork（provider=anthropic + api=anthropic-messages → node:https 直连）与 Codex websocket（api=openai-codex-responses，宿主把 providers.openaiWebsockets 逐次转发给 provider 调用，所以不能按行上的 preferWebsockets 判；默认目录里就有这样一行，按行判会让 deny 开箱装不上）。默认装法声明 2 个名字而不是 73 个，装配 288ms → 16ms。transport 拒绝收到「不在被声明名单里的 provider 带 transport」，被声明的 provider 整份行被换成不带 transport 的 overlay。"
+  source: review fix 2026-10-13
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-13T01:56:21
+  kind: evidence
+  summary: "评审轮的三条纪律与它们各自的落点。(1) 宿主注册表可以在进程内直接造：AuthStorage.create + new ModelRegistry 对着 /tmp 的临时 agent 目录就是真实内置目录（18.8.7 上 5457 行、七十多个 provider），不起宿主、不连网、秒级——新增的 test/registry-probe.ts（22 项）就是这一档，CI 收在 check job。读不出来的「谁拥有这个 provider 名字」「抛错时留下什么」两个问题，只有这一档能答。(2) 合成 source id 的陷阱：registerProvider 会把 sourceId 放进 #registeredProviderSources，而 createAgentSessionScoped 每次建 session 跑 syncExtensionSources(扩展路径表)，不在表里的 source 被当成已卸载的扩展剪掉——实测一次调用后 deny 行从 5457 变 0 而 enabled 仍读 false。所以桥的装配必须幂等，且入口要在开关开着时（不只看配置值）每次 session_start 重装。(3) 装配是事务：改动之前先把 armed 记下来，抛错时整体回滚再抛——旧顺序留下的是「宿主已全量拒绝但端点回答 enabled:true、setEnabled(true) 救不回」的死局，只有重启宿主能了事。"
+  source: review probes 2026-10-13
   affects: [a2a-mcp-bridge]
