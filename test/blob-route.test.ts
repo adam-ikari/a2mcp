@@ -244,7 +244,7 @@ describe("/blob route dispatch and audit wiring", () => {
 		});
 	});
 
-	test("a 409 offset mismatch rewrites nothing and leaves no audit line", async () => {
+	test("a 409 offset mismatch rewrites nothing and still leaves a record", async () => {
 		await withServer(async (base) => {
 			const first = await postBlob(base, `?path=${encodeURIComponent(target("clash.bin"))}`, "12345678");
 			expect(first.status).toBe(200);
@@ -252,9 +252,28 @@ describe("/blob route dispatch and audit wiring", () => {
 
 			const clash = await postBlob(base, `?path=${encodeURIComponent(target("clash.bin"))}&offset=5`, "xx");
 			expect(clash.status).toBe(409);
-			await flush();
 			expect(readFileSync(target("clash.bin"), "utf8")).toBe("12345678");
-			expect(recordsHolding("clash.bin").length).toBe(1); // the refusal is not a second record
+			// Written nothing, still recorded: this endpoint bypasses the host's
+			// approval gate, so the log is the only trace a caller leaves, and a
+			// chunked upload whose offset drifts is the commonest way to land here.
+			const rec = await recordFor("does not match the current size");
+			expect(rec.tool).toBe("blob:write");
+			expect(rec.isError).toBe(true);
+			expect(String(rec.args)).toContain('"bytes":0');
+			expect(recordsHolding("clash.bin").length).toBe(2); // the write, then the refusal
+		});
+	});
+
+	test("a 409 on a fresh file is recorded too — nothing about a refusal is invisible", async () => {
+		await withServer(async (base) => {
+			// The same refusal decided before the body is read: no handle is open, no
+			// bytes moved, and it used to be the one exit with no line at all.
+			const res = await postBlob(base, `?path=${encodeURIComponent(target("never.bin"))}&offset=9`, "xx");
+			expect(res.status).toBe(409);
+			const rec = await recordFor("never.bin");
+			expect(rec.isError).toBe(true);
+			expect(String(rec.args)).toContain('"offset":9');
+			expect(existsSync(target("never.bin"))).toBe(false);
 		});
 	});
 });

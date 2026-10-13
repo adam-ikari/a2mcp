@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, rename, stat } from "node:fs/promises";
+import { appendFile, chmod, rename, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 
@@ -96,6 +96,14 @@ function appendLine(line: string, env?: NodeJS.ProcessEnv): void {
 			const s = await stat(file).catch(() => null);
 			if (s && s.size + line.length > MAX_LOG_BYTES) await rename(file, `${file}.1`);
 			await appendFile(file, line, { mode: 0o600 });
+			// `mode` only applies at creation, so a log that already existed keeps
+			// whatever it had — one restored from a backup or created by hand stays
+			// world-readable for the life of the process. The config writer already
+			// chmods for exactly this reason (src/config.ts); this file holds the same
+			// class of evidence, so it gets the same second step. A chmod that fails
+			// is swallowed rather than counted: the record landed, and `failedWrites`
+			// means records that did not.
+			await chmod(file, 0o600).catch(() => {});
 		})
 		.catch((e) => {
 			// Still swallowed: a rejection per line noise-floods the host's error log,

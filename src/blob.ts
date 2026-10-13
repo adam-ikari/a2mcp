@@ -117,10 +117,14 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 		size = 0; // absent file: an offset-0 write creates it
 	}
 	if (explicit && offset !== size) {
-		return {
-			status: 409,
-			body: { error: `offset ${offset} does not match the current size ${size}; send no offset to append` },
-		};
+		// Audited like every other exit, including the ones that wrote nothing: this
+		// endpoint bypasses the host's approval gate, so the log is the only trace a
+		// caller leaves. A chunked upload whose offset drifts is the commonest way to
+		// land here, and an unrecorded refusal reads in the log exactly like a request
+		// that never arrived.
+		const why = `offset ${offset} does not match the current size ${size}; send no offset to append`;
+		auditBlob(deps.sid, path, offset, 0, why);
+		return { status: 409, body: { error: why } };
 	}
 	const claimed = explicit ? offset : size;
 
@@ -159,10 +163,9 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 		// response named the offset that was asked for — so it is refused.
 		const current = (await handle.stat()).size;
 		if (explicit && offset !== current) {
-			return {
-				status: 409,
-				body: { error: `the file changed while the upload was in flight: offset ${offset}, current size ${current}` },
-			};
+			const why = `the file changed while the upload was in flight: offset ${offset}, current size ${current}`;
+			auditBlob(deps.sid, path, offset, 0, why);
+			return { status: 409, body: { error: why } };
 		}
 		at = explicit ? offset : current;
 		const { bytesWritten } = await handle.write(buf);
