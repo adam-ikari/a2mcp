@@ -381,7 +381,21 @@ export function applyTakeover(session: AgentSession): void {
 	if (armed && !sameSession) restoreTakeover();
 
 	const rows = session.modelRegistry.getAll() as unknown as RegistryRowView[];
-	const claimed = shadowedProviders(rows);
+	// Re-arming the same session must keep the claims it already holds: the
+	// snapshot it would recompute from is its own shadow, whose rows carry the deny
+	// api and so match no lane — a claim would read as "nothing to claim", the arm
+	// line would report zero, and restore would check an empty set. The
+	// registrations themselves survive either way, so this is bookkeeping losing
+	// track of a claim it still owns.
+	const claimed = new Map(armed?.claimed ?? []);
+	for (const [provider, providerRows] of shadowedProviders(rows)) {
+		// Merged by id: the same row can appear in both halves (the host pruned the
+		// shadow, so the snapshot has real rows again) and the overlay would then
+		// list that model twice.
+		const merged = new Map((claimed.get(provider) ?? []).map((r) => [r.id, r]));
+		for (const row of providerRows) merged.set(row.id, row);
+		claimed.set(provider, [...merged.values()]);
+	}
 	const lane = uncoveredLane(rows, new Set(claimed.keys()));
 	if (lane) {
 		throw new Error(`cannot arm takeover: model ${lane.row.provider}/${lane.row.id} ${lane.reason}`);
@@ -483,28 +497,44 @@ export function restoreTakeover(): void {
 	const lost = unshadowedProviders(session, claimed);
 	if (lost.length > 0) {
 		console.error(
-			`[a2a-bridge] takeover restore left ${lost.length} provider(s) unregistered (their runtime registration belonged to another source and the registry cannot replay it): ${lost.join(", ")} — restart the host to recover`,
+			`[a2a-bridge] takeover restore left ${lost.length} provider(s) not serving their pre-arm rows (${lost.join(", ")}) — either their runtime registration belonged to another source, which the registry cannot replay, or the undo did not take; restart the host to recover`,
 		);
 	}
 	console.error("[a2a-bridge] takeover restored: the host may issue model requests again");
 }
 
-/** Providers that do not serve the rows they had before arming. */
+/**
+ * Providers that do not serve the rows they had before arming.
+ *
+ * Identity is not enough to call a row back: a row can return under the same
+ * `provider/id` and still carry the deny api, which reads as restored while the
+ * host stays unable to reason through that provider. So each row is matched on
+ * the pair (id, api) — a row that came back on `a2a-deny` counts as lost.
+ *
+ * The read goes through `getProviderModels`, not `getAll`, and that is what makes
+ * the check able to fail at all: `getAll` answers from whatever catalog snapshot
+ * the registry last composed, and the composition that would reflect a *skipped*
+ * undo is exactly the one the undo itself triggers. Asking for one provider
+ * composes it fresh from the current layers, so a shadow that survived shows up
+ * here. Measured 2026-10-13 on a live host: with the undo removed, an id-only
+ * `getAll` check called that restored, and the claim silently degraded to
+ * tripwire-only from the next arm on.
+ */
 function unshadowedProviders(session: AgentSession, claimed: Map<string, RegistryRowView[]>): string[] {
 	if (claimed.size === 0) return [];
-	let after: RegistryRowView[];
-	try {
-		after = session.modelRegistry.getAll() as unknown as RegistryRowView[];
-	} catch {
-		return [...claimed.keys()];
-	}
+	const reg = session.modelRegistry;
 	const lost: string[] = [];
 	for (const [provider, before] of claimed) {
-		const ids = new Set(before.map((r) => r.id));
-		for (const row of after) {
-			if (row.provider === provider && ids.has(row.id)) ids.delete(row.id);
+		let after: RegistryRowView[];
+		try {
+			after = (reg.getProviderModels(provider) ?? []) as unknown as RegistryRowView[];
+		} catch {
+			lost.push(provider);
+			continue;
 		}
-		if (ids.size > 0) lost.push(provider);
+		const wanted = new Set(before.map((r) => `${r.id} ${r.api}`));
+		for (const row of after) wanted.delete(`${row.id} ${row.api}`);
+		if (wanted.size > 0) lost.push(provider);
 	}
 	return lost;
 }
