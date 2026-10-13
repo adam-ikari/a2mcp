@@ -11,13 +11,17 @@ import { describe, expect, test } from "bun:test";
 import { retriable } from "@oh-my-pi/pi-ai/error";
 import { classify, isOAuthExpiry, TRANSIENT_TRANSPORT_PATTERN } from "@oh-my-pi/pi-ai/error/flags";
 import {
+	buildDenyModel,
 	buildDenyOverlays,
 	DENY_API,
 	hostLlmState,
+	nonFetchLane,
 	type RegistryRowView,
 	SENTINEL,
 	setEnabled,
+	shadowedProviders,
 	tripwireKeys,
+	uncoveredLane,
 } from "../src/takeover.ts";
 
 function row(over: Partial<RegistryRowView> & { provider: string; id: string }): RegistryRowView {
@@ -32,6 +36,150 @@ function row(over: Partial<RegistryRowView> & { provider: string; id: string }):
 		...over,
 	};
 }
+
+describe("uncoveredLane", () => {
+	const plain = [
+		row({ provider: "anthropic", id: "claude-x", baseUrl: "https://api.anthropic.com" }),
+		row({ provider: "openai", id: "gpt-z", baseUrl: "https://api.openai.com/v1", api: "openai-responses" }),
+	];
+	const nothingClaimed = new Set<string>();
+
+	test("an ordinary catalog has no uncovered lane", () => {
+		expect(uncoveredLane(plain, nothingClaimed)).toBeNull();
+	});
+
+	test("a pi-native row on an unclaimed provider is refused, and the refusal names the model and why", () => {
+		// pi-ai dispatches on model.transport BEFORE the custom-api check, so a deny
+		// row carrying one would be sent to the gateway instead of refused.
+		const lane = uncoveredLane(
+			[...plain, row({ provider: "custom", id: "native-thing", transport: "pi-native" })],
+			nothingClaimed,
+		);
+		expect(lane?.row.provider).toBe("custom");
+		expect(lane?.reason).toMatch(/pi-native/);
+		expect(lane?.reason).toMatch(/before any api/);
+	});
+
+	test("any transport is refused, not just the one the host has today", () => {
+		// The rule is the shape, not the string: a transport this version never sets
+		// would short-circuit just the same.
+		const lane = uncoveredLane([row({ provider: "p", id: "m", transport: "carrier-pigeon" })], nothingClaimed);
+		expect(lane?.reason).toMatch(/carrier-pigeon/);
+	});
+
+	test("the same transport on a claimed provider is covered, not refused", () => {
+		// A claimed provider's rows are replaced wholesale by overlays that carry no
+		// transport at all, so there is nothing left to short-circuit.
+		expect(uncoveredLane([row({ provider: "p", id: "m", transport: "pi-native" })], new Set(["p"]))).toBeNull();
+	});
+});
+
+describe("nonFetchLane", () => {
+	test("names the two lanes the tripwire cannot see", () => {
+		expect(nonFetchLane(row({ provider: "anthropic", id: "c", api: "anthropic-messages" }))).toBe("cowork");
+		expect(nonFetchLane(row({ provider: "openai-codex", id: "gpt", api: "openai-codex-responses" }))).toBe("websocket");
+		expect(nonFetchLane(row({ provider: "openai", id: "gpt", api: "openai-responses" }))).toBeNull();
+	});
+
+	test("the websocket lane is keyed on the api, not on a row's flag", () => {
+		// The host forwards `providers.openaiWebsockets` on every provider call, so a
+		// setting can put ANY codex row on the socket. A row-level check would have
+		// covered only the one row that ships with the flag.
+		expect(nonFetchLane(row({ provider: "openai-codex", id: "plain", api: "openai-codex-responses" }))).toBe(
+			"websocket",
+		);
+	});
+});
+
+describe("shadowedProviders", () => {
+	test("claims the cowork lane's provider and nothing else", () => {
+		// pi-ai picks cowworkFetch (node:https) by provider + api; every other lane
+		// reads globalThis.fetch at call time, which the tripwire already wraps.
+		const claimed = shadowedProviders([
+			row({ provider: "anthropic", id: "claude-x", api: "anthropic-messages" }),
+			row({ provider: "anthropic", id: "claude-local", api: "openai-completions" }),
+			row({ provider: "openai", id: "gpt-z", api: "openai-responses" }),
+		]);
+		expect([...claimed.keys()]).toEqual(["anthropic"]);
+		// The provider's WHOLE row set, not just the row that motivated the claim:
+		// registering a subset would drop the others out of the catalog while armed.
+		expect(
+			claimed
+				.get("anthropic")
+				?.map((r) => r.id)
+				.sort(),
+		).toEqual(["claude-local", "claude-x"]);
+	});
+
+	test("a provider with no non-fetch row is left entirely to the tripwire", () => {
+		// Claiming it would take a name the bridge has no reason to own, which is the
+		// whole point of the narrow table.
+		const claimed = shadowedProviders([
+			row({ provider: "anthropic", id: "claude-local", api: "openai-completions" }),
+			row({ provider: "openai", id: "gpt-z", api: "openai-responses" }),
+		]);
+		expect(claimed.size).toBe(0);
+	});
+
+	test("the websocket lane's provider is claimed too", () => {
+		const claimed = shadowedProviders([
+			row({ provider: "openai-codex", id: "gpt-codex", api: "openai-codex-responses" }),
+			row({ provider: "openai", id: "gpt-z", api: "openai-responses" }),
+		]);
+		expect([...claimed.keys()]).toEqual(["openai-codex"]);
+	});
+
+	test("every claimed row survives into the overlay, counts conserved", () => {
+		const rows = [
+			row({ provider: "anthropic", id: "claude-x", api: "anthropic-messages" }),
+			row({ provider: "anthropic", id: "claude-y", api: "anthropic-messages", reasoning: true }),
+		];
+		const claimed = shadowedProviders(rows);
+		const overlays = buildDenyOverlays([...claimed.values()].flat());
+		expect([...(overlays.get("anthropic")?.models.map((m) => m.id) ?? [])].sort()).toEqual(["claude-x", "claude-y"]);
+	});
+});
+
+describe("buildDenyModel", () => {
+	test("keeps the row's identity and swaps the two fields that route a request", () => {
+		const row = {
+			provider: "anthropic",
+			id: "claude-x",
+			name: "Claude X",
+			api: "anthropic-messages",
+			baseUrl: "https://api.anthropic.com",
+			contextWindow: 200000,
+			maxTokens: 8192,
+			input: ["text", "image"],
+		};
+		const deny = buildDenyModel(row);
+		expect(deny).toMatchObject({
+			provider: "anthropic",
+			id: "claude-x",
+			name: "Claude X",
+			contextWindow: 200000,
+			maxTokens: 8192,
+			input: ["text", "image"],
+			api: DENY_API,
+			baseUrl: "http://127.0.0.1:9",
+		});
+	});
+
+	test("drops the credential resolvers", () => {
+		// pi-ai resolves model.resolveHeaders BEFORE the custom-api check, so leaving
+		// them on would make a denied turn run the provider's `!command` key program to
+		// mint a key the request never uses.
+		const deny = buildDenyModel({
+			provider: "p",
+			id: "m",
+			api: "anthropic-messages",
+			headers: { "x-api-key": "literal" },
+			resolveHeaders: () => Promise.resolve({ authorization: "Bearer secret" }),
+		});
+		expect(deny).not.toHaveProperty("headers");
+		expect(deny).not.toHaveProperty("resolveHeaders");
+	});
+});
 
 describe("buildDenyOverlays", () => {
 	const rows = [
@@ -68,11 +216,6 @@ describe("buildDenyOverlays", () => {
 		expect(anthropic.find((m) => m.id === "claude-x")?.contextWindow).toBe(200000);
 		expect(anthropic.find((m) => m.id === "claude-x")?.maxTokens).toBe(8192);
 		expect(anthropic.find((m) => m.id === "claude-x")?.input).toEqual(["text"]);
-	});
-
-	test("a pi-native row refuses the whole arming before anything is produced", () => {
-		const rowsWithNative = [...rows, row({ provider: "custom", id: "native-thing", transport: "pi-native" })];
-		expect(() => buildDenyOverlays(rowsWithNative)).toThrow(/pi-native/);
 	});
 
 	test("the deny api name does not collide with a built-in dispatch name", () => {
