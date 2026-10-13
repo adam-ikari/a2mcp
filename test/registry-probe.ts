@@ -28,7 +28,9 @@
  *  4. restore puts the catalog back row for row, so `enabled: true` means it;
  *  5. a mid-arm throw rolls back — nothing half-applied, switch reporting on;
  *  6. the host's own extension-source reconciliation cannot silently un-deny a
- *     takeover, because the session_start re-arm is idempotent.
+ *     takeover, because the session_start re-arm is idempotent;
+ *  7. a rebuilt session — a second registry over the same configuration — takes
+ *     the deny over from the one it replaced, and hands both back on restore.
  *
  * Exit 1 on any unmet assertion. Nothing is left behind on success: the agent
  * dir is a mkdtemp under /tmp.
@@ -234,6 +236,68 @@ try {
 		`denied rows ${deniedBefore} -> ${deniedAfter}`,
 	);
 	restoreTakeover();
+
+	// --- 7: a rebuilt session, which is what a second registry stands in for ---
+	// The deny has to be re-applied whenever the host builds a new Main session, and
+	// the substance of that is a *fresh registry over the same configuration* — which
+	// is what a revive or an ACP attach produces. It cannot be driven from a host
+	// probe: `session_start` has three emitters (runtime-init on session creation,
+	// acp-agent on attach, and the interactive UI), and rpc exposes none of them for
+	// Main — `new_session` is `AgentSession.newSession()`, which keeps the same
+	// session object and its listeners and never emits the event. So the rebuild is
+	// stood in for here, on the real thing rather than a stub.
+	const auth2 = await AuthStorage.create(join(agentDir, "auth2.db"));
+	const reg2 = new ModelRegistry(auth2 as never, join(agentDir, "models.yml"), {
+		settings: settings as never,
+		cacheDbPath: join(agentDir, "models2.db"),
+	});
+	const rows2 = () => reg2.getAll() as unknown as Row[];
+	const deniedIn = (get: () => Row[]) => get().filter((r) => r.api === DENY_API).length;
+	// Baselines taken here, not from the earlier snapshot: section 6's prune removed
+	// the other extension's provider from registry A (that is what pruning a source
+	// does), and registry B never had it. Comparing against the old counts would be
+	// measuring the prune, not the swap.
+	const baseA = view(rows()).size;
+	const baseB = view(rows2()).size;
+	const b2 = sessionFor();
+	(b2.session as unknown as { modelRegistry: unknown }).modelRegistry = reg2;
+
+	applyTakeover(a.session);
+	applyTakeover(b2.session); // the rebuilt session's session_start
+	const secondDenied = deniedIn(rows2);
+	check(
+		"the rebuilt session's fresh registry is denied by the re-arm",
+		secondDenied > 0 && getCustomApi(DENY_API) !== undefined,
+		`denied rows on the new registry: ${secondDenied}/${rows2().length}`,
+	);
+	check(
+		"the registry it replaced is handed back its own rows",
+		deniedIn(rows) === 0 && view(rows()).size === baseA,
+		`denied rows on the old registry: ${deniedIn(rows)}`,
+	);
+	check(
+		"the agent row follows the session: old back, new denied",
+		a.held?.api !== DENY_API && b2.held?.api === DENY_API,
+	);
+	// One refused request must count once. A double-wrapped tripwire would log twice
+	// per call, which is the shape a restore-then-rearm on the same global produces if
+	// the fetch reference is mishandled — and it would also mean the operator's denial
+	// count drifts away from the attempts.
+	const deniedCountBefore = hostLlmState().denied;
+	try {
+		await globalThis.fetch("https://api.anthropic.com/v1/messages", { method: "POST" });
+	} catch {}
+	check(
+		"the tripwire is installed once, not wrapped around itself across the swap",
+		hostLlmState().denied === deniedCountBefore + 1,
+		`denied ${deniedCountBefore} -> ${hostLlmState().denied}`,
+	);
+	restoreTakeover();
+	check(
+		"...and restoring hands the new registry its rows back too",
+		deniedIn(rows2) === 0 && view(rows2()).size === baseB && getCustomApi(DENY_API) === undefined,
+		`denied rows on the new registry after restore: ${deniedIn(rows2)}`,
+	);
 
 	console.log(`\nregistry: ${rowCount} rows, ${armMs.toFixed(1)}ms to arm, source id ${TAKEOVER_SOURCE}`);
 } catch (e) {

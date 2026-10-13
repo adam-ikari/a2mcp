@@ -5,7 +5,7 @@
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
 | `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 157 pass / 0 fail（12 文件） |
-| `bun run test:registry` | 真实模型注册表核验，22 项，秒级 | 否 | `registry probe: all assertions met` |
+| `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，35 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，34 项 | 否 | `render-check: all pages OK` |
@@ -271,7 +271,7 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 失败语义与其他探针一致：任何一项 FAIL → exit 1，临时目录保留并打印路径；全过 → `takeover probe: all assertions met`。
 
-## `test:registry` — 真实模型注册表核验（22 项，秒级）
+## `test:registry` — 真实模型注册表核验（28 项，秒级）
 
 **要回答的问题**：接管在**宿主的数据结构**上做了什么。上面七个探针问的都是一段时间里的行为——一轮对话、一个审批弹窗、一个后台任务把 agent 叫醒。这个探针问的是宿主的 `ModelRegistry` 本身，而它问得动，因为那个注册表可以在进程内直接造：`AuthStorage.create` 加一个 `new ModelRegistry(...)`，对着 `/tmp` 下的临时 agent 目录，就能拿到真实的内置目录（18.8.7 上 5457 行、七十多个 provider），不起宿主、不开 TUI、不连网。
 
@@ -286,10 +286,15 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 | 别人的注册 | 1 | **本探针存在的理由**：另一个 source 注册的 provider 在一次 arm/restore 之后行数不变（旧机制下是 2 → 0） |
 | 装配途中抛错 | 5 | `setModel` 抛错：错误传出去；agent 那行没动；deny api 没注册；fetch 已换回；`enabled` 读回 true——也就是端点对「恢复」的回答不会是在骗人 |
 | 宿主剪枝 | 1 | 宿主自己的 `syncExtensionSources` 剪掉这个合成 source 之后，重装一次仍然在位（`session_start` 的重装是幂等的） |
+| 换会话 | 6 | **重建后的会话**：第二个 `ModelRegistry`（同一份配置，revive 与 ACP 挂载带来的就是它）接走 deny——新注册表被声明 35 行、旧的拿回自己的行、agent 那一行跟着会话走（旧的恢复、新的被拒）；一次被拒的请求只计一次（绊线没有层层包住自己，操作员的拒绝计数不能漂）；恢复之后新注册表也拿回自己的行 |
+
+**为什么「重建后的会话」只能在进程内验。** 试过在宿主探针里用 rpc 的 `new_session` 驱动，结果是它根本不重建会话：`AgentSession.newSession()` 保留同一个会话对象与监听器（`agent-session.ts:9659` 的注释原话是 "Listeners are preserved"），只是清空消息，等于 `/clear`，不发 `session_start`。而 `session_start` 全宿主只有三个发射点——`runtime-init.ts:212`（建会话时）、`acp-agent.ts:2662`（ACP 挂载）、交互式 UI——rpc 对 **Main** 一个都不暴露。所以换主会话这件事在宿主探针里根本驱动不了，本探针用第二个真实注册表把它 stood in for：重建的实质就是「同一份配置上一个全新的注册表」。
+
+这条也解释了为什么降级状态在真实宿主上验不了：降级需要「开关开着 + 换主会话 + 新目录里有拦不住的道」，而换主会话这一步就驱动不了。降级的覆盖留在 `test/takeover-arm.test.ts` 的 stub session 上（读出 `degraded`、恢复后清掉、拒绝排在恢复之前——三项各有变异）。
 
 写这一档的时候顺手现形了两件事，都不是探针的毛病：默认目录里有一条 `preferWebsockets: true` 的 Codex 行，所以「碰到 websocket 行就拒绝装配」会让 deny 在开箱状态下根本装不上——而那条道是按 **api** 判的，因为宿主把 `providers.openaiWebsockets` 这个设置逐次转发给 provider 调用，一行一个标志并不成立，于是那张表按 api 写；另外 deny 副本必须摘掉 `resolveHeaders`，否则 pi-ai 在 api 分派之前会先跑 provider 的 `!command` 取密钥程序。
 
-变异核验：把声明面改回「每个 provider 都声明」，本探针红 5 项，其中决定性的一项是 `myprov rows 2 -> 0`。
+变异核验：把声明面改回「每个 provider 都声明」，本探针红 5 项，其中决定性的一项是 `myprov rows 2 -> 0`；换会话时若不把旧会话的 deny 还回去，红「拿回自己的行」与「agent 那一行跟着会话走」两项。
 
 失败语义与其他探针一致：任何一项 FAIL → exit 1，临时目录保留并打印路径；全过 → `registry probe: all assertions met`。CI 的 `check` job 跑它（不需要 omp，秒级），`host-probes` 不收。
 

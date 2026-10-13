@@ -47,7 +47,9 @@
 - test: `test/takeover-arm.test.ts` 加两条（8 项）：拒绝发生在开关开着时读出 degraded、恢复后清掉；装例行点名了声明的 provider。两项变异各红各名——去掉 `degraded = true`、把恢复挪回拒绝检查之前，各红「降级」那一条。`test:takeover` 加两项（32 项）：装例行点名里同时有 cowork 与 websocket 两个 provider；本轮没有一次装配留下 degraded
 - fix: `TakeoverDeps` 的返回类型此前只声明 `{enabled, denied}`，而端点把 takeover 的状态整个回传当响应体——协议页写了三个字段，类型只承认两个，正是这类签名落后于实现的漂移。改成 `import type { HostLlmState }`，改完 `tsc` 当场把 `test/host-llm-route.test.ts` 的桩揪出来（桩少 `degraded`），桩与那条 `toEqual` 断言一起补齐。端点那条断言继续用精确相等，钉的是操作员实际读到的那份形状
 - test: **上一轮给在途 409 加的那行 `auditBlob` 此前零覆盖**——单测只有前置 409，探针也没有（`test:blob` 里那些 "in flight" 都是 RSS 采样，与它无关），而 CHANGELOG 里「五条出口口径一致」正是拿它当依据。补法：直接调 `handleBlob`，`Request` 桩的 `arrayBuffer` 由测试自己开门——那个 await 落在前置 `stat` 之后，所以在里面追加就是确定性地命中「stat 与 open 之间文件被别人改了」这个窗口，不用靠运气。单测 158 → 159。变异核验：拿掉那行 `auditBlob` → 只有新加的这条红
-- 回归：`lint` / `tsc` / `bun test` 159/159；`test:takeover` 32 项、`test:registry` 22 项、`test:blob` 35 项在 18.8.7 上全绿（内存表按第二十八轮重落：空闲 484、单个 +17、并发 +44，峰值与安顿两项相等），站点构建 + 渲染核验 34 项
+- test: **「重建后的会话」这条路在宿主探针里驱动不了，改由注册表探针 stood in for。** 试过用 rpc 的 `new_session`：`AgentSession.newSession()` 保留同一个会话对象与监听器（`agent-session.ts:9659` 的注释是 "Listeners are preserved"），只清空消息，等于 `/clear`，不发 `session_start`；而 `session_start` 全宿主只有三个发射点（`runtime-init.ts:212` 建会话、`acp-agent.ts:2662` ACP 挂载、交互式 UI），rpc 对 Main 一个都不暴露。于是 `test:registry` 加一段：第二个真实 `ModelRegistry`（同一份配置，revive 与 ACP 挂载带来的就是它）接走 deny——新注册表被声明 35 行、旧的拿回自己的行、agent 那一行跟着会话走、一次被拒的请求只计一次（绊线没有层层包住自己）、恢复之后新注册表也拿回自己的行。22 → 28 项。变异核验：换会话时不把旧的还回去 → 红两项
+- test: 顺带记下一条**仍然没有覆盖**的：降级状态在真实宿主上验不了，它需要「开关开着 + 换主会话 + 新目录里有拦不住的道」，而换主会话这一步上面刚证明驱动不了。降级的覆盖留在 `test/takeover-arm.test.ts` 的 stub session 上（三项各有变异），测试页把这条写进「为什么只能在进程内验」那一段
+- 回归：`lint` / `tsc` / `bun test` 159/159；`test:takeover` 32 项、`test:registry` 28 项、`test:blob` 35 项在 18.8.7 上全绿（内存表按第二十八轮重落：空闲 484、单个 +17、并发 +44，峰值与安顿两项相等），站点构建 + 渲染核验 34 项
 
 ## v0.1.0 — 首次发布
 
