@@ -10,7 +10,7 @@
 | `bun run test:hardening` | 真实宿主加固核验，35 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，34 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
-| `bun run test:takeover` | 宿主推理 deny/restore 核验，32 项，约 63 秒 | 是 | `takeover probe: all assertions met` |
+| `bun run test:takeover` | 宿主推理 deny/restore 核验，34 项，约 65 秒 | 是 | `takeover probe: all assertions met` |
 | `bun run test:blob` | 原始字节上传（`POST /blob`），35 项 | 是 | `BLOB OK` |
 | `bun run test:install` | 发布包自包含 + 端到端，28 项 | 是 | `PACKAGE OK` |
 | `bun run test:scenario` | 端到端场景，10 个叙事 / 54 步，约 45 秒 | 是 | `SCENARIOS: 54 steps, 0 failed` |
@@ -241,7 +241,7 @@
 
 setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 打印宿主日志尾部。**失败时临时目录保留**（`evidence kept at <path>`）供事后检查；成功才清理。
 
-## `test:takeover` — 宿主推理 deny/restore 核验（32 项）
+## `test:takeover` — 宿主推理 deny/restore 核验（34 项）
 
 **要回答的问题**：deny 在位时宿主自己的会话是不是真的发不出模型请求，远程把它撤掉之后恢复是不是真的生效。此前的核验答不了这个问题，原因在测量而不在覆盖：被测宿主用的是故意不可达的 provider，请求失败不出声，「零模型请求」就只是一个缺席、不是一个数。这个探针把不可达换成一个真在听的计数 sink（`Bun.serve`，答 503）——仓库里第一个真让宿主连进来的 listener。于是断言变成算术：命中数该还是命中数。
 
@@ -260,6 +260,7 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 | 审计 | 2 | 每次切换一条 `host_llm` 记录（实测 ≥3 次切换都有）；每条记录携带发起切换的那个 MCP 会话 id |
 | pi-native | 3 | 另起一个宿主：配置里带 `transport: "pi-native"` 的 provider——装配在启动时被拒，拒绝点名拦不住的 transport，且没有「报了装上却没影子」的半状态 |
 | 无降级 | 1 | 本轮没有一次装配把开关留在一个它没能 deny 的会话上（stderr 里没有「the switch is still on; this session is covered by the tripwire only」） |
+| 开关关着时 | 2 | **桥自己一次模型请求都不发**——本探针上面所有的零都是在 `host_llm: "deny"` 下量的，而那是宿主本来就不该推理的配置。默认配置下把开关恢复成 allow，再走一遍 `tools/list` + 一次 `read` + 一次 `bash`：sink 的推理 POST 计数不变。harness 播种的 provider 故意不可达，所以这类请求静默失败、数不出来——正是当初造 sink 要补的那个盲区，只是这次在开关的另一侧。变异核验：让桥每次调用都按会话当前模型发一次请求 → `inference posts 1 -> 3` |
 
 **sink 必须命名为 `anthropic`，否则这探针测不到声明那条道。** cowork 道按 provider 名判（`provider === "anthropic" && api === "anthropic-messages"`），中性名字的 sink 只走绊线，声明与撤销声明一次都不会被触发——而那正是 2026-10-13 改机制时动的半边。改成 `anthropic` 之后自定义模型与宿主内置目录合并，rpc 模式取的是第一条配置行而不是 `settings.yml` 的 `model:`（内置的 `claude-opus-5-5` 排在前面），所以断言盯 provider 不盯 model id。
 

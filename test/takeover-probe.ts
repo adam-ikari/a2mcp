@@ -34,6 +34,9 @@
  *     refused, and the refusal names it.
  *  8. no arm in this run left the switch on over a session it could not deny
  *     (the degraded state, which is the one way `host_llm=deny` could be untrue).
+ *  9. with the switch off — the default configuration, and the one every other
+ *     zero here was *not* measured in — handling remote calls issues no model
+ *     request of its own.
  *
  * Exit 1 on any unmet assertion; evidence kept in the tmp dir on failure.
  */
@@ -190,7 +193,10 @@ async function mcp(body: unknown, sid?: string, ms = 30000): Promise<Response> {
 	});
 }
 
-async function toggle(enabled: boolean, sid: string): Promise<{ enabled?: boolean; denied?: number; error?: string }> {
+async function toggle(
+	enabled: boolean,
+	sid: string,
+): Promise<{ enabled?: boolean; denied?: number; degraded?: boolean; error?: string }> {
 	const r = await fetch(`${base}host-llm`, {
 		method: "POST",
 		headers: { "content-type": "application/json", ...AUTH, "mcp-session-id": sid },
@@ -474,7 +480,53 @@ try {
 		llm[0]?.slice(0, 160),
 	);
 
-	// --- 8. a pi-native row refuses arming ---
+	// --- 8. the bridge itself asks for nothing, with the switch OFF ---
+	// Every zero above was measured with `host_llm: "deny"` — the one configuration
+	// where the host is not supposed to reason anyway. The project's first sentence is
+	// that the bridge itself never issues a model request (one remote call is
+	// "receive, run the tool, answer"), and in the *default* configuration nothing was
+	// counting it. The harness's placeholder provider is unreachable on purpose, so a
+	// request to it fails silently and cannot be counted: the same blind spot the sink
+	// was invented for, sitting on the other side of the switch.
+	//
+	// What this pins, and what it does not: that the bridge's own request handling
+	// never reasons. It says nothing about a tool — `tools/call task` legitimately
+	// does, and that is the deny subject measured above, not this window.
+	const allowState = await toggle(true, sid);
+	check(
+		"the switch is off again for this window",
+		allowState.enabled === true && !allowState.degraded,
+		JSON.stringify(allowState),
+	);
+	const hitsBefore7 = sinkHits;
+	const metaBefore7 = sinkMeta;
+	await mcp({ jsonrpc: "2.0", id: 20, method: "tools/list", params: {} }, sid);
+	await mcp(
+		{
+			jsonrpc: "2.0",
+			id: 21,
+			method: "tools/call",
+			params: { name: "read", arguments: { path: join(tmp, "bg-marker.txt") } },
+		},
+		sid,
+	);
+	await mcp(
+		{
+			jsonrpc: "2.0",
+			id: 22,
+			method: "tools/call",
+			params: { name: "bash", arguments: { command: "echo bridge-asked-for-nothing" } },
+		},
+		sid,
+	);
+	await sleep(2500); // long enough for a retry loop to have shown itself, had there been one
+	check(
+		"with the switch off, handling remote calls still issues no model request",
+		sinkHits === hitsBefore7,
+		`inference posts ${hitsBefore7} -> ${sinkHits} (host metadata traffic in the same window: ${sinkMeta - metaBefore7} non-POSTs)`,
+	);
+
+	// --- 9. a pi-native row refuses arming ---
 	await kill(host, "-main");
 	host = null;
 	writeHome(NATIVE_ROW);
