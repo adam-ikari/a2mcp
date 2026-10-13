@@ -81,13 +81,17 @@
  * is the same rule the module has always applied to `pi-native`, narrowed to the
  * rows it cannot shadow.
  *
- * Residuals, listed honestly: non-inference egress (update checks, telemetry) is
- * deliberately *not* blocked — the tripwire keys on inference endpoints only; a
- * provider added to models.yml after arming contributes no tripwire key until
- * the next arm; a provider whose runtime registration belonged to another
- * extension and needed shadowing does not get that registration back (named in
- * the host log on restore — restart the host to recover it); a row the host
- * resolves mid-turn and re-pushes over the deny row falls back to the tripwire.
+ * Residuals, listed honestly: a request that does not go through
+ * `globalThis.fetch` is not this bridge's to refuse — the registry captures its
+ * own fetch at construction, so the host's catalog and metadata GETs to a
+ * provider's own baseUrl leave the machine even while that host is a tripwire
+ * key (measured: the takeover probe's sink sees one non-POST per run, and the
+ * count is printed separately from inference for that reason); a provider added
+ * to models.yml after arming contributes no tripwire key until the next arm; a
+ * provider whose runtime registration belonged to another extension and needed
+ * shadowing does not get that registration back (named in the host log on
+ * restore — restart the host to recover it); a row the host resolves mid-turn and
+ * re-pushes over the deny row falls back to the tripwire.
  *
  * ## Lifecycle
  *
@@ -369,6 +373,14 @@ interface Armed {
 let armed: Armed | null = null;
 
 /**
+ * The switch is on but the session that is live now is not the one it was armed
+ * on — or was never re-armed onto, because arming it was refused. The tripwire
+ * still covers every fetch lane; the two non-fetch lanes do not. Cleared by any
+ * restore, which is the only way the switch goes off.
+ */
+let degraded = false;
+
+/**
  * Make the host unable to reason, idempotently. Arming a new session while an
  * old one is armed restores the old first (its session may already be dead,
  * which is why restore tolerates that); re-arming the *same* session re-registers
@@ -377,8 +389,8 @@ let armed: Armed | null = null;
  * mutating anything — when the snapshot holds a lane nothing here can cover.
  */
 export function applyTakeover(session: AgentSession): void {
+	const wasArmed = armed !== null;
 	const sameSession = armed?.session === session;
-	if (armed && !sameSession) restoreTakeover();
 
 	const rows = session.modelRegistry.getAll() as unknown as RegistryRowView[];
 	// Re-arming the same session must keep the claims it already holds: the
@@ -386,8 +398,9 @@ export function applyTakeover(session: AgentSession): void {
 	// api and so match no lane — a claim would read as "nothing to claim", the arm
 	// line would report zero, and restore would check an empty set. The
 	// registrations themselves survive either way, so this is bookkeeping losing
-	// track of a claim it still owns.
-	const claimed = new Map(armed?.claimed ?? []);
+	// track of a claim it still owns. A *different* session starts empty: its claims
+	// are about a registry that is not this one's.
+	const claimed = new Map(sameSession ? (armed?.claimed ?? []) : []);
 	for (const [provider, providerRows] of shadowedProviders(rows)) {
 		// Merged by id: the same row can appear in both halves (the host pruned the
 		// shadow, so the snapshot has real rows again) and the overlay would then
@@ -396,10 +409,25 @@ export function applyTakeover(session: AgentSession): void {
 		for (const row of providerRows) merged.set(row.id, row);
 		claimed.set(provider, [...merged.values()]);
 	}
+
+	// The refusal check runs BEFORE the old session is restored, and that order is
+	// the whole point. Restoring first would drop the process-global tripwire on the
+	// way to failing, leaving the operator who asked for deny with nothing at all
+	// when the new session cannot be armed; this way the refusal keeps what is still
+	// worth having and says so.
 	const lane = uncoveredLane(rows, new Set(claimed.keys()));
 	if (lane) {
+		// A refusal while something is already armed is not the same as a refusal at
+		// startup: the switch is on, the process-global tripwire is installed, but
+		// this session got no deny row and no claim — so the two non-fetch lanes are
+		// unguarded on it. Reporting `enabled: false` with nothing else would say the
+		// host cannot reason, which on those lanes is not true. Mark it and let the
+		// state carry the difference (see `hostLlmState`).
+		if (wasArmed) degraded = true;
 		throw new Error(`cannot arm takeover: model ${lane.row.provider}/${lane.row.id} ${lane.reason}`);
 	}
+
+	if (wasArmed && !sameSession) restoreTakeover();
 	const keys = tripwireKeys(rows);
 	const cur = session.model as Record<string, unknown> | null | undefined;
 
@@ -456,8 +484,15 @@ export function applyTakeover(session: AgentSession): void {
 		restoreTakeover();
 		throw e;
 	}
+	degraded = false;
+	// The names are in the line on purpose. A claim takes a provider name away from
+	// whoever held it and the registry cannot give it back (see the header), so the
+	// operator's only way to see which names the bridge owns is this log — and a
+	// probe's only way to tell that the websocket lane's provider was claimed at all
+	// is the same line, since the count alone cannot say which two they were.
+	const names = [...claimed.keys()].sort().join(", ");
 	console.error(
-		`[a2a-bridge] takeover armed: ${claimed.size} provider(s) shadowed, ${keys.size} tripwire key(s), model pushed: ${pushed}`,
+		`[a2a-bridge] takeover armed: ${claimed.size} provider(s) shadowed${names ? ` (${names})` : ""}, ${keys.size} tripwire key(s), model pushed: ${pushed}`,
 	);
 }
 
@@ -475,7 +510,9 @@ export function applyTakeover(session: AgentSession): void {
 export function restoreTakeover(): void {
 	if (!armed) return;
 	const { session, prevFetch, overriddenIds, prevModel, claimed } = armed;
+	const wasDegraded = degraded;
 	armed = null;
+	degraded = false;
 	globalThis.fetch = prevFetch;
 	try {
 		unregisterCustomApis(TAKEOVER_SOURCE);
@@ -499,6 +536,9 @@ export function restoreTakeover(): void {
 		console.error(
 			`[a2a-bridge] takeover restore left ${lost.length} provider(s) not serving their pre-arm rows (${lost.join(", ")}) — either their runtime registration belonged to another source, which the registry cannot replay, or the undo did not take; restart the host to recover`,
 		);
+	}
+	if (wasDegraded) {
+		console.error("[a2a-bridge] takeover restored from a degraded state (the tripwire was the only layer in place)");
 	}
 	console.error("[a2a-bridge] takeover restored: the host may issue model requests again");
 }
@@ -542,10 +582,17 @@ function unshadowedProviders(session: AgentSession, claimed: Map<string, Registr
 export interface HostLlmState {
 	enabled: boolean;
 	denied: number;
+	/**
+	 * The switch is on, but the session that is live now is not the one it was armed
+	 * on and could not be re-armed onto — so the process-global tripwire covers its
+	 * fetch lanes and nothing else does. `enabled: false` alone would read as "the
+	 * host cannot reason", which is not true on the two non-fetch lanes.
+	 */
+	degraded: boolean;
 }
 
 export function hostLlmState(): HostLlmState {
-	return { enabled: armed === null, denied: denies };
+	return { enabled: armed === null, denied: denies, degraded: armed !== null && degraded };
 }
 
 /**

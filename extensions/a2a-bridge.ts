@@ -34,12 +34,19 @@ let liveCallTool: ReturnType<typeof buildCallTool> | null = null;
 /** Report a takeover that could not be armed, in the three places an operator looks. */
 function reportArmFailure(ctx: ExtensionContext, e: unknown): void {
 	const why = (e as Error)?.message ?? String(e);
+	// Two different failures, and they must not read the same. Nothing armed at all
+	// means the switch is off and the host reasons under its own rules. A refusal
+	// *while the switch is on* leaves the tripwire installed on a session that never
+	// got the deny row or the claims — so the operator is told which of the two
+	// happened, instead of the state bar claiming deny over a session that can.
+	const st = hostLlmState();
+	const detail = st.degraded ? `${why} — the switch is still on; this session is covered by the tripwire only` : why;
 	// stderr outlives the toast, and the audit outlives the process: a refusal at
 	// startup says the host was *supposed* to be denied and is not, and nothing else
 	// in the bridge's record would say so later. `sid: null` because no caller asked.
-	console.error(`[a2a-bridge] takeover failed to arm: ${why}`);
-	auditHostLlm(null, false, why);
-	ctx.ui.notify(`A2A takeover failed to arm: ${why}`, "error");
+	console.error(`[a2a-bridge] takeover failed to arm: ${detail}`);
+	auditHostLlm(null, false, detail.slice(0, 200));
+	ctx.ui.notify(`A2A takeover failed to arm: ${detail}`, "error");
 }
 
 export default function a2aBridge(pi: ExtensionAPI): void {
@@ -173,10 +180,12 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 				}
 				const url = `http://${cfg.host}:${server.port}/`;
 				// `host_llm` is the runtime state, not the config value: a remote toggle
-				// diverges from the startup config until the next restart.
+				// diverges from the startup config until the next restart. A degraded
+				// state says deny over a session the deny never reached — spelled out
+				// rather than left to be inferred from `denied=0`.
 				const st = hostLlmState();
 				ctx.ui.notify(
-					`A2A bridge on ${url} (token ${cfg.token.slice(0, 6)}…, port ${server.port}) host_llm=${st.enabled ? "allow" : "deny"} denied=${st.denied}`,
+					`A2A bridge on ${url} (token ${cfg.token.slice(0, 6)}…, port ${server.port}) host_llm=${st.enabled ? "allow" : st.degraded ? "deny (tripwire only)" : "deny"} denied=${st.denied}`,
 				);
 			} catch (e) {
 				ctx.ui.notify(`A2A command failed: ${(e as Error)?.message ?? String(e)}`, "error");
