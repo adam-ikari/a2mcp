@@ -110,7 +110,7 @@ README「安全与边界」一节按这个前提写。
 
 ## 宿主推理切换
 
-`POST /host-llm` 是桥第二条不属于工具的路。它开关宿主自己会话的模型请求能力：body `{"enabled": <boolean>}`，`false` 在当前 `Main` 会话上装 deny，`true` 按 takeover 的快照恢复（deny api 注销、被声明的 provider 恢复、原始模型行放回、fetch 引用还原、settings overrides 撤销）。响应 `200` 带 `{enabled, denied}`——`enabled` 是这次调用之后的状态，`denied` 是进程启动以来被拒的模型请求计数。重复的 `{"enabled": true}` 不报错：没装的时候恢复就是空操作。这个端点不进 `tools/list`，理由与 AGENTS.md 同源：目录透传的是宿主注册表，而这是桥对宿主做的事，不是宿主的工具，不该藏进工具列表里。
+`POST /host-llm` 是桥第二条不属于工具的路。它开关宿主自己会话的模型请求能力：body `{"enabled": <boolean>}`，`false` 在当前 `Main` 会话上装 deny，`true` 按 takeover 的快照恢复（deny api 注销、被声明的 provider 恢复、原始模型行放回、fetch 引用还原、settings overrides 撤销）。响应 `200` 带 `{enabled, denied, degraded}`——`enabled` 是这次调用之后的状态，`denied` 是进程启动以来被拒的模型请求计数，`degraded` 是下面那条降级状态。重复的 `{"enabled": true}` 不报错：没装的时候恢复就是空操作。这个端点不进 `tools/list`，理由与 AGENTS.md 同源：目录透传的是宿主注册表，而这是桥对宿主做的事，不是宿主的工具，不该藏进工具列表里。
 
 deny 是三层的并集，分工按「每条推理请求最后从哪个口出去」划的，判据读自宿主自己的代码（`pi-ai/src/utils/transport-fetch.ts` 是所有推理请求必经的那一个 fetch）：
 
@@ -122,7 +122,9 @@ deny 是三层的并集，分工按「每条推理请求最后从哪个口出去
 
 **为什么只声明这两个。** `ModelRegistry.registerProvider(name, …, sourceId)` 会把 `sourceId` 记成这个名字的所有者，而别人已经拥有时它先把在位者的运行期状态清掉再接管（overlay、动态模型管理器、discovery 状态、运行期 api key）；公开 API 里唯一的撤销 `clearSourceRegistrations` 是「这个扩展卸载了」，不是「撤销那一次调用」。所以「把目录里每个 provider 都影子化」等于删掉别的扩展注册过的每一个 provider，一次装配删一次、永不恢复——2026-10-13 在真实注册表上实测：一个扩展注册的两行 provider，一次 arm/restore 之后变成零行。同时那个合成的 source id 会进宿主的 `#registeredProviderSources`，而下一次建 session 时的 `syncExtensionSources(扩展路径表)` 会把它当已卸载的扩展剪掉。于是这张表按「哪条道逼的」来写，能不声明就不声明；`restoreTakeover` 也不再假设撤销一定干净，而是拿快照核对被声明的 provider，逐个点名没回来的。
 
-**启动状态与生命周期。** 配置字段 `host_llm`（`"deny" | "allow"`，缺省 `allow`）只决定启动状态。值为 `deny` 时入口在每次 `session_start` 都装一次：绑定端口之前装（端口开着而注册表没影子，等于给早到的调用方留一个宿主还能自己推理的窗口），会话重建之后也装——revive、ACP、task 子代理都会新建 runner，新的 `Main` 会话带着没被影子化的新注册表，端口在不在状态说明不了注册表的状态。**运行期由远端打开的 deny 同样在每次 `session_start` 重装**：宿主自己的扩展源对账可以把影子剪掉，重装是幂等的（`bun run test:registry` 有一项就盯这个）。切换从不落盘，重启回到操作员写下配置时的状态。`/a2a` 显示的是运行态：`host_llm=deny denied=2`。
+**启动状态与生命周期。** 配置字段 `host_llm`（`"deny" | "allow"`，缺省 `allow`）只决定启动状态。值为 `deny` 时入口在每次 `session_start` 都装一次：绑定端口之前装（端口开着而注册表没影子，等于给早到的调用方留一个宿主还能自己推理的窗口），会话重建之后也装——revive、ACP、task 子代理都会新建 runner，新的 `Main` 会话带着没被影子化的新注册表，端口在不在状态说明不了注册表的状态。**运行期由远端打开的 deny 同样在每次 `session_start` 重装**：宿主自己的扩展源对账可以把影子剪掉，重装是幂等的（`bun run test:registry` 有一项就盯这个）。切换从不落盘，重启回到操作员写下配置时的状态。装例行会把声明的 provider 名字打出来（`takeover armed: 2 provider(s) shadowed (anthropic, openai-codex), 68 tripwire key(s), model pushed: …`）——声明是把名字从原主人手里拿走，而注册表还不回去，所以操作员看得见的只有这一行，探针也靠它才分得清声明表里那两条道各自在不在。`/a2a` 显示的是运行态：`host_llm=deny denied=2`。
+
+**降级状态。** 两种拒绝不能读成同一种。启动时拒绝（什么都没装）→ `enabled: true`，宿主按自己的规则推理，这是诚实的读数。而**开关开着的时候拒绝**（会话重建了，新会话的目录里有拦不住的道）→ 开关仍开着、进程级的绊线仍在，但新会话没拿到 deny 行、也没拿到声明，于是两条非 fetch 道在它上面是裸的。这时回包带 `degraded: true`，`/a2a` 显示 `host_llm=deny (tripwire only)`，stderr 与审计各留一行说明。装配的拒绝检查排在恢复旧会话**之前**就是为了这个：先恢复再拒绝，等于在失败的路上把绊线也拆了，操作员要 deny 得到的却是连绊线都没有。
 
 **拒绝情形。** 判定顺序与 `/blob` 一致（方法 → 鉴权 → body → 动作）：
 
@@ -140,7 +142,8 @@ deny 是三层的并集，分工按「每条推理请求最后从哪个口出去
 
 ### 它放弃了什么
 
-- **provider 名字的所有权抢不回来。** 被声明的那两个 provider 若本来就是某个扩展运行期注册的（不是 models.yml 里配的），一次 arm/restore 之后那份注册不会回来：撤销原语没有这个能力。恢复时会点名（`takeover restore left N provider(s) unregistered … restart the host to recover`），不点名就是骗人。
+- **provider 名字的所有权抢不回来。** 被声明的那两个 provider 若本来就是某个扩展运行期注册的（不是 models.yml 里配的），一次 arm/restore 之后那份注册不会回来：撤销原语没有这个能力。恢复时会点名（`takeover restore left N provider(s) not serving their pre-arm rows …`），不点名就是骗人。
+- **不走 `globalThis.fetch` 的请求桥管不着。** 注册表在构造时捕获了自己的 fetch，宿主的目录与元数据 GET（模型列表、目录刷新）因此出得去——**即使那个主机名就在绊线键里**。实测每轮探针的 sink 都会收到一次非 POST，收尾行把它与推理 POST 分开打印。非推理出口不拦是设计如此，但「键内的主机一定被拒」这句话是错的，README 与模块头按实测措辞写。
 - **`transport` 拦不住。** 那种 transport 在宿主内部先于扩展注册的任何实现分派，桥排不到它前面。快照里出现「不在被声明名单里的 provider 带 transport」时 `applyTakeover` 在改动任何状态之前抛错——拒绝装配好过装一半。需要 deny 的地方，改的是配置，不是桥。
 - **绊线盯的是宿主进程。** `bash` 工具里发出的 `curl`、task 起的进程都在别处，绊线到不了。`deny` 不是网络沙箱，也不自称是。子代理那条路实测封着：它自建注册表、自选模型，deny 状态下它的请求在 fetch 边界被拒（一次本地拒绝，不出网），以同一条 sentinel 结束。
 - **运行中新加的 provider 不在 deny 里。** 桥跑着的时候编辑 `models.yml` 新增的 provider，要等下一次装配（重启，或 true→false 再切一次）才进快照、才被绊线盯上。

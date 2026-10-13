@@ -36,6 +36,17 @@
 - test: `test:takeover` 加两项断言，都是「撤销声明真的发生了」的外部可见证据。原先那条「恢复后轮次打到 sink」证明不了它——agent 自己那行是单独恢复的、绊线也撤了，拿掉撤销声明这一步照样绿（实测）。能证的两条：桥自己的恢复后核对不报 `takeover restore left`；下一次装配仍声明得到那两个 provider。加完 28 → 30 项。sink 改名之后 rpc 取的是第一条配置行而不是 `settings.yml` 的 `model:`（自定义模型与内置目录合并，`claude-opus-5-5` 排前面），断言因此盯 provider 不盯 model id
 - 回归：八个核验在 18.8.7 上全绿，`test:takeover` 连跑三遍（30/30，62.7–63.6 秒，每遍 `shadowed per arm: 2, 2, 2`、`inference posts=1 metadata non-POSTs=1`），`lint` / `tsc` / `bun test` 157/157，`test:registry` 22 项，站点构建 + 渲染核验 34 项。内存表按第二十七轮重落（空闲 482、单个安顿 +22、并发 +38）
 
+## 2026-10-13 — 剩下三件：降级状态、文档措辞、装例行点名声明了谁
+
+上一节收尾时列的三件，按「会不会真咬到操作员」的顺序修完。
+
+- fix: **降级状态：开关开着而当前会话没被 deny，状态栏此前说的是 deny。** `armed` 记的是旧会话，重建后的新会话装配被拒时它还指着旧的，于是 `/a2a` 与 `POST /host-llm` 回包都报 deny，而新会话上只有进程级的绊线——两条非 fetch 道（cowork 的 `node:https`、codex 的 websocket）是裸的。加 `degraded` 位：回包带 `degraded: true`，`/a2a` 显示 `deny (tripwire only)`，stderr 与审计那一行也写明「开关仍开着，这个会话只有绊线」。首轮装配被拒不动（那时什么都没装，`enabled: true` 本来就是诚实的读数）
+- fix: **拒绝检查与恢复旧会话的次序——stub 写这条测试时现形的更糟一版。** 原顺序是「先恢复旧会话再检查新会话的目录」，于是重装被拒时会在失败的路上把进程级绊线一起拆掉：操作员要 deny 得到的连绊线都没有，而且 `enabled` 读回 true，与配置写着 deny 矛盾。改成先检查再恢复，拒绝时保住还值得有的那层，并如实标成 degraded
+- fix: 装例行把声明的 provider 名字打出来（`2 provider(s) shadowed (anthropic, openai-codex), …`）。声明是把名字从原主人手里拿走、注册表还不回去，操作员看得见的只有这一行；探针也靠它才分得清声明表第二条那条 websocket 道在不在——数量不行，两种声明同样都报 2
+- docs: 残差措辞按实测改。原文写「绊线只按推理端点取键」，读起来会以为键内的主机一定被拒，而实测不是：注册表在构造时捕获自己的 fetch，宿主的目录与元数据 GET 到 provider 自己的 baseUrl 出得去，**那个主机名就在键里**（探针每轮 sink 收到一次非 POST，收尾行分开打印）。协议页、README 中英、模块头三处同步，并新增「不走 `globalThis.fetch` 的请求桥管不着」这条残差。`{enabled, denied}` 的响应形状加 `degraded` 一并写进协议页与 README
+- test: `test/takeover-arm.test.ts` 加两条（8 项）：拒绝发生在开关开着时读出 degraded、恢复后清掉；装例行点名了声明的 provider。两项变异各红各名——去掉 `degraded = true`、把恢复挪回拒绝检查之前，各红「降级」那一条。`test:takeover` 加两项（32 项）：装例行点名里同时有 cowork 与 websocket 两个 provider；本轮没有一次装配留下 degraded
+- 回归：`lint` / `tsc` / `bun test` 158/158；八个核验在 18.8.7 上全绿，`test:takeover` 32 项（62.2 秒，装例行 `2 provider(s) shadowed (anthropic, openai-codex)`，`inference posts=1 metadata non-POSTs=1`），`test:registry` 22 项，站点构建 + 渲染核验 34 项
+
 ## v0.1.0 — 首次发布
 
 这个扩展在宿主 `session_start` 时起一个 MCP 服务器（`2025-11-25`，Streamable HTTP，默认只绑 `127.0.0.1`），把宿主会话里的工具暴露给远程 MCP 客户端。执行落在宿主真实的文件与 shell 上，桥自己从不请求模型（宿主侧会话级副作用与接管开关见 2026-10-12 两节）。

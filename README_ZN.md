@@ -177,12 +177,15 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 降噪层把会让宿主自己忙起来、说个不停的设置按住（长命令自动转后台、宿主侧重试、advisor、TTSR、prewalk、autolearn、cache warming、自动压缩），全部是运行时 override，不落盘。实测：接管在位时，一条远程 3 秒 `bash` 跑完就结束，不会变成后台任务。
 
-**归谁控制。** 配置里的 `host_llm` 只决定启动状态（缺省 `allow`）。运行中用 `POST /host-llm` 带 `{"enabled": false}` 装 deny，带 `{"enabled": true}` 按 takeover 的快照恢复（deny API 注销、被声明的 provider 恢复、原始模型行放回、fetch 引用还原、settings overrides），回包是 `{enabled, denied}`。鉴权与其他路径同一个 Bearer token，每次切换写一条 `tool: "host_llm"` 审计；装配被拒也写一条（`sid: null`，因为没有调用方），外加宿主 stderr 一行——提示条会滚走，审计不会。这个端点刻意**不是**工具：`tools/list` 保持宿主注册表原样。`/a2a` 显示当前状态（`host_llm=deny denied=2`）。切换从不落盘，重启回到操作员的配置。装配在每一次 `session_start` 重装（配置里的 `deny` 与远端打开的 deny 都一样）：会话重建会带一份没被影子化的新注册表出来，而端口开着说明不了注册表的状态。
+**归谁控制。** 配置里的 `host_llm` 只决定启动状态（缺省 `allow`）。运行中用 `POST /host-llm` 带 `{"enabled": false}` 装 deny，带 `{"enabled": true}` 按 takeover 的快照恢复（deny API 注销、被声明的 provider 恢复、原始模型行放回、fetch 引用还原、settings overrides），回包是 `{enabled, denied, degraded}`。鉴权与其他路径同一个 Bearer token，每次切换写一条 `tool: "host_llm"` 审计；装配被拒也写一条（`sid: null`，因为没有调用方），外加宿主 stderr 一行——提示条会滚走，审计不会。这个端点刻意**不是**工具：`tools/list` 保持宿主注册表原样。`/a2a` 显示当前状态（`host_llm=deny denied=2`）。切换从不落盘，重启回到操作员的配置。装配在每一次 `session_start` 重装（配置里的 `deny` 与远端打开的 deny 都一样）：会话重建会带一份没被影子化的新注册表出来，而端口开着说明不了注册表的状态。装例行把声明的 provider 名字打出来（`takeover armed: 2 provider(s) shadowed (anthropic, openai-codex), …`）——声明是把名字从原主人手里拿走，注册表还不回去，操作员看得见的只有这一行。
+
+**降级。** 开关开着时的拒绝与启动时的拒绝不是一回事。开关仍开着、进程级的绊线仍在，但当前活着的那会话没拿到 deny 行、也没拿到声明，于是它的两条非 fetch 道是裸的。这时回包带 `degraded: true`，`/a2a` 显示 `host_llm=deny (tripwire only)`，stderr 与审计各留一行。拒绝检查排在恢复旧会话**之前**就是为了这个：先恢复再拒绝，等于在失败的路上顺手把绊线也拆了。
 
 **它放弃了什么，什么在承诺之外。**
 
 - `transport`（`pi-native` 及任何在 API 分派之前短路的 transport）在宿主内部先于扩展注册的任何实现分派，桥排不到它前面。配置里有这样一个**不在被声明名单里**的 provider 时 takeover **拒绝装配**：错误可见，绝不半装。真需要 deny 的地方，改的是配置，不是桥。
 - 被声明的那两个 provider 若本来就是某个扩展运行期注册的（不是 `models.yml` 里配的），恢复之后那份注册不会回来——撤销原语没有这个能力。恢复时点名，要回来得重启宿主。
+- 不走 `globalThis.fetch` 的请求，桥管不着。注册表在构造时捕获了自己的 fetch，于是宿主的目录与元数据 GET（模型列表、目录刷新）出得去——**即使那个主机名就在绊线键里**。实测每轮接管探针的 sink 收到一次非 POST，收尾行与推理 POST 分开打印。非推理出口不拦是设计如此，但「键内的主机一定被拒」这句话不成立。
 - 绊线盯的是宿主进程。`bash` 工具里的 `curl` 跑在别的进程里，`deny` 不是网络沙箱，也不自称是。（实测：deny 状态下 task 子代理的请求在 fetch 边界被拒，一次本地拒绝，不出网。）
 - 桥运行期间往 `models.yml` 新增的 provider，要等下一次装配才进快照、才被绊线盯上；`/login` 把模型所有权交回宿主，被声明的 provider 影子随之失效。
 - 接管期间宿主把模型行换回真行也没用，它落在绊线上；但恢复时桥不会把它换回 deny 副本——那是操作员的选择。
