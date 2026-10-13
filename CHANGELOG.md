@@ -4,6 +4,16 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。
 
+## 2026-10-13 — 网站侧：三处发布过的坑没有守卫，补上，其中一处是真 bug
+
+剩下唯一没看过的边界。按「发布过的东西要有人看着」查 `website/scripts/`，找到三条**这个仓库真踩过**的坑，而现在的 `render-check.mjs` 一条都看不见：sitemap 的 `lastmod` 曾取构建产物 mtime（等于宣称每页每次部署都变，搜索引擎直接忽略）、robots.txt 与 sitemap 的 origin 各推一遍（漂了没人知道）、`withMermaid` 曾把 mermaid 静态注入 entry 让每个页面首屏阻塞预载 1.58 MB。三条都不报错、不影响构建，评审里看不出来。
+
+- fix: **首页的 lastmod 来自错的源文件**（新守卫当场抓到的真 bug）。`collect()` 把 `index.html` 的 `index` 后缀去掉，于是首页的 page 名是空串，`SOURCE_OF.index` 从来没被命中过——那段是死代码，首页落到「无源文件」的兜底，lastmod 变成**仓库最新一次提交**的日期而不是 `README_ZN.md` 的日期。两者同一天时看不出来，所以一直没被发现。修在 `sourceOf()` 里把空串归一为 `index`
+- test: `render-check.mjs` 加三组守卫（34 → 56 项）。**首屏阻塞预载预算**：把每页 modulepreload 指向的产物实际大小加起来（实测 3.1KB / 1.1KB，预算 64KB——当前值的 20 倍、那次回归的 1/25），这是 1.58 MB 事件唯一的证人，因为图照样画得出来、标签照样齐。**robots 与 sitemap 同源**：robots.txt 是构建时写的（仓库搬家不留硬编码），origin 被推了两遍，漂了要在这里才看得见。**sitemap 的 lastmod**：每页比对源文件最后一次提交日期，外加两条反空转——每个页面必须映射到一个真实存在的源文件、git 可用时至少要真比对上一条，否则一个坏掉的 URL→页面名解析会让整组检查「全过且什么都没验」（第一版就栽在这，页面名解析成了 `http://localhost:5173/changelog`）
+- refactor: 页面→源文件的映射抽成 `website/scripts/sources.mjs`，sitemap.mjs 与 render-check.mjs 共用一份。原先它在 sitemap.mjs 里自带一份，而现在检查要按同一份映射核对——抄两遍正是这个仓库吃过亏的形状（`/a2a rotate`、插件字段各有过一次），而且备份里少改一处不会有任何东西失败
+- 三项变异核验：lastmod 回到构建当天 → 红三项（两个 superpowers 页 + 「只有一个日期」那条）；robots 改成相对路径 → 红 robots 那一项；把 mermaid 静态引入 entry **并**去掉 `shouldPreload` 的 `/chunks/` 过滤 → 预载 905.9KB，两页都红。前两次变异没生效，记一笔：第一版把 `defineAsyncComponent(() => import(...))` 改成 `(await import(...)).default`，那**仍然是动态导入**，Vite 照样分包，预算当然不动；第二版只静态引入组件，mermaid 库仍被 `shouldPreload` 挡在预载之外。**要复现那次回归得同时拆掉两半防御**——这本身就是结论：现在有两道独立的闸（懒注册 + 预载过滤），预算那条是兜底
+- 回归：`lint` / `tsc` / `bun test` 159/159；站点构建 + `render-check` 56 项全过
+
 ## 2026-10-13 — 「桥自己从不请求模型」这句在默认配置下补上守卫
 
 按需求的第一个子句回头查：这个断言此前只在 `host_llm: "deny"` 下被量过——而那是宿主本来就不该推理的配置。默认配置下没有任何东西在数：harness 播种的 provider 故意不可达，请求过去静默失败、数不出缺席，正是当初造计数 sink 要补的那个盲区，只不过这次在开关的另一侧。

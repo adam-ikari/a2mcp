@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import { readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sourceOf } from "./sources.mjs";
 
 const SITE = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(SITE, ".vitepress", "dist");
@@ -40,20 +41,8 @@ function lastCommitDate(relPath) {
 }
 
 // content/ is generated from these repo files by sync.mjs; lastmod must reflect
-// when the SOURCE last changed, not when CI ran.
-const SOURCE_OF = {
-	index: "README_ZN.md",
-	intro: "README_ZN.md",
-	changelog: "CHANGELOG.md",
-	protocol: "docs/protocol.md",
-	testing: "docs/testing.md",
-};
-
-// sync.mjs copies docs/** verbatim, so every other page maps back by path
-// (superpowers/plans/X -> docs/superpowers/plans/X) instead of needing an entry.
-function sourceOf(page) {
-	return SOURCE_OF[page] ?? (page ? `docs/${page}.md` : undefined);
-}
+// when the SOURCE last changed, not when CI ran. The page → source mapping lives
+// in scripts/sources.mjs because render-check.mjs verifies the same mapping.
 
 /** Collect every built .html as a clean (extensionless, base-prefixed) URL. */
 function collect(dir) {

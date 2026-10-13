@@ -9,11 +9,12 @@
  * Run after `bun run build`:  node scripts/render-check.mjs
  */
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sourceOf } from "./sources.mjs";
 
 const SITE = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(SITE, ".vitepress", "dist");
@@ -230,6 +231,148 @@ for (const file of [
 		[Boolean(ogType), `${page}: og:type (${ogType})`],
 		[ldValid && ldType === expectedType, `${page}: JSON-LD parses as ${expectedType} (got ${ldType ?? "unparseable"})`],
 	);
+}
+
+/*
+ * Page weight, read from the modulepreload hints the build emits.
+ *
+ * VitePress resolves `appChunk.imports + appChunk.dynamicImports + pageChunk.*`
+ * into modulepreload tags on every page, so anything statically imported by the
+ * app entry is blocking on first paint. That is how a page with no diagram
+ * shipped 1.58 MB of mermaid on all seven: `withMermaid` injected the component
+ * into the *entry* rather than registering it lazily. Every check above stays
+ * green through that — the diagrams render, the tags are right, the site works —
+ * so the only witness is the size itself. Measured now: ~4.5 KB across two
+ * chunks; the budget below is 64 KB, which is 14x the current weight and 25x
+ * under the regression.
+ */
+const PRELOAD_BUDGET_BYTES = 64 * 1024;
+for (const file of ["index.html", "testing.html"]) {
+	const html = readFileSync(join(DIST, file), "utf8");
+	const preloads = [...new Set([...html.matchAll(/<link rel="modulepreload" href="([^"]+)"/g)].map((m) => m[1]))];
+	let total = 0;
+	const missing = [];
+	for (const href of preloads) {
+		// hrefs are base-prefixed (/pi-a2a-ext/assets/x.js); dist is not.
+		const asset = join(DIST, href.replace(/^.*\/assets\//, "assets/"));
+		try {
+			total += statSync(asset).size;
+		} catch {
+			missing.push(href);
+		}
+	}
+	headChecks.push([
+		missing.length === 0 && total <= PRELOAD_BUDGET_BYTES,
+		`${file.replace(/\.html$/, "")}: blocking preloads ${(total / 1024).toFixed(1)}KB of ${PRELOAD_BUDGET_BYTES / 1024}KB budget (${preloads.length} chunks${missing.length ? `, ${missing.length} missing` : ""})`,
+	]);
+}
+
+/*
+ * robots.txt is written by sitemap.mjs rather than committed, precisely so the
+ * repo moving cannot leave a stale absolute URL behind — which means the origin
+ * in it is derived twice (once for the sitemap, once for robots) and a drift
+ * between them is invisible: the site builds, robots points somewhere else.
+ */
+{
+	const robots = readFileSync(join(DIST, "robots.txt"), "utf8");
+	const sitemap = readFileSync(join(DIST, "sitemap.xml"), "utf8");
+	const robotsUrl = robots.match(/^Sitemap:\s*(\S+)/m)?.[1] ?? "";
+	const loc = sitemap.match(/<loc>([^<]+)<\/loc>/)?.[1] ?? "";
+	const origin = (u) => {
+		try {
+			return new URL(u).origin;
+		} catch {
+			return "";
+		}
+	};
+	const locPage = loc.replace(/\/[^/]*$/, "/");
+	headChecks.push([
+		Boolean(robotsUrl) &&
+			origin(robotsUrl) === origin(loc) &&
+			robotsUrl.endsWith("/sitemap.xml") &&
+			robotsUrl === `${locPage}sitemap.xml`,
+		`robots: Sitemap is absolute and shares the sitemap's origin (${robotsUrl || "missing"})`,
+	]);
+}
+
+/*
+ * sitemap lastmod must be the source file's last commit date.
+ *
+ * It used to be the built file's mtime, i.e. the CI run time — every page
+ * claimed to change on every deploy, which search engines are instructed to
+ * ignore, so the whole field was worth nothing. Nothing asserted it: the sitemap
+ * builds, the site works, and the wrong date is invisible in review. A shallow
+ * clone (`fetch-depth` without 0) has the same effect by a different route — git
+ * answers one commit for every file. So this compares each `<lastmod>` against
+ * git, and skips rather than fails when git cannot say (the same rule
+ * sitemap.mjs follows: no git → omit lastmod, never invent one).
+ */
+{
+	const sitemap = readFileSync(join(DIST, "sitemap.xml"), "utf8");
+	const entries = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>\s*<lastmod>([^<]+)<\/lastmod>/g)].map((m) => ({
+		url: m[1],
+		lastmod: m[2],
+	}));
+	const repo = dirname(SITE);
+	const lastCommit = (rel) => {
+		try {
+			return execFileSync("git", ["log", "-1", "--format=%cs", "--", rel], {
+				cwd: repo,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+			}).trim();
+		} catch {
+			return "";
+		}
+	};
+	headChecks.push([entries.length > 0, `sitemap: has ${entries.length} url(s) with a lastmod`]);
+
+	// A URL is an absolute origin plus a base-prefixed path; the page name is what
+	// is left after both. Getting this wrong makes every git lookup name a file that
+	// does not exist, and the check below then passes on every page while verifying
+	// nothing — so the "verified at least one" tail check is not decoration.
+	const pageOf = (url) => {
+		let path;
+		try {
+			path = new URL(url).pathname;
+		} catch {
+			return "";
+		}
+		if (BASE !== "/" && path.startsWith(BASE)) path = path.slice(BASE.length - 1);
+		return path.replace(/^\/|\/$/g, "");
+	};
+
+	const today = new Date().toISOString().slice(0, 10);
+	const gitWorks = lastCommit("README_ZN.md") !== "";
+	let verified = 0;
+	for (const { url, lastmod } of entries) {
+		const page = pageOf(url);
+		const src = sourceOf(page);
+		const srcExists = Boolean(src) && existsSync(join(repo, src));
+		headChecks.push([
+			srcExists,
+			`sitemap ${page || "index"}: maps to an existing source file (${src ?? "no mapping"})`,
+		]);
+		const plausible = /^\d{4}-\d{2}-\d{2}$/.test(lastmod) && lastmod <= today;
+		const claimed = srcExists ? lastCommit(src) : "";
+		if (claimed) verified++;
+		headChecks.push([
+			plausible && (claimed === "" ? true : claimed === lastmod),
+			`sitemap ${page || "index"}: lastmod ${lastmod} vs ${src ?? "(unmapped)"} ${claimed || "(git silent)"}`,
+		]);
+	}
+	// Anti-vacuity: with git available, at least one page must actually have been
+	// compared against a real commit date, and the rest must not be a single
+	// uniform date when their sources disagree.
+	const dates = new Set(entries.map((e) => e.lastmod));
+	headChecks.push([
+		!gitWorks || verified > 0,
+		`sitemap: ${verified}/${entries.length} lastmod compared against git${gitWorks ? "" : " (git silent, dates unchecked)"}`,
+	]);
+	headChecks.push([
+		dates.size > 1 || new Set(entries.map((e) => lastCommit(sourceOf(pageOf(e.url)) ?? ""))).size <= 1,
+		`sitemap: ${dates.size} distinct lastmod across ${entries.length} pages (one date only when every source shares it)`,
+	]);
 }
 
 for (const [ok, label] of headChecks) {
