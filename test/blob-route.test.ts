@@ -12,9 +12,10 @@
  * tiny; what they deliberately do not re-litigate is byte fidelity.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditStart } from "../src/audit.ts";
+import { handleBlob } from "../src/blob.ts";
 import type { BridgeDeps } from "../src/server.ts";
 import { SESSION_TTL_MS, startServer } from "../src/server.ts";
 
@@ -275,5 +276,60 @@ describe("/blob route dispatch and audit wiring", () => {
 			expect(String(rec.args)).toContain('"offset":9');
 			expect(existsSync(target("never.bin"))).toBe(false);
 		});
+	});
+});
+
+/**
+ * The third refusal, and the only one that needed a race to reach: between the
+ * size read before the body and the size read after the handle is open, another
+ * writer appends. Concurrency is what makes it reachable in production and what
+ * makes it awkward to test — the body is held open across the window here so the
+ * window is a promise instead of a hope. `handleBlob` reads one method off the
+ * request, so a stub with a gated `arrayBuffer` is the whole seam.
+ */
+describe("handleBlob's in-flight offset race", () => {
+	// Same temp dir and audit log as the route tests above: `handleBlob` resolves
+	// the log path from process.env at call time, so there is nothing to set up.
+	test("a file that grew while the body was in flight is refused, and the refusal is recorded", async () => {
+		const path = target("raced.bin");
+		writeFileSync(path, "123");
+		const url = new URL(`http://127.0.0.1/blob?path=${encodeURIComponent(path)}&offset=3`);
+
+		let enter!: () => void;
+		const reading = new Promise<void>((r) => {
+			enter = r;
+		});
+		let release!: () => void;
+		const gate = new Promise<void>((r) => {
+			release = r;
+		});
+		const body = Buffer.from("xx");
+		const req = {
+			arrayBuffer: async () => {
+				// Reached only after the pre-flight stat, which is what makes the
+				// ordering below deterministic rather than a coin flip.
+				enter();
+				await gate;
+				return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
+			},
+		} as unknown as Request;
+
+		const pending = handleBlob(req, url, { sid: null });
+		await reading;
+		appendFileSync(path, "456"); // the other writer, inside the window
+		release();
+
+		const res = await pending;
+		expect(res.status).toBe(409);
+		expect(String((res.body as { error?: string }).error)).toContain("changed while the upload was in flight");
+		expect(readFileSync(path, "utf8")).toBe("123456"); // the racing append, not our two bytes
+
+		// Drain the audit queue by waiting for this record rather than a timer.
+		await flush();
+		const rec = await recordFor("changed while the upload was in flight");
+		expect(rec.tool).toBe("blob:write");
+		expect(rec.isError).toBe(true);
+		expect(String(rec.args)).toContain('"offset":3');
+		expect(String(rec.args)).toContain('"bytes":0');
 	});
 });
