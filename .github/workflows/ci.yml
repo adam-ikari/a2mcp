@@ -28,6 +28,13 @@ jobs:
       # Includes test/versions.test.ts, which hard-asserts installed == pin.
       # The host-omp comparison inside it warns only (no omp in this job).
       - run: bun test
+      # The eighth probe, and the only one that needs no omp at all: it drives the
+      # takeover against the host's real ModelRegistry, constructed in-process.
+      # What it caught (another extension's provider deleted by an arm/restore
+      # cycle) was invisible to every check in this file, so it belongs here
+      # rather than in host-probes — it is seconds, not minutes.
+      - name: test:registry — takeover against the real model registry
+        run: bun run test:registry
 
   # The real-host probes. These boot an actual omp and drive the bridge over
   # MCP, so they are the only checks that exercise the real execution path.
@@ -37,6 +44,8 @@ jobs:
   # provider is enough for six of them to boot — see test/harness.ts.
   # test:takeover is the exception: it arms a reachable counting sink, because
   # counting what the host's own session dials is the thing under test.
+  # (The eighth probe, test:registry, drives the same takeover against the real
+  # ModelRegistry without booting a host, so it sits in the `check` job.)
   host-probes:
     runs-on: ubuntu-latest
     steps:

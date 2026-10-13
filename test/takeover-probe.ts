@@ -310,11 +310,12 @@ try {
 
 	// --- 6. a bypass lane (task sub-agent) is covered too ---
 	// curl from a bash tool is a separate process and OUTSIDE the promise
-	// takeover makes; the task sub-agent is inside the host's own reach, and
-	// the observed coverage is twofold: its model row arrives as `a2a-deny`,
-	// which the sub-agent's rebuilt registry cannot map to an API (the job
-	// fails closed before any request), and anything that does form a request
-	// to a configured destination meets the tripwire. Either way: zero egress.
+	// takeover makes; the task sub-agent is inside the host's own reach. It
+	// resolves its own model through its own freshly built registry, so the
+	// deny row the main agent holds is not its row — what stops it is the
+	// destination tripwire, since every request it forms ends up in
+	// globalThis.fetch, which it looks up at call time. Either way: zero
+	// egress, and the denial is counted on the same stderr line.
 	const cat = (await (await mcp({ jsonrpc: "2.0", id: 4, method: "tools/list", params: {} }, sid)).json()) as {
 		result?: {
 			tools?: {
@@ -404,8 +405,11 @@ try {
 	check("the pi-native row is noticed at boot", noticed);
 	check(
 		"the refusal names the transport it cannot cover",
-		h2text.includes("pi-native transport"),
-		"else boot refused the config key",
+		/transport 'pi-native'/.test(h2text),
+		h2text
+			.split("\n")
+			.find((l) => l.includes("cannot arm"))
+			?.slice(0, 160) ?? "else boot refused the config key",
 	);
 	check("no claim of arming without a shadow", !h2text.includes("takeover armed") || h2text.includes("failed to arm"));
 	await kill(h2, "-native");
