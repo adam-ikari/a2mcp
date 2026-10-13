@@ -24,7 +24,17 @@
 - test: 新增 `test:registry`（22 项，秒级，CI 的 `check` job 收——它不需要 omp，也不该占 `host-probes` 的分钟数）。变异核验：把声明面改回「每个 provider 都声明」，本探针红 5 项，决定性的一项是 `myprov rows 2 -> 0`。写它的时候顺手现形两件不是探针毛病的事：默认目录里有一条 `preferWebsockets: true` 的 Codex 行，所以「碰到 websocket 行就拒绝装配」会让 deny 在开箱状态下根本装不上；deny 副本必须摘掉 `resolveHeaders`，否则被拒的一轮会先去跑取密钥程序
 - test: `test/takeover-probe.ts` 两处随机制改：pi-native 那条的拒绝文案（`transport 'pi-native'` 而非 `pi-native transport`，探针的匹配跟着改，否则它会红）；task 旁路那条的注记改成现在真实的死法
 - docs: README 中英「宿主推理接管」整节重写（三层分工按「请求从哪个口出去」划、为什么不全量影子化、恢复核对与点名、启动拒绝的三处留痕）；协议页「宿主推理切换」同步，含「装配途中抛错整体回滚」一段与「它放弃了什么」重排（新条目：provider 所有权抢不回来、恢复不抹掉模型选择）；testing 页加 `test:registry` 一节与总览表两行；故障排查中英各加/改两条；开发计数与文件布局说明同步
-- 回归：`lint` / `tsc` / `bun test` 157/157；八个核验在 18.8.7 上全绿——`test:registry` 22 项（5457 行、装配 16–24ms）、`test:takeover` 28 项 64.2 秒（装例行实测 2 providers / 69 keys；子代理那条旁路现在是被绊线按下去而不是崩掉，拒绝计数 2 → 3，sink 命中不变）、`SMOKE OK` 21 tools、`HARDEN OK` 35 项、`BLOB OK` 35 项（RSS 表按第二十六轮重落：空闲 491 MB、单个安顿与峰值同为 +14、并发同为 +38）、`SCENARIOS 54 steps, 0 failed`、`PACKAGE OK`、审批 `VERDICT: B` 挂起 90002ms；站点构建 + 渲染核验 34 项全过
+- 回归：`lint` / `tsc` / `bun test` 157/157；八个核验在 18.8.7 上全绿——`test:registry` 22 项（5457 行、装配 14–24ms）、`test:takeover` 28 项 64.2 秒（装例行实测 2 providers / 69 keys；子代理那条旁路现在是被绊线按下去而不是崩掉，拒绝计数 2 → 3，sink 命中不变）、`SMOKE OK` 21 tools、`HARDEN OK` 35 项、`BLOB OK` 35 项、`SCENARIOS 54 steps, 0 failed`、`PACKAGE OK`、审批 `VERDICT: B` 挂起 90002ms；站点构建 + 渲染核验 34 项全过
+
+## 2026-10-13 — E2E 重跑：探针的 sink 改成声明道，顺带修掉它抓出来的两处
+
+`test:takeover` 的 sink provider 原来叫 `a2a-takeover-sink`，而 cowork 道按 **provider 名**判，所以它是未声明路径——上一节改的那半边（声明 provider、恢复时把它们放回去）在真实宿主上一次都没跑过，只由 `test:registry` 在进程内覆盖。sink 改名 `anthropic`（`api: anthropic-messages`，baseUrl 指着 sink）之后声明道真的跑起来了，并立刻暴露三件事，其中两件是代码缺陷。
+
+- fix: **幂等重装会忘掉自己持有的声明。** 声明集是重装时从快照重算的，而同一会话的重装读到的快照正是它自己的影子——那些行带着 deny api，不匹配任何道，于是「无需声明」，装例行报 0，恢复后的核对也检查一个空集。声明本身还活着（注册还在），但账本丢了：从下一次装配起声明静默降级成只剩绊线，而那正是文档里列为残差的那几条道。改成重装时把已有的声明并进来（按 id 去重，否则 overlay 会把同一个模型列两遍）。实测修前 `shadowed per arm: 2, 0, 2`，修后 `2, 2, 2`
+- fix: **恢复后的核对读的是缓存快照，等于没核对。** 它比对 provider/id，而「撤销没生效」这个形状恰好是 id 全在、api 还在 `a2a-deny`——读起来像恢复了。更要紧的是它调 `getAll`，而 `getAll` 答的是注册表上次合成的那份目录快照，能反映「跳过撤销」的合成恰恰是撤销本身触发的那次。改成按 (id, api) 配对、并走 `getProviderModels`（按 provider 现合成，能看见活着的影子）。变异核验：拿掉 `clearSourceRegistrations` → 探针红并点名 `anthropic, openai-codex`
+- fix: **sink 数的是到达网络的一切请求，而接管承诺的是零推理请求。** sink 改名 `anthropic` 之后宿主自己的目录刷新也往同一个 baseUrl 发 GET，那条流量走注册表捕获的 fetch，既不在 deny 里也不在绊线里（设计如此，非推理出口不拦），于是 deny 窗口里出现一次 metadata GET，症状与「推理漏出去了」一模一样。计数按方法分开：POST 是断言对象，非 POST 单独计数并在收尾行打印。**探针量到的比它承诺的多，是这类改动最容易埋的假阳性**
+- test: `test:takeover` 加两项断言，都是「撤销声明真的发生了」的外部可见证据。原先那条「恢复后轮次打到 sink」证明不了它——agent 自己那行是单独恢复的、绊线也撤了，拿掉撤销声明这一步照样绿（实测）。能证的两条：桥自己的恢复后核对不报 `takeover restore left`；下一次装配仍声明得到那两个 provider。加完 28 → 30 项。sink 改名之后 rpc 取的是第一条配置行而不是 `settings.yml` 的 `model:`（自定义模型与内置目录合并，`claude-opus-5-5` 排前面），断言因此盯 provider 不盯 model id
+- 回归：八个核验在 18.8.7 上全绿，`test:takeover` 连跑三遍（30/30，62.7–63.6 秒，每遍 `shadowed per arm: 2, 2, 2`、`inference posts=1 metadata non-POSTs=1`），`lint` / `tsc` / `bun test` 157/157，`test:registry` 22 项，站点构建 + 渲染核验 34 项。内存表按第二十七轮重落（空闲 482、单个安顿 +22、并发 +38）
 
 ## v0.1.0 — 首次发布
 

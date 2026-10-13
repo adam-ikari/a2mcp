@@ -10,7 +10,7 @@
 | `bun run test:hardening` | 真实宿主加固核验，35 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，34 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
-| `bun run test:takeover` | 宿主推理 deny/restore 核验，28 项，约 60 秒 | 是 | `takeover probe: all assertions met` |
+| `bun run test:takeover` | 宿主推理 deny/restore 核验，30 项，约 63 秒 | 是 | `takeover probe: all assertions met` |
 | `bun run test:blob` | 原始字节上传（`POST /blob`），35 项 | 是 | `BLOB OK` |
 | `bun run test:install` | 发布包自包含 + 端到端，28 项 | 是 | `PACKAGE OK` |
 | `bun run test:scenario` | 端到端场景，10 个叙事 / 54 步，约 45 秒 | 是 | `SCENARIOS: 54 steps, 0 failed` |
@@ -241,7 +241,7 @@
 
 setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 打印宿主日志尾部。**失败时临时目录保留**（`evidence kept at <path>`）供事后检查；成功才清理。
 
-## `test:takeover` — 宿主推理 deny/restore 核验（28 项）
+## `test:takeover` — 宿主推理 deny/restore 核验（30 项）
 
 **要回答的问题**：deny 在位时宿主自己的会话是不是真的发不出模型请求，远程把它撤掉之后恢复是不是真的生效。此前的核验答不了这个问题，原因在测量而不在覆盖：被测宿主用的是故意不可达的 provider，请求失败不出声，「零模型请求」就只是一个缺席、不是一个数。这个探针把不可达换成一个真在听的计数 sink（`Bun.serve`，答 503）——仓库里第一个真让宿主连进来的 listener。于是断言变成算术：命中数该还是命中数。
 
@@ -249,18 +249,24 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 | 组 | 项 | 断言 |
 | --- | --- | --- |
-| 启动装配 | 4 | deny-from-config 在 `session_start` 装上；装例行报告影子数与绊线键数；sink 的目的地在绊线键里；当前模型行被推进 deny 位（`model pushed: a2a-takeover-sink/small`） |
+| 启动装配 | 4 | deny-from-config 在 `session_start` 装上；装例行报告声明数与绊线键数；sink 的目的地在绊线键里；当前模型行被推进 deny 位（`model pushed: anthropic/…`，模型 id 不钉死，见下） |
 | 桥照常工作 | 1 | 装了在位时 `initialize` 照样签发会话——接管限制的是宿主推理，不是 MCP |
-| 被拒的轮次 | 4 | `prompt_result` 以 `status:"error"` 终止（不是幻影成功）；sink 零命中；恰好一行拒绝（哨兵文本不命中任何重试触发条件，所以只有一次尝试、`retryable:false`）；哨兵文本确实回到调用方 |
+| 被拒的轮次 | 4 | `prompt_result` 以 `status:"error"` 终止（不是幻影成功）；sink 零推理命中；恰好一行拒绝（哨兵文本不命中任何重试触发条件，所以只有一次尝试、`retryable:false`）；哨兵文本确实回到调用方 |
 | 降噪 | 3 | 远程 3 秒 `bash` 同步跑完、没变成后台任务；期间 sink 仍零 |
 | 状态读回 | 2 | 再发一次 `{"enabled": false}` 不报错，回包读回 `enabled:false` 与非零计数 |
-| 恢复与负控 | 3 | `enabled:true` 回到 allow 并在 stderr 留下 `takeover restored`；**负控**：恢复后发出的宿主轮次打到 sink（这一条不绿，上面所有的零都只是「连不上」的错觉）；ON 窗口只开到数出第一个命中就切回 |
-| 重装 | 4 | 轮次在途时切回 `{"enabled": false}`，回包报 deny；被打断的 ON 轮次照样 settle（在途重试多打了几个命中，本轮 11 个）；第二次装配在注册表层拒掉新轮次（拒绝计数 +1）；sink 计数不再增长 |
+| 恢复与负控 | 4 | `enabled:true` 回到 allow 并在 stderr 留下 `takeover restored`；**负控**：恢复后发出的宿主轮次打到 sink（这一条不绿，上面所有的零都只是「连不上」的错觉）；ON 窗口只开到数出第一个命中就切回；**恢复核对**：stderr 没有 `takeover restore left`——桥自己的恢复后核对没发现声明的 provider 没回到装配前的行 |
+| 重装 | 5 | 轮次在途时切回 `{"enabled": false}`，回包报 deny；被打断的 ON 轮次照样 settle（在途重试多打了几个命中）；第二次装配在 deny 层拒掉新轮次（拒绝计数 +1）；sink 计数不再增长；**重装仍声明得到那两个 provider**（`shadowed per arm: 2, 2, 2`）——声明集是重装时从快照重算的，所以这一条是「恢复真的撤销了声明」的唯一外部可见证据 |
 | 旁路 lane | 2 | 远程发 `task`（执行器自建注册表、自选模型、不问会话的那类调用者）：子代理的请求没到 sink，且子代理是被明确终止、不是安静成功。子代理拿到的不是 agent 那条 deny 行——它自己的注册表是现建的——拦住它的是目的地绊线：它发的请求最后都落到 `globalThis.fetch`，而那里每次调用现读全局，一次本地拒绝，不出网 |
 | 审计 | 2 | 每次切换一条 `host_llm` 记录（实测 ≥3 次切换都有）；每条记录携带发起切换的那个 MCP 会话 id |
 | pi-native | 3 | 另起一个宿主：配置里带 `transport: "pi-native"` 的 provider——装配在启动时被拒，拒绝点名拦不住的 transport，且没有「报了装上却没影子」的半状态 |
 
+**sink 必须命名为 `anthropic`，否则这探针测不到声明那条道。** cowork 道按 provider 名判（`provider === "anthropic" && api === "anthropic-messages"`），中性名字的 sink 只走绊线，声明与撤销声明一次都不会被触发——而那正是 2026-10-13 改机制时动的半边。改成 `anthropic` 之后自定义模型与宿主内置目录合并，rpc 模式取的是第一条配置行而不是 `settings.yml` 的 `model:`（内置的 `claude-opus-5-5` 排在前面），所以断言盯 provider 不盯 model id。
+
 两处坑是写了探针才现形的。第一处在 rpc 协议：`prompt` 发出去先回来的 `{"type":"response","command":"prompt","success":true}` 只是 ack，结果帧是后到的 `prompt_result`、按 `id` 配对。把 ack 当结果读，被拒的轮次也会读成「成功」——第一版探针就是这样，全绿，什么都没测到。第二处在 `transport: "pi-native"` 的摆放：它是 provider 级的键，写进 model 行会被 schema 静默丢掉；往配置里埋这一条的时候别猜，去看宿主 `models-config-schema-bundle` 的行号。
+
+第三处是 sink 的计数口径：它数的是**到达网络的一切请求**，而接管承诺的是零**推理**请求。sink 改叫 `anthropic` 之后，宿主的目录刷新也会往同一个 baseUrl 发 GET——那条流量走注册表自己捕获的 fetch，既不在 deny 里也不在绊线里（设计如此，非推理出口不拦），于是 deny 窗口里出现一次 metadata GET，症状与「推理漏出去了」一模一样。计数因此按方法分开：POST 是断言对象，非 POST 单独计数并在收尾行打印。**探针量到的比它承诺的多，是这类改动最容易埋的假阳性。**
+
+第四处是断言本身不成立：把「恢复后宿主轮次打到 sink」当成「声明被撤销了」是错的——agent 自己那行是单独恢复的，绊线也已经撤了，所以拿掉撤销声明这一步它照样绿（实测）。撤销声明的外部可见证据只有两条，都已加进探针：桥自己的恢复后核对不报 `takeover restore left`，以及下一次装配仍声明得到那两个 provider。变异核验两条：拿掉 `clearSourceRegistrations` → 第一条红并点名 `anthropic, openai-codex`；保留记忆的声明集而快照已影子化 → 第二条红（`shadowed per arm: 2, 2, 0`）。这两条也是修复的来源，见 CHANGELOG 同日那节。
 
 失败语义与其他探针一致：任何一项 FAIL → exit 1，临时目录保留并打印路径；全过 → `takeover probe: all assertions met`。
 
