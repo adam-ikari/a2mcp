@@ -146,7 +146,15 @@ describe("applyTakeover / restoreTakeover", () => {
 	test("arming pushes the deny row, registers the api, and wraps fetch", () => {
 		armed((stub) => {
 			const fetchBefore = globalThis.fetch;
-			applyTakeover(stub.session);
+			const lines: string[] = [];
+			const realError = console.error;
+			console.error = (line: string) => void lines.push(String(line));
+			try {
+				applyTakeover(stub.session);
+			} finally {
+				console.error = realError;
+			}
+			const armLine = lines.find((l) => l.includes("takeover armed")) ?? "";
 			expect(hostLlmState().enabled).toBe(false);
 			expect(stub.held()?.api).toBe(DENY_API);
 			expect(getCustomApi(DENY_API)).toBeDefined();
@@ -154,6 +162,10 @@ describe("applyTakeover / restoreTakeover", () => {
 			// Only the cowork lane's provider is claimed: a name the bridge has no
 			// reason to own is a name it cannot give back (test/registry-probe.ts).
 			expect(stub.registered).toEqual(["anthropic"]);
+			// The names go in the log line: that line is the operator's only view of
+			// which provider names the bridge holds, and a count alone cannot say
+			// whether the websocket lane's provider was among them.
+			expect(armLine).toContain("(anthropic)");
 		});
 	});
 
@@ -229,6 +241,29 @@ describe("applyTakeover / restoreTakeover", () => {
 			expect(stub.registered).toEqual([]);
 			expect(getCustomApi(DENY_API)).toBeUndefined();
 			expect(hostLlmState().enabled).toBe(true);
+			expect(hostLlmState().degraded).toBe(false);
 		});
+	});
+
+	test("a refusal while the switch is on reports degraded, not deny", () => {
+		// The session is rebuilt and the new one's catalog holds a lane nothing here
+		// can cover. The tripwire is process-global and still installed, so the fetch
+		// lanes are covered and the two non-fetch ones are not — and `enabled:false`
+		// alone would say the host cannot reason, which on those lanes is untrue.
+		const good = stubSession();
+		const bad = stubSession();
+		(bad.session as unknown as { modelRegistry: { getAll: () => Row[] } }).modelRegistry.getAll = () => [
+			{ ...ROWS[0], provider: "custom", id: "native-thing", transport: "pi-native" },
+		];
+		try {
+			applyTakeover(good.session);
+			expect(hostLlmState().degraded).toBe(false);
+			expect(() => applyTakeover(bad.session)).toThrow(/pi-native/);
+			expect(hostLlmState()).toMatchObject({ enabled: false, degraded: true });
+			restoreTakeover();
+			expect(hostLlmState()).toMatchObject({ enabled: true, degraded: false });
+		} finally {
+			restoreTakeover();
+		}
 	});
 });

@@ -32,6 +32,8 @@
  *  6. every toggle left an audit record carrying the session that asked.
  *  7. a `transport: pi-native` row on an unclaimed provider makes arming
  *     refused, and the refusal names it.
+ *  8. no arm in this run left the switch on over a session it could not deny
+ *     (the degraded state, which is the one way `host_llm=deny` could be untrue).
  *
  * Exit 1 on any unmet assertion; evidence kept in the tmp dir on failure.
  */
@@ -248,9 +250,23 @@ try {
 	host = h;
 	const armed = await waitFor(() => h.err.includes("takeover armed"), 40000, "takeover armed at boot");
 	check("deny from config arms at session_start", armed);
-	const arm = /takeover armed: (\d+) provider\(s\) shadowed, (\d+) tripwire key\(s\)/.exec(host.err);
+	const arm = /takeover armed: (\d+) provider\(s\) shadowed(?: \(([^)]*)\))?, (\d+) tripwire key\(s\)/.exec(host.err);
 	check("the arm reports what it shadowed", !!arm, arm?.[0] ?? "(no arm line)");
-	check("the sink destination is among the tripwire keys", arm ? Number(arm[2]) >= 2 : false, `keys=${arm?.[2]}`);
+	check("the sink destination is among the tripwire keys", arm ? Number(arm[3]) >= 2 : false, `keys=${arm?.[3]}`);
+	// The names, not just the count. The websocket lane's provider is the second
+	// entry in the claim table and nothing else here would ever exercise it — the
+	// count alone cannot say which two providers those were, so this line is what
+	// gives that lane any coverage at all. It is also the operator's only view of
+	// which provider names the bridge holds, given that a claim cannot be returned.
+	const claimedNames = (arm?.[2] ?? "")
+		.split(",")
+		.map((n) => n.trim())
+		.filter(Boolean);
+	check(
+		"the arm names the claimed providers, both non-fetch lanes among them",
+		claimedNames.includes("anthropic") && claimedNames.includes("openai-codex"),
+		`claimed: ${claimedNames.join(", ") || "(none)"}`,
+	);
 	// Which row is not pinned on purpose: naming the provider `anthropic` merges
 	// the custom model with the host's bundled catalog, and rpc mode picks the
 	// first configured row rather than settings.yml's `model:`. The claim is
@@ -364,6 +380,12 @@ try {
 	// degrades to tripwire-only, which is the residual this whole probe exists to
 	// catch. Measured: with the undo removed, this reports 0.
 	const arms = [...host.err.matchAll(/takeover armed: (\d+) provider\(s\) shadowed/g)].map((m) => Number(m[1]));
+	const degraded = host.err.includes("switch is still on; this session is covered by the tripwire only");
+	check(
+		"no arm in this run left the switch on over a session it could not deny",
+		!degraded,
+		"a degraded state means the non-fetch lanes were unguarded on the live session",
+	);
 	check(
 		"re-armed: the claim still finds its providers, so the restore really undid it",
 		arms.length >= 2 && arms[arms.length - 1] >= 1,
