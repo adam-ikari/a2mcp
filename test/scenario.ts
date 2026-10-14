@@ -205,18 +205,17 @@ async function rpc(
 	};
 }
 
-async function token(host: Host): Promise<string> {
+async function readToken(host: Host): Promise<string> {
 	const cfg = JSON.parse(readFileSync(host.cfgPath, "utf8")) as { token: string };
 	return cfg.token;
 }
-
 /** initialize + notification, the handshake every real client performs. */
-async function handshake(host: Host): Promise<{ token: string; sid: string }> {
-	const tk = await token(host);
-	const init = await rpc(host, "initialize", { protocolVersion: "2025-11-25" }, { token: tk });
+async function handshake(host: Host, tk?: string): Promise<{ token: string; sid: string }> {
+	const use = tk ?? (await readToken(host));
+	const init = await rpc(host, "initialize", { protocolVersion: "2025-11-25" }, { token: use });
 	const sid = init.sid ?? "";
-	await rpc(host, "notifications/initialized", {}, { token: tk, sid });
-	return { token: tk, sid };
+	await rpc(host, "notifications/initialized", {}, { token: use, sid });
+	return { token: use, sid };
 }
 
 type AuditRecord = {
@@ -380,7 +379,7 @@ await scenario("a remote bash call's side effect is on disk and in the audit log
 await scenario("two clients share one token and stay independently revocable", async () => {
 	const host = await boot("s3");
 	step(!!host.announced, "bridge announced");
-	const tk = await token(host);
+	const tk = await readToken(host);
 
 	const a = await handshake(host);
 	const b = await handshake(host);
@@ -429,7 +428,7 @@ await scenario("two clients share one token and stay independently revocable", a
 await scenario("an external config edit does not take effect until the host restarts", async () => {
 	const host = await boot("s4");
 	step(!!host.announced, "bridge announced");
-	const tk = await token(host);
+	const tk = await readToken(host);
 	const { sid } = await handshake(host);
 
 	// Rewrite the token behind the running server's back.
@@ -462,11 +461,28 @@ await scenario("an external config edit does not take effect until the host rest
 		"the restarted server requires a fresh handshake",
 		`status ${afterRestart.status}`,
 	);
-	const tk2 = await token(again);
-	step(tk2 === nextToken, "the restarted host reads the edited token from disk");
-	const fresh = await handshake(again);
-	const ping = await rpc(again, "ping", {}, { token: tk2, sid: fresh.sid });
-	step(ping.status === 200, "and accepts it", `status ${ping.status}`);
+	// What actually proves the restart applied the edit: on the session the
+	// edited token opened, the pre-restart token is refused. The step this
+	// replaces read the token back off disk and compared it to the value the
+	// scenario itself had just written there — a file compared with itself,
+	// under a label claiming the host had read it. (It did catch one real bug by
+	// accident: a host that regenerates the token at boot rewrites that file, so
+	// the comparison failed. That case is now covered directly below.)
+	//
+	// The status must be 401 and only 401: a 400 here means "no session yet",
+	// which is the wrong reason to pass. Allowing it is what let the first
+	// version of this check stay green against a host that had never seen the
+	// edit. Same session, different token is what returns 401 — the shape the
+	// pre-restart half of this scenario already uses.
+	const fresh = await handshake(again, nextToken);
+	const ping = await rpc(again, "ping", {}, { token: nextToken, sid: fresh.sid });
+	step(ping.status === 200, "the edited token is accepted", `status ${ping.status}`);
+	const oldOnSameSession = await rpc(again, "ping", {}, { token: tk, sid: fresh.sid });
+	step(
+		oldOnSameSession.status === 401,
+		"the pre-restart token is refused on that same session",
+		`status ${oldOnSameSession.status}`,
+	);
 
 	await shutdown(again);
 });
@@ -485,7 +501,7 @@ await scenario("a busy configured port is given up, announced, and still serves"
 	);
 	step(/configured port \d+ is busy/.test(host.out()), "the host warned that the configured port was busy");
 
-	const tk = await token(host);
+	const tk = await readToken(host);
 	if (host.announced) {
 		const init = await rpc(host, "initialize", { protocolVersion: "2025-11-25" }, { token: tk, ms: 8000 });
 		step(init.status === 200, "the bridge is reachable at the announced port", `status ${init.status}`);
