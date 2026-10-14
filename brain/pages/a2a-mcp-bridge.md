@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-13T01:56:21"
+updated: "2026-10-14T06:14:04"
 ---
 
 <!-- compiled_truth -->
@@ -695,4 +695,28 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "评审轮的三条纪律与它们各自的落点。(1) 宿主注册表可以在进程内直接造：AuthStorage.create + new ModelRegistry 对着 /tmp 的临时 agent 目录就是真实内置目录（18.8.7 上 5457 行、七十多个 provider），不起宿主、不连网、秒级——新增的 test/registry-probe.ts（22 项）就是这一档，CI 收在 check job。读不出来的「谁拥有这个 provider 名字」「抛错时留下什么」两个问题，只有这一档能答。(2) 合成 source id 的陷阱：registerProvider 会把 sourceId 放进 #registeredProviderSources，而 createAgentSessionScoped 每次建 session 跑 syncExtensionSources(扩展路径表)，不在表里的 source 被当成已卸载的扩展剪掉——实测一次调用后 deny 行从 5457 变 0 而 enabled 仍读 false。所以桥的装配必须幂等，且入口要在开关开着时（不只看配置值）每次 session_start 重装。(3) 装配是事务：改动之前先把 armed 记下来，抛错时整体回滚再抛——旧顺序留下的是「宿主已全量拒绝但端点回答 enabled:true、setEnabled(true) 救不回」的死局，只有重启宿主能了事。"
   source: review probes 2026-10-13
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-14T06:13:43
+  kind: reversal
+  summary: "审计记录改为先于响应落盘：四个入口（auditStart/auditDone/auditBlob/auditHostLlm）返回进程内那条队列的尾部，调用处在应答前 await。**这条推翻了本页此前记的「审计绝不能延迟调用」里的 fire-and-forget 部分**——旧形状下 appendLine 交出队列就返回，响应会跑在记录前面，而队列本来就从不 reject，所以那个形状并没有为调用方挡掉任何失败，只挡掉了「慢盘上响应等一会儿」。代价是每条约 99 µs（stat+appendFile+chmod 串行，2000 行实测），对着一次 bash 调用可忽略；慢盘推迟的是响应而不是记录。定位方式值得记住：那条「十次里红两次、复现不了」的 flake 不是测试问题而是产品问题，用同一个人工慢盘（队列里加 30ms）配旧形状跑，得到的红项与实况观察到的完全一致（audit has a done record / the two phases pair by id），只把 await 放回去即全绿。附带修好的还有两条被旧形状破坏的东西：其一是调用方拿到 200 再读日志读不到自己这次调用；其二是 audit.ts 写明的那个证据设计（start 排在工具执行之前，所以进程死在调用中途会留下 start 无 done）本来是假的——不等队列，工具副作用先落地，那个窗口里崩掉什么痕迹都不留。并把两处被改动掏空的断言补实（expect(() => …).not.toThrow() 在返回 promise 的函数上什么都证明不了），新守卫分两半：行为那半「await 回来记录就在盘上」只能在慢盘上看出来，确定性那半钉住四个入口都返回 Promise。"
+  source: audit ordering 2026-10-14
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-14T06:13:51
+  kind: decision
+  summary: "仓库形状定成三条子句，且这个守卫必须独立进程跑。(1) 仓库里提交过一个指向仓库根的符号链接 hidden-plugin（mode 120000，目标 /home/gem/project/pi_a2a_ext），是 59a5e60 那次 git add -A 扫进去的调试残留；git status 一直干净、全部核验一直绿，而 find -L 会回答「File system loop detected」，别人 clone 拿到的是他机器上那个路径。npm 没带上它只因为 files 只含 extensions/ 与 src/，是打包的巧合不是决定。(2) 规则不是「不许有符号链接」——.claude/skills/design-doc-mermaid 是被跟踪的合法相对链接（指向被提交的 .agents/skills/design-doc-mermaid），禁掉它就是禁掉仓库自己的约定；所以拆成三条子句各有各的失败：绝对目标、解析出仓库、解析到自己的祖先。第一版守卫把 .agents/.claude/.qoder 放进跳过表，等于不看题面所在目录——它连那个合法链接都没看见，旁边再放一个坏链接同样看不见，而探针报告「0 个链接，干净」。(3) **守卫不能放在 bun test 里**，这条最反直觉且要靠变异才发现：自环一存在，runner 爬目录撞上自己，10.3 秒 98% CPU 后 exit 1、只打 48 字节，没有测试名也没有断言——坏的树形状不是让某个检查变红，是把证据删掉。所以 test/tree-probe.ts 独立进程跑，CI 里排在 bun install 之前，无依赖不需要宿主。同类教训：本轮另有两次「绿灯的变异」也是变异把自己废掉了（把 defineAsyncComponent(() => import(...)) 改成 (await import(...)).default 仍然是动态导入；只静态引入组件而 mermaid 库仍被 shouldPreload 挡在预载之外——要复现那次 1.58MB 得同时拆掉两半防御）。"
+  source: repo shape probe 2026-10-14
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-14T06:13:57
+  kind: evidence
+  summary: "两条宿主侧边界，都实测过而非读出来的。(1) **ACP 模式不加载扩展**：起 omp --mode acp（临时 HOME、host_llm: deny、配置与其它探针同形），ACP 的 initialize 有正常应答（protocolVersion 1、agentInfo 18.8.7），但 stderr 里一次都没提到 extension、进程一个端口都没在听（ss -ltnp 按 pid 查为空）、/a2a 连不上。acp-agent.ts:2662 虽然是 session_start 的真实发射点，但对桥不可达。结合 rpc 的 new_session 只是 /clear（保留同一会话对象与监听器，不发 session_start），两条路都试过之后，「重建后的 Main 会话」这项覆盖的阻塞不在桥这一侧，而在宿主没为 Main 暴露重建口——要它得宿主加 rpc 或 ACP 钩子。进程内的 stood-in（第二个真实 ModelRegistry）继续算数：重建的实质就是「同一份配置上一个全新的注册表」。(2) **别的扩展占着被声明的那两个名字（anthropic / openai-codex）这一档，定成有意不修**（2026-10-14 操作者判掉）：registerProvider 接管名字时会 #clearRuntimeProviderState，而公开面唯一的撤销 clearSourceRegistrations 重放不了运行时状态，restore 会按 (id, api) 核回来、没回来就在宿主日志点名、要重启才恢复。它只在一种安装下发生——别的扩展接管了宿主自带的名字——不是桥能解决的局面，因此不加专门探针；探针里 myprov rows 2 -> 2 覆盖的是常见情形（扩展占着没被声明的名字，桥根本不碰，73 个名字里 71 个属于这档）。takeover.ts 里那段措辞已从「待修的残余」改成「范围决定」，否则下一个读到注释的人会以为还欠着一项。"
+  source: host boundary probes 2026-10-14
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-14T06:14:04
+  kind: evidence
+  summary: "网站侧三处「发布过但没人看得见」的坑补上守卫，其中一处是真 bug。sitemap 的 lastmod 曾取构建产物 mtime（等于宣称每页每次部署都变，搜索引擎直接忽略）、robots.txt 与 sitemap 的 origin 各推一遍（漂了无人知）、withMermaid 曾把 mermaid 静态注入 entry 让每页首屏阻塞预载 1.58MB——三条都不报错、不影响构建、评审里看不出来。真 bug 是首页 lastmod 取错源文件：collect() 把 index.html 的 index 后缀去掉，于是首页的 page 名是空串，SOURCE_OF.index 从来没被命中过（死代码），首页落到「无源文件」兜底，lastmod 变成**仓库最新提交**的日期而不是 README_ZN.md 的——两者同一天时看不出来。配套的是页面→源文件映射抽成 website/scripts/sources.mjs 供两处共用（抄两遍正是这个仓库吃过亏的形状，备份里少改一处不会有任何东西失败）。新 sitemap 检查自己第一版就栽在空转上：URL→页面名解析成了 http://localhost:5173/changelog，于是每个 git 查找都指向不存在的文件、整组检查「全过且什么都没验」——所以除了逐页比对，还加了「每个页面必须映射到一个真实存在的源文件」与「git 可用时至少真比对上一条」两条反空转。"
+  source: site guard review 2026-10-14
   affects: [a2a-mcp-bridge]
