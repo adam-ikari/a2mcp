@@ -335,7 +335,7 @@ bun run test:tree     # repo shape: no symlink points off this machine, 3 checks
 bun test              # unit tests: test/*.test.ts (160: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/blob dispatch/takeover shapes/arming transaction/host-llm route)
 bun run test:registry # drive the takeover against the host's real model registry, 28 checks, seconds (needs no local omp, no credentials)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
-bun run test:hardening # real-host hardening checks, 35 items (needs a local omp)
+bun run test:hardening # real-host hardening checks, 34 items (needs a local omp)
 bun run test:blob      # POST /blob raw-byte upload, 35 items (needs a local omp)
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
 bun run test:takeover  # host inference deny/restore against a counting sink, ~60s (needs a local omp)

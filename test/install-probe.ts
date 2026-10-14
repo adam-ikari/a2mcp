@@ -43,7 +43,7 @@
  *                     names what was actually checked (default: origin git URL)
  */
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -130,16 +130,26 @@ execFileSync("tar", ["-xzf", tarball, "-C", stage], { stdio: ["ignore", "pipe", 
 const pkgRoot = join(stage, "package");
 
 check(existsSync(join(pkgRoot, "package.json")), "tarball unpacks to a package/ root");
-for (const rel of [
+
+// Derived from the working tree rather than written out here. This used to be a
+// hand-typed list of five `src/*.ts` files and it had already gone stale: blob.ts
+// and takeover.ts were missing from it, and takeover.ts is the module the whole
+// host-inference mechanism lives in. They were not uncovered — the import-graph
+// walk below reaches both, transitively — so nothing failed, which is exactly the
+// shape of a list that rots quietly: it looks like coverage and is a snapshot.
+// Read the directory instead, and the check becomes "every module in src/ ships",
+// which cannot fall behind the code.
+const shipped = [
 	"extensions/a2a-bridge.ts",
-	"src/audit.ts",
-	"src/auth.ts",
-	"src/bridge.ts",
-	"src/config.ts",
-	"src/server.ts",
-]) {
+	...readdirSync(join(REPO, "src"))
+		.filter((f) => f.endsWith(".ts"))
+		.sort()
+		.map((f) => `src/${f}`),
+];
+for (const rel of shipped) {
 	check(existsSync(join(pkgRoot, rel)), `tarball ships ${rel}`);
 }
+check(shipped.length > 1, "the shipped-module list was derived, not typed", `${shipped.length} modules`);
 
 // --- 3. the entry's own imports must resolve inside the package --------------
 

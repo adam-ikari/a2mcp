@@ -154,7 +154,15 @@ try {
 	const list = (await r.json()) as { result: { tools: Array<{ name: string }> } };
 	const names = list.result.tools.map((t) => t.name);
 	check(names.includes("read"), "tools/list contains read");
-	check(!names.some((n) => n.startsWith("a2a_file_")), "no bridge-owned tools in the catalog");
+	// The "no tools of its own" property is not checked here any more. This line used
+	// to assert no advertised name starts with `a2a_file_`, which was a real guard
+	// while the file-transfer surface existed — and became decoration the day
+	// `POST /blob` replaced it, since no code registers such a tool any more: it
+	// could not fail, while reading exactly like protection. The property itself is
+	// pinned where it can actually fail, in test/bridge.test.ts, which compares the
+	// built catalog for *equality* against the host registry the stub returns — an
+	// added tool fails it, a filtered one fails it. A host-level spot check cannot
+	// see the host's own registry to compare against.
 	r = await post(
 		{ jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "definitely_not_a_tool", arguments: {} } },
 		{ ...AUTH, "mcp-session-id": sid1 },

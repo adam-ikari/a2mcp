@@ -21,8 +21,18 @@
  * One request carries at most 128 MB: `maxRequestBodySize` on `Bun.serve` in
  * src/server.ts caps every request on this port, MCP included. The endpoint does
  * not raise it — that would let concurrent uploads each buffer up to the new
- * ceiling. So a larger image still chunks, but the chunk is raw bytes rather than
- * base64, which is ~33% less to send and skips the encode/decode on both sides.
+ * ceiling. So a larger image still chunks, but the chunk is raw bytes.
+ *
+ * Which is worth ~33% fewer bytes than base64, and that used to be the reason
+ * this endpoint existed. It is the second one now (src/blob.ts carries the
+ * decision): a remote caller already has the host's `bash`, so `base64 -d >`
+ * writes the same file — the saving does not make the endpoint necessary. What
+ * does is that `write`/`edit`/`bash` all pass the host's approval gate, and under
+ * `prompt` with no interactive UI that gate never answers (measured hanging ≥90s,
+ * test/approval-probe.ts, expected `VERDICT: B`). This endpoint is the write path
+ * that does not hang. A probe that only measured bytes would be testing the
+ * weaker reason.
+ *
  * The measured memory cost of the cap is in the RSS block near the end of this
  * probe, and what the docs conclude from it is in `docs/protocol.md`.
  */
