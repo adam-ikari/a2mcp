@@ -292,6 +292,8 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 **为什么「重建后的会话」只能在进程内验。** 试过在宿主探针里用 rpc 的 `new_session` 驱动，结果是它根本不重建会话：`AgentSession.newSession()` 保留同一个会话对象与监听器（`agent-session.ts:9659` 的注释原话是 "Listeners are preserved"），只是清空消息，等于 `/clear`，不发 `session_start`。而 `session_start` 全宿主只有三个发射点——`runtime-init.ts:212`（建会话时）、`acp-agent.ts:2662`（ACP 挂载）、交互式 UI——rpc 对 **Main** 一个都不暴露。所以换主会话这件事在宿主探针里根本驱动不了，本探针用第二个真实注册表把它 stood in for：重建的实质就是「同一份配置上一个全新的注册表」。
 
+**ACP 那条路也堵死了，这条是量出来的。** `acp-agent.ts:2662` 确实是第二个真实发射点，看起来能在同一个进程里既重建会话又带着桥，所以实测了一次：起 `omp --mode acp`（临时 HOME、`host_llm: deny`、配置与其它探针同形），ACP 的 `initialize` 有正常应答（`protocolVersion: 1`、`agentInfo.version 18.8.7`），但**扩展根本没被加载**——stderr 里一次都没提到 extension，进程一个端口都没在听，`/a2a` 连不上。也就是说 ACP 模式不加载 `~/.omp/agent/extensions/`，那个发射点对桥不可达。两条路都试过之后，这项覆盖的阻塞不在桥这一侧，而在宿主没有为 Main 暴露重建口；要它得宿主加一个 rpc/ACP 钩子。
+
 这条也解释了为什么降级状态在真实宿主上验不了：降级需要「开关开着 + 换主会话 + 新目录里有拦不住的道」，而换主会话这一步就驱动不了。降级的覆盖留在 `test/takeover-arm.test.ts` 的 stub session 上（读出 `degraded`、恢复后清掉、拒绝排在恢复之前——三项各有变异）。
 
 写这一档的时候顺手现形了两件事，都不是探针的毛病：默认目录里有一条 `preferWebsockets: true` 的 Codex 行，所以「碰到 websocket 行就拒绝装配」会让 deny 在开箱状态下根本装不上——而那条道是按 **api** 判的，因为宿主把 `providers.openaiWebsockets` 这个设置逐次转发给 provider 调用，一行一个标志并不成立，于是那张表按 api 写；另外 deny 副本必须摘掉 `resolveHeaders`，否则 pi-ai 在 api 分派之前会先跑 provider 的 `!command` 取密钥程序。
