@@ -62,9 +62,34 @@ function serializeArgs(args: unknown): string {
  * the `.1` the first one just parked the previous generation in, and what vanishes is
  * the record another call wrote milliseconds earlier — for `POST /blob` that is the
  * whole trace, since that endpoint never goes through the host's approval gate.
- * Still fire-and-forget for the caller: the line is handed to the chain and
- * `appendLine` returns, and the chain never rejects, so one failed write cannot
- * wedge the ones behind it.
+ *
+ * The returned promise is the tail of that chain, and callers await it before they
+ * answer the request. It used to be handed the line and return, fire-and-forget, and
+ * that bought nothing: the chain never rejects, so there was no failure to insulate
+ * a caller from — the only thing fire-and-forget bought was a response that could
+ * outrun its own record. Three things were weaker for it:
+ *
+ *   - a caller could read the log after its 200 and not find its call in it. Two
+ *     off-channel checks in test/scenario.ts read the audit file the instant the
+ *     call returned, and the suite went flaky on it — twice in ten runs, two steps
+ *     each, unreproducible on demand, which is what a race looks like from outside.
+ *   - the crash evidence this file is designed around (a `start` line with no `done`
+ *     under it, meaning "the call began and the process died mid-flight") needed the
+ *     `start` to be on disk *before* the tool ran. Fire-and-forget let the tool's
+ *     side effect land first, so a crash in that window left no trace at all rather
+ *     than an incomplete one.
+ *   - `POST /blob`'s record is the compensating control for the one write path that
+ *     bypasses the host's approval gate. A 200 that beats its own trace is a weaker
+ *     control than the documentation claims.
+ *
+ * What it costs is one queued append per record: measured at ~99 µs for
+ * `stat` + `appendFile` + `chmod` on this filesystem, serialized, so a request waits
+ * for its own line and anything queued ahead of it. Against a call that runs a bash
+ * command or reads a file, that is noise — and a slower disk delays the answer
+ * rather than losing the record, which is the trade this file wants.
+ *
+ * The chain still never rejects (see the `.catch` below), so a failed write cannot
+ * wedge the ones behind it and cannot fail the call.
  */
 let queue: Promise<void> = Promise.resolve();
 
@@ -89,7 +114,7 @@ export function auditWriteFailures(): number {
 	return failedWrites;
 }
 
-function appendLine(line: string, env?: NodeJS.ProcessEnv): void {
+function appendLine(line: string, env?: NodeJS.ProcessEnv): Promise<void> {
 	const file = auditLogPath(env);
 	queue = queue
 		.then(async () => {
@@ -120,6 +145,10 @@ function appendLine(line: string, env?: NodeJS.ProcessEnv): void {
 				console.error(`[a2a-bridge] audit record not written to ${file} (${why})`);
 			}
 		});
+	// The tail of the chain, which the `.catch` above guarantees never rejects.
+	// Awaiting this is how a caller knows the line has been attempted before it
+	// answers — see the note on `queue`.
+	return queue;
 }
 
 /**
@@ -134,13 +163,24 @@ function appendLine(line: string, env?: NodeJS.ProcessEnv): void {
  * Both lines carry the args summary (self-contained for grep) and the
  * Mcp-Session-Id (`sid`, so a shared token's calls are attributable to a
  * client session); `id` is there for pairing, not for lookups.
- * Fire-and-forget: auditing must never fail or delay the call itself, and a
- * log past MAX_LOG_BYTES rotates to `<path>.1` instead of growing forever
+ *
+ * Both return the queue tail, and both callers await it: `auditStart` before the
+ * call runs, `auditDone` before the response goes out. Auditing still cannot
+ * *fail* the call — the chain never rejects, so a dead log path costs a
+ * `console.error` and a bumped `auditWriteFailures()`, not an error reply.
+ *
+ * A log past MAX_LOG_BYTES rotates to `<path>.1` instead of growing forever
  * (a rotation between the two lines of one call may split the pair across
  * `.1` and the current file — when it matters, pair by `id` across both).
  */
-export function auditStart(id: string, sid: string | null, tool: string, args: unknown, env?: NodeJS.ProcessEnv): void {
-	appendLine(
+export function auditStart(
+	id: string,
+	sid: string | null,
+	tool: string,
+	args: unknown,
+	env?: NodeJS.ProcessEnv,
+): Promise<void> {
+	return appendLine(
 		`${JSON.stringify({ ts: new Date().toISOString(), id, sid, phase: "start", tool, args: serializeArgs(args) })}\n`,
 		env,
 	);
@@ -153,8 +193,8 @@ export function auditDone(
 	args: unknown,
 	isError: boolean,
 	env?: NodeJS.ProcessEnv,
-): void {
-	appendLine(
+): Promise<void> {
+	return appendLine(
 		`${JSON.stringify({ ts: new Date().toISOString(), id, sid, phase: "done", tool, isError, args: serializeArgs(args) })}\n`,
 		env,
 	);
@@ -171,6 +211,11 @@ export function auditDone(
  * appears here; `bytes` is the count. A failure is recorded with `error` set and
  * `bytes: 0`, so an audit grep distinguishes "wrote 16 MB" from "tried and
  * could not".
+ *
+ * Awaited before the endpoint answers, on every one of its five exits. That is
+ * the whole point of this record: `/blob` is the one write path that does not go
+ * through the host's approval gate, so a caller who gets a 200 should be able to
+ * find the line that says so without polling for it.
  */
 export function auditBlob(
 	sid: string | null,
@@ -179,9 +224,9 @@ export function auditBlob(
 	bytes: number,
 	error: string | null,
 	env?: NodeJS.ProcessEnv,
-): void {
+): Promise<void> {
 	const args = { path, offset, bytes };
-	appendLine(
+	return appendLine(
 		`${JSON.stringify({
 			ts: new Date().toISOString(),
 			id: randomUUID(),
@@ -212,9 +257,9 @@ export function auditHostLlm(
 	enabled: boolean,
 	error: string | null,
 	env?: NodeJS.ProcessEnv,
-): void {
+): Promise<void> {
 	const args = { enabled };
-	appendLine(
+	return appendLine(
 		`${JSON.stringify({
 			ts: new Date().toISOString(),
 			id: randomUUID(),

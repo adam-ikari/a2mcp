@@ -82,19 +82,18 @@ const lines = (): string[] =>
 const recordsHolding = (needle: string) => lines().filter((l) => l.includes(needle));
 
 /**
- * Appends are fire-and-forget, so "the line for THIS request landed" is not the
- * same as "all earlier queued appends landed". The sentinel rides the same
- * process-wide chain as every record (src/audit.ts), so once it is on disk the
- * queue in front of it is empty — the honest way to check an absence.
+ * Drain the audit chain.
+ *
+ * `POST /blob` awaits its record before it answers, so a record belonging to a
+ * response this test already holds is on disk by the time that response arrived —
+ * no polling needed. The sentinel is still worth keeping: it proves the chain is
+ * empty rather than assuming the ordering held, which is the honest way to check
+ * an absence.
  */
 async function flush(): Promise<void> {
 	const marker = `sentinel-${Date.now()}-${Math.random()}`;
-	auditStart(marker, "flush", "flush", {}, process.env);
-	for (let i = 0; i < 300; i++) {
-		if (recordsHolding(marker).length > 0) return;
-		await Bun.sleep(10);
-	}
-	throw new Error("audit queue did not drain");
+	await auditStart(marker, "flush", "flush", {}, process.env);
+	if (recordsHolding(marker).length === 0) throw new Error("audit record missing right after its own await");
 }
 
 async function recordFor(needle: string): Promise<Record<string, unknown>> {

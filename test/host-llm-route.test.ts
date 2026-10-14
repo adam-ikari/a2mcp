@@ -80,14 +80,20 @@ const lines = (): string[] =>
 	existsSync(auditFile) ? readFileSync(auditFile, "utf8").split("\n").filter(Boolean) : [];
 const recordsHolding = (needle: string) => lines().filter((l) => l.includes(needle));
 
+/**
+ * Drain the audit chain.
+ *
+ * The request path awaits its own record before answering, so a record belonging
+ * to a response this test already has is on disk by the time the response
+ * arrives — awaiting the sentinel is enough and no polling is needed. It still
+ * takes a sentinel rather than reading the file straight away: every test in
+ * this file shares one log, and the sentinel proves the chain is empty instead of
+ * assuming the ordering held.
+ */
 async function flush(): Promise<void> {
 	const marker = `sentinel-${Date.now()}-${Math.random()}`;
-	auditStart(marker, "flush", "flush", {}, process.env);
-	for (let i = 0; i < 300; i++) {
-		if (recordsHolding(marker).length > 0) return;
-		await Bun.sleep(10);
-	}
-	throw new Error("audit queue did not drain");
+	await auditStart(marker, "flush", "flush", {}, process.env);
+	if (recordsHolding(marker).length === 0) throw new Error("audit record missing right after its own await");
 }
 
 async function recordFor(needle: string): Promise<Record<string, unknown>> {

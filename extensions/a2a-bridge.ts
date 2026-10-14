@@ -45,7 +45,11 @@ function reportArmFailure(ctx: ExtensionContext, e: unknown): void {
 	// startup says the host was *supposed* to be denied and is not, and nothing else
 	// in the bridge's record would say so later. `sid: null` because no caller asked.
 	console.error(`[a2a-bridge] takeover failed to arm: ${detail}`);
-	auditHostLlm(null, false, detail.slice(0, 200));
+	// Nothing waits on this one — it is a startup record with no request to answer,
+	// and the process may be on its way out. `void` because the promise is real and
+	// someone should have to think about it, not because it is unsafe to drop: the
+	// chain never rejects.
+	void auditHostLlm(null, false, detail.slice(0, 200));
 	ctx.ui.notify(`A2A takeover failed to arm: ${detail}`, "error");
 }
 

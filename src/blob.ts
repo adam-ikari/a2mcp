@@ -132,7 +132,7 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 		// land here, and an unrecorded refusal reads in the log exactly like a request
 		// that never arrived.
 		const why = `offset ${offset} does not match the current size ${size}; send no offset to append`;
-		auditBlob(deps.sid, path, offset, 0, why);
+		await auditBlob(deps.sid, path, offset, 0, why);
 		return { status: 409, body: { error: why } };
 	}
 	const claimed = explicit ? offset : size;
@@ -157,7 +157,7 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 	try {
 		handle = await open(target, "a");
 	} catch (e) {
-		auditBlob(deps.sid, path, claimed, 0, `open failed: ${(e as Error).message}`);
+		await auditBlob(deps.sid, path, claimed, 0, `open failed: ${(e as Error).message}`);
 		return { status: 500, body: { error: `cannot open ${path}: ${(e as Error).message}` } };
 	}
 	let at = claimed;
@@ -173,7 +173,7 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 		const current = (await handle.stat()).size;
 		if (explicit && offset !== current) {
 			const why = `the file changed while the upload was in flight: offset ${offset}, current size ${current}`;
-			auditBlob(deps.sid, path, offset, 0, why);
+			await auditBlob(deps.sid, path, offset, 0, why);
 			return { status: 409, body: { error: why } };
 		}
 		at = explicit ? offset : current;
@@ -183,7 +183,7 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 			// bytes that landed are real, so the file exists but is smaller than what
 			// the caller sent; saying 200 would report the image as complete.
 			const now = (await handle.stat()).size;
-			auditBlob(deps.sid, path, at, bytesWritten, `wrote ${bytesWritten} of ${buf.length} bytes`);
+			await auditBlob(deps.sid, path, at, bytesWritten, `wrote ${bytesWritten} of ${buf.length} bytes`);
 			return {
 				status: 500,
 				body: {
@@ -198,7 +198,7 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 		// refused it: this endpoint bypasses the host's approval gate, and the audit
 		// is the only trace of that. A success-only ledger hides exactly the writes
 		// a caller would otherwise have no way to learn about.
-		auditBlob(deps.sid, path, at, 0, `write failed: ${(e as Error).message}`);
+		await auditBlob(deps.sid, path, at, 0, `write failed: ${(e as Error).message}`);
 		return { status: 500, body: { error: `cannot write ${path}: ${(e as Error).message}` } };
 	} finally {
 		await handle.close();
@@ -209,8 +209,9 @@ export async function handleBlob(req: Request, url: URL, deps: BlobDeps): Promis
 	// or its parent made unsearchable in the gap after `close()`. This endpoint's
 	// only trace is the audit line, so the record cannot sit behind an unrelated
 	// failure: `500` with the bytes on disk and nothing in the log is precisely the
-	// outcome this module exists to avoid.
-	auditBlob(deps.sid, path, at, buf.length, null);
+	// outcome this module exists to avoid. Awaited for the same reason one step
+	// further out: the response must not reach the caller before the trace does.
+	await auditBlob(deps.sid, path, at, buf.length, null);
 
 	// The size is read off the file rather than computed, so the response cannot
 	// report a total the file disagrees with. Concurrent uploads to the same path

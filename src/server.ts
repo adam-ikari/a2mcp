@@ -190,13 +190,16 @@ export async function startServer(
 				}
 				try {
 					const state = deps.takeover.setEnabled(enabled);
-					auditHostLlm(sid, enabled, null);
+					// Awaited: the answer says the host's inference is now deny, and
+					// whoever flipped it has to be findable in the log by `sid` the
+					// moment they get that answer.
+					await auditHostLlm(sid, enabled, null);
 					return json(200, state);
 				} catch (e) {
 					// Refusals are audited too: "someone tried to arm the deny and the
 					// bridge said no" is exactly the kind of thing the log exists for.
 					const msg = (e as Error)?.message ?? String(e);
-					auditHostLlm(sid, enabled, msg);
+					await auditHostLlm(sid, enabled, msg);
 					return json(500, { error: msg });
 				}
 			}

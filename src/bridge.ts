@@ -193,15 +193,20 @@ export function buildCallTool(
 	return async (name, args, sid) => {
 		// Dispatch-time record: if the call never settles (host approval
 		// waiting for a UI that does not exist), the start line is the trace.
+		// Awaited, so "the start is on disk" is true before the call runs rather
+		// than racing it — that ordering is what makes the line evidence of
+		// anything rather than a record of a request that once happened.
 		const id = randomUUID();
-		auditStart(id, sid ?? null, name, args);
+		await auditStart(id, sid ?? null, name, args);
 		let r: { content: McpContent[]; isError: boolean };
 		try {
 			r = await run(name, args);
 		} catch (e) {
 			r = { content: [{ type: "text", text: (e as Error)?.message ?? String(e) }], isError: true };
 		}
-		auditDone(id, sid ?? null, name, args, r.isError);
+		// Awaited before the reply: a caller that reads the audit log right after
+		// its 200 has to find its own call in it.
+		await auditDone(id, sid ?? null, name, args, r.isError);
 		return r;
 	};
 }

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { auditBlob, auditDone, auditStart, auditWriteFailures } from "../src/audit.ts";
+import { auditBlob, auditDone, auditHostLlm, auditStart, auditWriteFailures } from "../src/audit.ts";
 
 /**
  * Rotation retention.
@@ -30,21 +30,6 @@ describe("audit rotation retention", () => {
 
 	const has = (needle: string) => [file, rolled].some((p) => existsSync(p) && readFileSync(p, "utf8").includes(needle));
 
-	const sizes = () => [file, rolled].map((p) => (existsSync(p) ? String(statSync(p).size) : "none")).join("|");
-
-	const flush = async () => {
-		// Appends are fire-and-forget by design (auditing must never delay a call), so
-		// wait for the two files to stop changing instead of guessing a sleep.
-		let last = "";
-		for (let i = 0; i < 1200; i++) {
-			await Bun.sleep(5);
-			const now = sizes();
-			if (now === last && now !== "none|none") return;
-			last = now;
-		}
-		throw new Error("audit appends did not settle");
-	};
-
 	/**
 	 * Enough pairs to cross the 512 KB cap at least once. The pairs go out back to
 	 * back: `appendLine` hands each line to one process-wide chain, so there is no
@@ -52,12 +37,17 @@ describe("audit rotation retention", () => {
 	 * which records survive.
 	 */
 	const phase = async (tag: string, pairs = 300) => {
+		// The last append in the burst is the tail of the chain, so awaiting it says
+		// every record before it has been attempted. This used to poll the two files
+		// until their sizes stopped changing and then sleep another 200 ms "to let
+		// the last few in-flight appends land" — a wait that existed only because the
+		// audit functions returned nothing to await.
+		let last: Promise<void> | undefined;
 		for (let i = 0; i < pairs; i++) {
-			auditStart(`${tag}-${i}`, "sid", "read", fatter, env);
-			auditDone(`${tag}-${i}`, "sid", "read", fatter, false, env);
+			void auditStart(`${tag}-${i}`, "sid", "read", fatter, env);
+			last = auditDone(`${tag}-${i}`, "sid", "read", fatter, false, env);
 		}
-		await flush();
-		await Bun.sleep(200); // let the last few in-flight appends land
+		await last;
 	};
 
 	test("a record survives at most one further rotation", async () => {
@@ -101,13 +91,14 @@ describe("audit never loses a call", () => {
 			.map((l) => JSON.parse(l) as Record<string, unknown>);
 	};
 
-	const recordFor = async (id: string) => {
-		for (let i = 0; i < 300; i++) {
-			const hit = readRecords().find((r) => r.id === id);
-			if (hit) return hit;
-			await Bun.sleep(10);
-		}
-		return undefined;
+	const recordFor = (id: string) => {
+		// Every caller awaits its own append before looking, so this is one read and
+		// not a poll. It used to retry for three seconds, which is the wait that hid
+		// the ordering bug: a caller that answered before its record landed still
+		// passed here, and the race only showed up in the real-host scenarios.
+		const hit = readRecords().find((r) => r.id === id);
+		if (!hit) throw new Error(`audit record ${id} is not on disk after its own await`);
+		return hit;
 	};
 
 	beforeAll(() => {
@@ -119,16 +110,52 @@ describe("audit never loses a call", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	test("the audit functions hand back the queue tail, so a caller can wait for its own line", async () => {
+		// Two halves, and the split matters. The property itself — "the record is on
+		// disk the moment the await returns" — can only be observed through a slow
+		// disk: on a fast one both the old fire-and-forget shape and the awaited one
+		// look identical, which is exactly why the ordering bug survived as a flake
+		// in the real-host scenarios instead of failing here. So the behavioural half
+		// is asserted directly (with no waiting of any kind around the read), and the
+		// deterministic half pins the shape the request path depends on: every entry
+		// point returns the chain tail. Drop the `Promise` from one of these signatures
+		// and this goes red immediately, no timing involved.
+		for (const [name, call] of [
+			["auditStart", () => auditStart("shape-start", "sid", "read", {}, env)],
+			["auditDone", () => auditDone("shape-done", "sid", "read", {}, false, env)],
+			["auditBlob", () => auditBlob("sid", "shape.bin", 0, 0, null, env)],
+			["auditHostLlm", () => auditHostLlm("sid", true, null, env)],
+		] as const) {
+			const returned = call();
+			expect(returned, `${name} returns the queue tail`).toBeInstanceOf(Promise);
+			await returned;
+		}
+		const logFile = env.A2A_BRIDGE_AUDIT as string;
+		const raw = existsSync(logFile) ? readFileSync(logFile, "utf8") : "";
+		const onDisk = readRecords().map((r) => String(r.id));
+		expect(onDisk).toContain("shape-start");
+		expect(onDisk).toContain("shape-done");
+		// auditBlob and auditHostLlm mint their own uuid, so the identifying content
+		// is in the record rather than in its id — and `args` is itself a serialized
+		// string, so the payload shows up escaped inside the line.
+		expect(raw).toContain("shape.bin");
+		expect(raw).toContain('"tool":"blob:write"');
+		expect(raw).toContain('"tool":"host_llm"');
+	});
+
 	test("args that JSON.stringify rejects are still recorded", async () => {
 		// A custom tool can hand over a BigInt and `JSON.stringify` throws on it. The
 		// record survives that; its args do not, which is the accepted half of the
 		// trade — a vague line beats no line for the `start` without `done` lookup.
-		expect(() => auditStart("big-start", "sid", "read", { when: 10n }, env)).not.toThrow();
-		expect(() => auditDone("big-done", "sid", "read", { when: 10n }, false, env)).not.toThrow();
+		// Awaited, not wrapped in `expect(() => …).not.toThrow()`: these return the
+		// queue tail now, and a sync call-throw assertion on a promise-returning
+		// function proves nothing about the rejection it used to be guarding.
+		await expect(auditStart("big-start", "sid", "read", { when: 10n }, env)).resolves.toBeUndefined();
+		await expect(auditDone("big-done", "sid", "read", { when: 10n }, false, env)).resolves.toBeUndefined();
 		// Distinct ids, not one pair: both appends are in flight at once and their
 		// order in the file is not a contract.
-		const start = await recordFor("big-start");
-		const done = await recordFor("big-done");
+		const start = recordFor("big-start");
+		const done = recordFor("big-done");
 		expect(start).toMatchObject({ tool: "read", phase: "start" });
 		expect(done).toMatchObject({ tool: "read", phase: "done", isError: false });
 		expect(String(start?.args)).not.toContain("10");
@@ -138,7 +165,7 @@ describe("audit never loses a call", () => {
 		// `tools/call` without `arguments` reaches this as undefined, and
 		// JSON.stringify(undefined) is undefined rather than a string.
 		await auditStart("none-1", "sid", "read", undefined, env);
-		const rec = await recordFor("none-1");
+		const rec = recordFor("none-1");
 		expect(rec?.args).toBe("undefined");
 	});
 
@@ -157,9 +184,14 @@ describe("audit never loses a call", () => {
 		const realError = console.error;
 		console.error = (...a: unknown[]) => printed.push(a.map(String).join(" "));
 		try {
-			expect(() => auditStart("dead-1", "sid", "read", { path: "/etc/hostname" }, dead)).not.toThrow();
-			expect(() => auditDone("dead-1", "sid", "read", { path: "/etc/hostname" }, true, dead)).not.toThrow();
-			await Bun.sleep(50); // the rejected appends settle in the background
+			// The property is stronger than "does not throw", and it is the one that
+			// matters now: the request path *awaits* this promise before answering, so
+			// a rejection here would surface as a failed `tools/call`. Asserting the
+			// resolution is what pins "auditing cannot break the call" to something
+			// real — a sync `not.toThrow()` on a promise-returning function asserted
+			// nothing at all.
+			await expect(auditStart("dead-1", "sid", "read", { path: "/etc/hostname" }, dead)).resolves.toBeUndefined();
+			await expect(auditDone("dead-1", "sid", "read", { path: "/etc/hostname" }, true, dead)).resolves.toBeUndefined();
 		} finally {
 			console.error = realError;
 			process.off("unhandledRejection", collect);
@@ -177,18 +209,17 @@ describe("audit record shape for a blob upload", () => {
 	const file = join(dir, "audit.log");
 	const env = { A2A_BRIDGE_AUDIT: file } as NodeJS.ProcessEnv;
 
-	const recordHolding = async (needle: string) => {
-		for (let i = 0; i < 300; i++) {
-			if (existsSync(file)) {
-				const hit = readFileSync(file, "utf8")
-					.split("\n")
-					.filter(Boolean)
-					.find((l) => l.includes(needle));
-				if (hit) return JSON.parse(hit) as Record<string, unknown>;
-			}
-			await Bun.sleep(10);
-		}
-		throw new Error(`no audit record holding ${needle}`);
+	const recordHolding = (needle: string) => {
+		// One read, no polling — the callers below await their own `auditBlob`, so a
+		// miss here means the ordering is broken, not that the disk is slow. See the
+		// same note on `recordFor`.
+		if (!existsSync(file)) throw new Error(`no audit log at ${file}`);
+		const hit = readFileSync(file, "utf8")
+			.split("\n")
+			.filter(Boolean)
+			.find((l) => l.includes(needle));
+		if (!hit) throw new Error(`no audit record holding ${needle}`);
+		return JSON.parse(hit) as Record<string, unknown>;
 	};
 
 	beforeAll(() => {
@@ -204,8 +235,8 @@ describe("audit record shape for a blob upload", () => {
 		// The blob endpoint never waits on a UI, so there is no half-settled state to
 		// pair; docs/protocol.md sells this asymmetry against tools/call. If a second
 		// phase ever shows up here, the protocol page is lying somewhere.
-		auditBlob("sid-1", "fw.bin", 0, 16, null, env);
-		const rec = await recordHolding("fw.bin");
+		await auditBlob("sid-1", "fw.bin", 0, 16, null, env);
+		const rec = recordHolding("fw.bin");
 		expect(rec).toMatchObject({ phase: "done", tool: "blob:write", sid: "sid-1", isError: false });
 		expect("error" in rec).toBe(false);
 		expect(rec.args).toBeTypeOf("string");
@@ -218,8 +249,8 @@ describe("audit record shape for a blob upload", () => {
 		// The failure must be greppable as a failure and the message bounded: the
 		// OS hands back multi-kB EACCES strings with absolute host paths in them,
 		// and this log is read by whoever holds the token, not only by the host.
-		auditBlob(null, "bad.bin", 8, 0, "E".repeat(300), env);
-		const rec = await recordHolding("bad.bin");
+		await auditBlob(null, "bad.bin", 8, 0, "E".repeat(300), env);
+		const rec = recordHolding("bad.bin");
 		expect(rec.isError).toBe(true);
 		expect(rec.sid).toBeNull();
 		expect(String(rec.error)).toHaveLength(200);
@@ -282,8 +313,6 @@ describe("concurrent writes across the rotation boundary", () => {
 		return out;
 	};
 
-	const sizes = () => [file, rolled].map((p) => (existsSync(p) ? String(statSync(p).size) : "none")).join("|");
-
 	test("one rotation, and every record written is still readable", async () => {
 		rmSync(dir, { recursive: true, force: true });
 		mkdirSync(dir, { recursive: true });
@@ -299,17 +328,12 @@ describe("concurrent writes across the rotation boundary", () => {
 		// test proves only that an untouched log is fine.
 		expect(BURST * 1150).toBeGreaterThan(headroom);
 
-		for (let i = 0; i < BURST; i++) auditStart(`race-${i}`, "sid", "read", fatter, env);
-
-		// Appends are fire-and-forget, so wait for the two files to stop changing.
-		let last = "";
-		for (let i = 0; i < 1200; i++) {
-			await Bun.sleep(5);
-			const now = sizes();
-			if (now === last && now !== "none|none") break;
-			last = now;
-		}
-		await Bun.sleep(300);
+		// The last append of the burst is the tail of the chain. Awaiting it — rather
+		// than watching both files stop changing and then sleeping 300 ms for "the
+		// stragglers" — is what the burst was actually waiting for.
+		let last: Promise<void> | undefined;
+		for (let i = 0; i < BURST; i++) last = auditStart(`race-${i}`, "sid", "read", fatter, env);
+		await last;
 
 		const seen = idsOnDisk();
 		const missing = [
