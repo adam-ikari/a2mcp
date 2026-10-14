@@ -93,6 +93,15 @@
  * restore — restart the host to recover it); a row the host resolves mid-turn and
  * re-pushes over the deny row falls back to the tripwire.
  *
+ * The second one is a scope decision, not a defect waiting to be fixed (2026-10-14,
+ * operator): when another extension owns one of the two claimed names, taking that
+ * name costs it runtime state the public API cannot replay, and the answer is to
+ * name it on restore and leave the host restart to the operator. It only happens in
+ * an installation where an extension has taken over a name the host itself ships —
+ * not a situation this bridge can resolve — so it gets no dedicated probe, and the
+ * probe's own "another extension's provider survives" case covers the ordinary one
+ * (an extension owning a name nothing claims, which is 71 of 73).
+ *
  * ## Lifecycle
  *
  * Arming is runtime state on the live Main session; it is never written to the
