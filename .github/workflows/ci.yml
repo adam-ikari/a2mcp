@@ -18,6 +18,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.14"
+      # Ahead of everything else, and ahead of `bun test` especially. A
+      # self-referential symlink in the tree makes the test runner die with an
+      # empty report — 48 bytes, no test names, exit 1 — so a broken tree shape
+      # deletes the evidence instead of failing a check. One did, for a while:
+      # `hidden-plugin`, a `git add -A` leftover pointing at an absolute path
+      # that was the repo root. This probe needs no dependencies and no host.
+      - name: test:tree — no symlink points off this machine
+        run: bun run test:tree
       # Frozen by default under CI, so a package.json pin that disagrees with
       # bun.lock fails here instead of surfacing later as a drifted
       # node_modules. The "pin == host omp" invariant has broken three times;

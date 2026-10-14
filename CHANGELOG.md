@@ -4,6 +4,18 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。
 
+## 2026-10-13 — 仓库里提交了一个指向仓库根的符号链接，而且守卫不能放进 `bun test`
+
+`hidden-plugin` 是一个被 git 跟踪的符号链接（mode 120000），目标是 `/home/gem/project/pi_a2a_ext`——装着它自己的那个目录。它是 `59a5e60`（也就是加 `harness.linkExtension()` 那次）里一次 `git add -A` 扫进去的调试残留，所以 `git status` 一直干净，全部核验一直绿。三条后果都没有任何东西看得见：`find -L .` 直接回答 "File system loop detected; './hidden-plugin' is part of the same file system loop as '.'"，凡是跟随符号链接的工具（索引器、`rg --follow`、`du -L`、爬虫）都在走环；仓库里存着某台机器的绝对路径，别人 clone 下来拿到的是**他**机器上那个路径上的东西；而 `files: ["extensions/", "src/"]` 把它挡在 npm 包外面，这是它从没有到用户手里的唯一原因——打包的巧合，不是决定。
+
+- fix: 删掉那个链接
+- test: `test:tree`，3 项，**不放在 `bun test` 里**。变异的时候才发现这条要命：把守卫写成 `test/*.test.ts` 之后，自环一存在，runner 爬目录撞上自己，`bun test test/tree.test.ts` 跑 10.3 秒、98% CPU、exit 1、只打出 48 字节——没有测试名，没有断言。**坏的树形状不是让某个检查变红，是把证据删掉**，所以守卫放在最需要它的那一次自己就死了。它独立进程跑，CI 里排在 `bun install` 和 `bun test` 前面，无依赖、不需要宿主
+- 规则不是「不许有符号链接」。`.claude/skills/design-doc-mermaid -> ../../.agents/skills/design-doc-mermaid` 是被跟踪的、相对的、在仓库内，那是 skill 管理器的产物，禁掉它就是禁掉仓库自己的约定。所以拆成三条子句，各有各的失败：绝对目标（不可移植，且正是那次成环的形状）、解析出仓库（别的机器上悬空）、解析到自己的祖先（按定义就是环）
+- 第一版守卫把 `.agents` / `.claude` / `.qoder` 放进了跳过表，等于不看题面所在的目录：它连唯一那个合法链接都没看见，旁边再放一个坏链接同样看不见，而探针报告「0 个链接，干净」。跳过表盖住被检查对象，就是这个仓库反复在付的那笔学费
+- 六个变异全红：绝对指回仓库根、相对 `..`、相对 `.`（目标就是仓库根——第一版的祖先判断漏了这一条，靠它补上的）、逃出仓库、仓库内悬空、以及**已跟踪但本地已删**（链接文本从 git index 读，walk 只看得见当前这份工作树）
+- 顺手改掉几处手写计数：三处文档里 `bun test` 还写着 157（实为 159），两份 README 里 `test:registry` 还写着 22 项（实为 28）。这些数是跑出来的，不该信文档里的；本次全部按实跑重落
+- 回归：`lint` / `tsc` / `bun test` 159/159；`test:registry` 28 项、`test:tree` 3 项、站点 `render-check` 56 项全过
+
 ## 2026-10-13 — 网站侧：三处发布过的坑没有守卫，补上，其中一处是真 bug
 
 剩下唯一没看过的边界。按「发布过的东西要有人看着」查 `website/scripts/`，找到三条**这个仓库真踩过**的坑，而现在的 `render-check.mjs` 一条都看不见：sitemap 的 `lastmod` 曾取构建产物 mtime（等于宣称每页每次部署都变，搜索引擎直接忽略）、robots.txt 与 sitemap 的 origin 各推一遍（漂了没人知道）、`withMermaid` 曾把 mermaid 静态注入 entry 让每个页面首屏阻塞预载 1.58 MB。三条都不报错、不影响构建，评审里看不出来。

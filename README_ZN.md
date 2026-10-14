@@ -304,8 +304,9 @@ bun install
 
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
-bun test              # 单测：test/*.test.ts（157 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/blob 分派/takeover 形状/装配事务/host-llm 路由）
-bun run test:registry # 真实模型注册表上驱动接管，22 项，秒级（不需要本机 omp，也不需要凭据）
+bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
+bun test              # 单测：test/*.test.ts（159 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/blob 分派/takeover 形状/装配事务/host-llm 路由）
+bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，35 项（需本机 omp）
 bun run test:blob      # POST /blob 原始字节上传，35 项（需本机 omp）

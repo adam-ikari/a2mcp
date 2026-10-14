@@ -4,7 +4,8 @@
 
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 157 pass / 0 fail（12 文件） |
+| `bun run test:tree` | 仓库形状核验，3 项，无依赖 | 否 | `tree-probe: repo shape OK` |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 159 pass / 0 fail（12 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，35 项 | 是 | `HARDEN OK` |
