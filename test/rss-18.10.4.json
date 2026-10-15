@@ -3,13 +3,13 @@
 	"measuredAt": "2026-10-15",
 	"probeBodyMB": 8,
 	"hundredMBStatus": 200,
-	"idleMB": 481,
-	"peakOneUploadMB": 502,
-	"peakTwoConcurrentMB": 518,
-	"settledAfterOneMB": 502,
-	"settledAfterTwoMB": 518,
-	"peakDeltaOneMB": 21,
-	"peakDeltaTwoMB": 37,
-	"settledDeltaOneMB": 21,
-	"settledDeltaTwoMB": 37
+	"idleMB": 487,
+	"peakOneUploadMB": 509,
+	"peakTwoConcurrentMB": 523,
+	"settledAfterOneMB": 509,
+	"settledAfterTwoMB": 523,
+	"peakDeltaOneMB": 23,
+	"peakDeltaTwoMB": 36,
+	"settledDeltaOneMB": 23,
+	"settledDeltaTwoMB": 36
 }
