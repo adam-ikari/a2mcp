@@ -175,6 +175,57 @@ while (queue.length > 0) {
 check(missing.length === 0, "every relative import of the entry resolves inside the package", missing.join(", "));
 check(seen.size >= 6, "the entry graph was actually walked", `${seen.size} modules`);
 
+// --- 3b. the package reaches exactly ONE host package --------------------------
+//
+// The bug this catches shipped as v0.2.0 and the whole suite was green: on a
+// Windows machine, `omp install <git-url>` failed with
+//   `Cannot find package '@oh-my-pi/pi-ai' imported from …/src/takeover.ts`
+// because that specifier has to be resolved by the host's shim, and a packaged
+// install is a *copy* with no `node_modules` of its own. Two of the three pi-ai
+// subpaths it needed were not in that package's `exports` map at all — they only
+// resolved through its `./*` wildcards, i.e. by luck of the file layout. It worked
+// on Linux and it works from the working tree (which has its own `node_modules`),
+// which is all this probe had ever exercised.
+//
+// So: walk the same graph, collect every *bare* specifier, and require that they
+// all name the one host package the extension already depends on for `pi.on(…)`.
+// Cross-platform, no network, and it fails on the cause rather than on the
+// symptom — a probe that merely boots a host would still be green here.
+const hostSpecifiers = new Map<string, string>();
+for (const file of seen) {
+	// Comments are stripped first, and that is not tidiness: the scan's first run
+	// reported a package called `tried and`, which is the tail of a sentence in
+	// src/audit.ts's header — `distinguishes "wrote 16 MB" from "tried and could
+	// not"` — matched because the text between `from` and the next quote spans a
+	// wrapped line. A scan that reads prose as specifiers is a scan whose failures
+	// cannot be trusted in either direction.
+	const text = (existsSync(file) ? readFileSync(file, "utf8") : "")
+		.replace(/\/\*[\s\S]*?\*\//g, "")
+		.replace(/^\s*\/\/.*$/gm, "");
+	for (const m of text.matchAll(/from\s+"([^"\n]+)"/g)) {
+		const spec = m[1];
+		// Relative specifiers are this package's own modules, already covered by the
+		// graph walk above. Counting them here was the second mistake in this scan:
+		// it turned `./audit.ts` into a package name and failed on the package's own
+		// internals rather than on anything a host has to resolve.
+		if (spec.startsWith(".")) continue;
+		// node builtins and anything with a subpath still names its package root.
+		const pkgName = spec.startsWith("node:") ? spec : spec.split("/").slice(0, 2).join("/");
+		if (!hostSpecifiers.has(pkgName)) hostSpecifiers.set(pkgName, file.slice(pkgRoot.length + 1));
+	}
+}
+const nonHost = [...hostSpecifiers.keys()].filter((s) => !s.startsWith("node:") && s !== "@oh-my-pi/pi-coding-agent");
+check(
+	nonHost.length === 0,
+	"the package imports no host package other than @oh-my-pi/pi-coding-agent",
+	nonHost.map((s) => `${s} (from ${hostSpecifiers.get(s)})`).join("; "),
+);
+check(
+	hostSpecifiers.size > 0,
+	"the host-specifier scan actually saw imports",
+	`${hostSpecifiers.size} distinct package(s): ${[...hostSpecifiers.keys()].join(", ")}`,
+);
+
 // --- 4. the real host, over the real plugin directory -------------------------
 
 // This is the end-to-end that the previous version of this probe gave up on. It

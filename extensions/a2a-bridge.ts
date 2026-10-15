@@ -11,15 +11,30 @@ import { hostLlmState, rearmMainSession, setEnabled } from "../src/takeover.ts";
 /**
  * The bridge's own version, from `package.json`.
  *
- * Read, not imported: the host loads this file through its own module shim, which
- * rewrites bare specifiers like `@oh-my-pi/*`, and the packaged extension ships
- * `src/` alongside `extensions/` rather than a bundler output — so this must be a
- * path relative to this file, and it is (`../package.json`). Keeping it a literal
- * instead is what this note replaces: 0.2.0 went out answering `initialize` with
- * `version: "0.1.0"` while `docs/protocol.md` quoted that response and agreed with
- * it. Nothing compared the two.
+ * Read, not imported: the host loads this file through its own module shim, and
+ * the packaged extension ships `src/` and `extensions/` beside a `package.json`
+ * rather than a bundler output. Keeping it a literal is what this replaces — 0.2.0
+ * went out answering `initialize` with `version: "0.1.0"` while
+ * `docs/protocol.md` quoted that response and agreed with it, so nothing compared
+ * the two.
+ *
+ * And it is a read that cannot throw, which is not obvious and was not the first
+ * time: this runs at module top level, so an unreadable `package.json` takes the
+ * whole extension down over a version string — and it did, in a layout where
+ * `extensions/` sits directly under the agent directory with no package beside it.
+ * A bridge whose version number is the reason it will not load is worse than one
+ * that reports "unknown".
  */
-const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string };
+function bridgeVersion(): string {
+	try {
+		const v = (JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version?: unknown })
+			.version;
+		return typeof v === "string" && v.length > 0 ? v : "unknown";
+	} catch {
+		return "unknown";
+	}
+}
+const BRIDGE_VERSION = bridgeVersion();
 
 let server: { port: number; fellBack: boolean; stop(): void } | null = null;
 let cfg: BridgeConfig | null = null;
@@ -116,7 +131,7 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 					// protocol page quotes this response verbatim — so 0.2.0 shipped with
 					// the code still answering "0.1.0" and the page agreeing with the
 					// code. Two copies of a version number, and nothing compares them.
-					serverInfo: () => ({ name: "omp-a2a-bridge", version: pkg.version }),
+					serverInfo: () => ({ name: "omp-a2a-bridge", version: BRIDGE_VERSION }),
 					takeover: { setEnabled },
 				});
 				if (!hasMainSession()) {

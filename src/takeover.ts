@@ -113,10 +113,38 @@
  * host breaks silently.
  */
 
-import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
-import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { AgentRegistry, type AgentSession, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
+/**
+ * Every host import goes through `@oh-my-pi/pi-coding-agent`, and the three pi-ai
+ * symbols come from its `legacy-pi-ai-shim` subpath rather than from
+ * `@oh-my-pi/pi-ai` directly. That is not a style preference — it is the
+ * difference between installing on someone else's machine and not.
+ *
+ * A packaged install is a *copy* under `~/.omp/plugins/node_modules/`, with no
+ * `node_modules` of its own: every `@oh-my-pi/*` specifier is resolved by the
+ * host's shim. Reaching into a second package meant asking that shim to resolve
+ * subpaths of `@oh-my-pi/pi-ai` too, and two of the three it needed
+ * (`api-registry`, `utils/event-stream`) are **not** in that package's `exports`
+ * map at all — they only resolve through its `./*` and `./utils/*` wildcards,
+ * which is to say by luck of the file layout, not by promise. A Windows install
+ * of 0.2.0 failed on exactly that: `Cannot find package '@oh-my-pi/pi-ai' imported
+ * from …/src/takeover.ts`, while the same install worked on Linux and the whole
+ * suite was green, because every probe loads the *working tree*, which has its own
+ * `node_modules` and never exercises the copy.
+ *
+ * `legacy-pi-ai-shim` is the one host subpath that re-exports all of pi-ai, and it
+ * is declared explicitly in pi-coding-agent's own `exports` — the package the
+ * extension already imports for `pi.on(...)`, so the shim demonstrably covers it
+ * everywhere. The name says legacy; it is the compatibility layer, and depending on
+ * it is what makes this code work on a machine that has never seen this repo.
+ */
+import {
+	type AssistantMessageEventStream,
+	createAssistantMessageEventStream,
+	registerCustomApi,
+	unregisterCustomApis,
+} from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-ai-shim";
 
 /** Source id handed to the deny api registration and to any shadowed provider. */
 export const TAKEOVER_SOURCE = "a2a-bridge";
@@ -336,7 +364,7 @@ let denies = 0;
 
 function denyStreamSimple(model: unknown): AssistantMessageEventStream {
 	denies++;
-	const stream = new AssistantMessageEventStream();
+	const stream = createAssistantMessageEventStream();
 	const m = model as { provider?: string; id?: string } | undefined;
 	console.error(`[a2a-bridge] takeover denied a model request (${m?.provider}/${m?.id}); denied=${denies}`);
 	// Fail on a microtask, not synchronously: callers set up their stream

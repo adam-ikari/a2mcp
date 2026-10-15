@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { TSchema } from "@oh-my-pi/pi-ai";
-import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import {
 	AgentRegistry,
 	type AgentSession,
@@ -8,6 +6,15 @@ import {
 	type ExtensionContext,
 	MAIN_AGENT_ID,
 } from "@oh-my-pi/pi-coding-agent";
+// `toolWireSchema` is pi-ai's, taken through pi-coding-agent's own explicitly
+// exported shim subpath rather than from `@oh-my-pi/pi-ai` directly: a packaged
+// install is a copy with no `node_modules`, so every host specifier is resolved by
+// the host's shim, and the fewer packages that shim has to resolve the better.
+// `TSchema` is type-only, so it erases at runtime and cannot break an install — it
+// is imported from the same place anyway so there is one line to check.
+// See the long note in src/takeover.ts for the install failure this avoids.
+import type { TSchema } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-ai-shim";
+import { toolWireSchema } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-ai-shim";
 // Loads pi-coding-agent's AgentToolContext augmentation (CustomToolContext
 // fields + ui/hasUI) so the execute() context literal is fully type-checked
 // instead of relying on the all-optional base declaration.

@@ -4,6 +4,23 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## v0.2.1 — 修：换机器装不上
+
+**v0.2.0 在部分机器上装不上，这是唯一的必修项。** Windows 上 `omp install <git-url>` 直接失败：
+
+```
+Failed to load extension: Cannot find package '@oh-my-pi/pi-ai'
+  imported from …/pi-a2a-ext/src/takeover.ts
+```
+
+- fix: **`src/takeover.ts` 与 `src/bridge.ts` 不再 import `@oh-my-pi/pi-ai`。** 一个发布出来的包是一个**复制品**——躺在 `~/.omp/plugins/node_modules/` 下，**没有自己的 `node_modules`**，所以每一个 `@oh-my-pi/*` 都得由宿主 shim 解析。而桥要的那三个 pi-ai 符号里，有两个（`api-registry`、`utils/event-stream`）**根本不在那个包的 `exports` 映射里**，只靠 `./*` 与 `./utils/*` 通配符解析——也就是说靠文件布局的运气，不靠承诺。现在这三个符号改从 `@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-ai-shim` 取：那是 pi-coding-agent **显式导出**的子路径，`export * from "@oh-my-pi/pi-ai"`，而 pi-coding-agent 正是扩展为了 `pi.on(...)` 早就依赖、shim 在任何机器上必然可解析的那个包。所以现在整个包**只依赖一个宿主包**。顺带一个类型变化：`AssistantMessageEventStream` 在 shim 侧是类型而非值，改用它的工厂 `createAssistantMessageEventStream`
+- test: `test:install` 加一项**跨平台**检查——走同一张 import 图，收所有非相对 specifier，要求**除了 `@oh-my-pi/pi-coding-agent` 没有第二个宿主包**。它抓的是根因而不是症状：一个只起宿主的探针在这里仍然是绿的，因为 Linux 上 shim 能解析、Windows 上不能。变异核验：把 import 退回 `@oh-my-pi/pi-ai/api-registry` → 红并点名 `@oh-my-pi/pi-ai (from src/takeover.ts)`
+- test: 同一份复制品形状（`extensions/` + `src/` + `package.json`，**没有 node_modules**）实测起宿主、桥广播。本机 Linux 上这条本来就是绿的（shim 能解析），所以它是形状的证据，不是那个 bug 的守卫——守卫是上面那条静态检查
+- fix: 顺带修掉 v0.2.0 自己引入的一个新失败模式。版本号改从 `package.json` 读是对的，但那次读取在**模块顶层**且不兜底，于是在 `extensions/` 直接躺在 agent 目录下、旁边没有 package.json 的布局里，一个版本号就能让整个扩展加载失败。改成读不到就报 `unknown`：**一个因为版本号而加载不起来的桥，比一个报 unknown 的桥更糟**
+- 这条探针的结构性盲区值得单独记：`test:install` 一直 `omp install <工作树>`，工作树自带 `node_modules`，所以它测的一直是「软链 + 依赖齐备」这个形状，而 README 给用户的命令是 git URL，也就是「复制品 + 没有依赖」。**两者不是同一件事，而只有后者是用户执行的**。同一个坑此前已经吃过一次（`test:blob` 忘了挂扩展，本机假绿）
+- 回归：`lint` / `tsc` / `bun test` 161/161；`test:registry` 28（5487 行）、`test:takeover` 34（66.4 秒）、`SMOKE OK`、`SCENARIOS 54 steps, 0 failed`、`test:install` 30 项（含新增两项）、复制品形状实测桥广播，全绿
+
+
 ## 2026-10-14 — 审完剩下五个探针：两条已经不会失败的检查，一条烂掉的清单
 
 那五个探针（blob-probe 510 行、hardening 357 行、install-probe 348 行、approval-probe 209 行、smoke 175 行）此前只跑过没读过。按同一套办法看：找**发布过、但已经不可能失败**的东西。

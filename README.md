@@ -340,7 +340,7 @@ bun run test:blob      # POST /blob raw-byte upload, 35 items (needs a local omp
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
 bun run test:takeover  # host inference deny/restore against a counting sink, ~60s (needs a local omp)
 bun run test:scenario  # end-to-end scenarios, 10 narratives / 54 steps, ~45s (needs a local omp)
-bun run test:install   # published-package self-containment + a real host over MCP, 28 items (needs a local omp)
+bun run test:install   # published-package self-containment + a real host over MCP, 33 items (needs a local omp)
 bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`
 ```
 

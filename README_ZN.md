@@ -313,7 +313,7 @@ bun run test:blob      # POST /blob 原始字节上传，35 项（需本机 omp�
 bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp）
 bun run test:takeover  # 宿主推理 deny/restore 对一个计数 sink 实测，约 60 秒（需本机 omp）
 bun run test:scenario  # 端到端场景，10 个叙事 / 54 步，约 45 秒（需本机 omp）
-bun run test:install   # 发布包自包含 + 真实宿主走 MCP，28 项（需本机 omp）
+bun run test:install   # 发布包自包含 + 真实宿主走 MCP，33 项（需本机 omp）
 bun run website        # 文档站（VitePress）本地预览，端口见输出（5173 起，被占则顺延）；首次先 cd website && bun install
 ```
 

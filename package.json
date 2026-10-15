@@ -1,6 +1,6 @@
 {
   "name": "pi-a2a-ext",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Expose a running omp session's tools over MCP (Streamable HTTP), with a raw-byte upload endpoint",
   "license": "MIT",
   "type": "module",
