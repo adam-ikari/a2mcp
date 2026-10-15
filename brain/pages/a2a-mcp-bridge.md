@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-14T06:14:04"
+updated: "2026-10-15T09:19:41"
 ---
 
 <!-- compiled_truth -->
@@ -719,4 +719,16 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "网站侧三处「发布过但没人看得见」的坑补上守卫，其中一处是真 bug。sitemap 的 lastmod 曾取构建产物 mtime（等于宣称每页每次部署都变，搜索引擎直接忽略）、robots.txt 与 sitemap 的 origin 各推一遍（漂了无人知）、withMermaid 曾把 mermaid 静态注入 entry 让每页首屏阻塞预载 1.58MB——三条都不报错、不影响构建、评审里看不出来。真 bug 是首页 lastmod 取错源文件：collect() 把 index.html 的 index 后缀去掉，于是首页的 page 名是空串，SOURCE_OF.index 从来没被命中过（死代码），首页落到「无源文件」兜底，lastmod 变成**仓库最新提交**的日期而不是 README_ZN.md 的——两者同一天时看不出来。配套的是页面→源文件映射抽成 website/scripts/sources.mjs 供两处共用（抄两遍正是这个仓库吃过亏的形状，备份里少改一处不会有任何东西失败）。新 sitemap 检查自己第一版就栽在空转上：URL→页面名解析成了 http://localhost:5173/changelog，于是每个 git 查找都指向不存在的文件、整组检查「全过且什么都没验」——所以除了逐页比对，还加了「每个页面必须映射到一个真实存在的源文件」与「git 可用时至少真比对上一条」两条反空转。"
   source: site guard review 2026-10-14
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-15T09:19:41
+  kind: evidence
+  summary: "发布包是复制品，只允许依赖一个宿主包；探针必须测用户执行的那个形状（2026-10-15，v0.2.1）。触发：Windows 上 omp install <git-url> 失败 `Cannot find package '@oh-my-pi/pi-ai' imported from …/src/takeover.ts`，本机 Linux 九个核验全绿。机制：git-URL 安装是复制品，落在 ~/.omp/plugins/node_modules/pi-a2a-ext/ 下、没有自己的 node_modules，所以包里的每个 @oh-my-pi/* 都得由宿主 shim 解析；而 v0.2.0 接管新增代码要的三个 pi-ai 符号里有两个（api-registry、utils/event-stream）根本不在那个包的 exports 映射里，只靠 ./* 与 ./utils/* 通配符解析——靠文件布局的运气，不是承诺。修法：三个符号改从 @oh-my-pi/pi-coding-agent/extensibility/legacy-pi-ai-shim 取（pi-coding-agent 显式导出的子路径、export * from pi-ai，且扩展为了 pi.on(...) 早就依赖它、shim 在任何机器上必然可解析），整个包现在只依赖一个宿主包；顺带一个类型变化：AssistantMessageEventStream 在 shim 侧是类型不是值，改用它的工厂 createAssistantMessageEventStream。守卫（跨平台、抓根因）：test:install 走同一张 import 图收所有非相对 specifier，要求除 @oh-my-pi/pi-coding-agent 外没有第二个宿主包；变异核验退回 @oh-my-pi/pi-ai/api-registry → 红并点名 src/takeover.ts。一个只起宿主的探针在这里仍然是绿的（Linux 能解析、Windows 不能），所以不能拿「桥起来了」当这条的守卫。探针的结构性盲区单独记：test:install 一直 omp install <工作树>（工作树自带 node_modules），测的是「软链 + 依赖齐备」，而 README 给用户的命令是 git URL = 「复制品 + 没有依赖」——两者不是同一件事，而只有后者是用户执行的；同一个坑此前吃过一次（test:blob 忘了挂扩展、本机假绿）。"
+  source: "v0.2.1 · test/install-probe.ts"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-15T09:19:41
+  kind: reversal
+  summary: "版本号从 package.json 读引出的新失败模式（2026-10-15）。v0.2.0 把 serverInfo.version 从字面量改成读 ../package.json 是对的（旧字面量 0.1.0 与 docs/protocol.md 互相背书、没人比对），但那次 readFileSync 在模块顶层且不兜底，于是在 extensions/ 直接躺在 agent 目录下、旁边没有 package.json 的布局里，一个版本号就能让整个扩展加载失败——这是在模拟真实复制品布局时才撞出来的，本机工作树形状暴露不了。改成读不到就报 unknown：一个因为版本号而加载不起来的桥，比一个报 unknown 的桥更糟。"
+  source: extensions/a2a-bridge.ts
   affects: [a2a-mcp-bridge]
