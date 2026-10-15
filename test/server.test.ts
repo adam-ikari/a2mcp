@@ -4,10 +4,13 @@
  * negotiation, and session-map bounds. Real-host behavior is test/smoke.ts.
  */
 import { describe, expect, spyOn, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { connect } from "node:net";
+import { join } from "node:path";
 import type { BridgeDeps } from "../src/server.ts";
 import { MAX_SESSIONS, SESSION_TTL_MS, startServer } from "../src/server.ts";
 
+const root = join(import.meta.dir, "..");
 const JSON_HDR = { "content-type": "application/json" };
 const TOKEN = "test-token";
 const AUTH = { authorization: `Bearer ${TOKEN}` };
@@ -122,6 +125,25 @@ describe("server protocol", () => {
 			expect(body.result.serverInfo.name).toBe("stub-server");
 			expect(res.headers.get("mcp-session-id")).not.toBeNull();
 		});
+	});
+
+	test("the entry's serverInfo.version is package.json's, not a literal", async () => {
+		// The version was a string in the entry and another string in the protocol
+		// page, and nothing compared them: 0.2.0 answered `initialize` with "0.1.0"
+		// while the page quoted that response. This reads the entry's own source and
+		// the page's own line, because both are what a reader would copy.
+		const entry = readFileSync(join(root, "extensions", "a2a-bridge.ts"), "utf8");
+		expect(entry).toContain("version: pkg.version");
+		// Anchored on `serverInfo` so the comment above it — which quotes the old
+		// literal as the mistake it replaced — is not itself the match. A regex over
+		// the whole file reported the comment as the defect and failed a correct fix.
+		expect(entry).not.toMatch(/serverInfo:[^}]*version:\s*"/);
+
+		const protocol = readFileSync(join(root, "docs", "protocol.md"), "utf8");
+		const quoted = protocol.match(/"serverInfo":\s*\{[^}]*\}/)?.[0] ?? "";
+		expect(quoted).toContain("<package.json 的 version>");
+		// And the value it points at is the one the package actually declares.
+		expect(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version).toMatch(/^\d+\.\d+\.\d+$/);
 	});
 
 	test("initialize with unsupported protocolVersion -> server version wins", async () => {

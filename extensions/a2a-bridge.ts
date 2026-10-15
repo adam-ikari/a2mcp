@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { auditHostLlm } from "../src/audit.ts";
 import { buildCallTool, buildToolCatalog, hasMainSession } from "../src/bridge.ts";
@@ -6,6 +7,19 @@ import type { BridgeConfig } from "../src/config.ts";
 import { configPath, generateToken, loadConfig, saveConfig } from "../src/config.ts";
 import { startServer } from "../src/server.ts";
 import { hostLlmState, rearmMainSession, setEnabled } from "../src/takeover.ts";
+
+/**
+ * The bridge's own version, from `package.json`.
+ *
+ * Read, not imported: the host loads this file through its own module shim, which
+ * rewrites bare specifiers like `@oh-my-pi/*`, and the packaged extension ships
+ * `src/` alongside `extensions/` rather than a bundler output — so this must be a
+ * path relative to this file, and it is (`../package.json`). Keeping it a literal
+ * instead is what this note replaces: 0.2.0 went out answering `initialize` with
+ * `version: "0.1.0"` while `docs/protocol.md` quoted that response and agreed with
+ * it. Nothing compared the two.
+ */
+const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string };
 
 let server: { port: number; fellBack: boolean; stop(): void } | null = null;
 let cfg: BridgeConfig | null = null;
@@ -98,7 +112,11 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 							return { content: [{ type: "text", text: "main session not available" }], isError: true };
 						return liveCallTool(name, args, sid);
 					},
-					serverInfo: () => ({ name: "omp-a2a-bridge", version: "0.1.0" }),
+					// From package.json rather than a literal: it was a literal, and the
+					// protocol page quotes this response verbatim — so 0.2.0 shipped with
+					// the code still answering "0.1.0" and the page agreeing with the
+					// code. Two copies of a version number, and nothing compares them.
+					serverInfo: () => ({ name: "omp-a2a-bridge", version: pkg.version }),
 					takeover: { setEnabled },
 				});
 				if (!hasMainSession()) {

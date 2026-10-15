@@ -1,6 +1,6 @@
 {
   "name": "pi-a2a-ext",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Expose a running omp session's tools over MCP (Streamable HTTP), with a raw-byte upload endpoint",
   "license": "MIT",
   "type": "module",
@@ -47,8 +47,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
-    "@oh-my-pi/pi-ai": "18.8.7",
-    "@oh-my-pi/pi-coding-agent": "18.8.7",
+    "@oh-my-pi/pi-ai": "18.10.4",
+    "@oh-my-pi/pi-coding-agent": "18.10.4",
     "@types/bun": "^1.4.2",
     "typescript": "5.9.3"
   }
