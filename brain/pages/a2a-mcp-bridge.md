@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-16T04:02:22"
+updated: "2026-10-16T04:18:02"
 ---
 
 <!-- compiled_truth -->
@@ -749,4 +749,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "宿主 omp 18.11.0（2026-10-16，宿主自己升的）：pin 与 bun.lock 同步到 18.11.0（版本守卫如期红两条）。18.11.0 起 ~/.omp/plugins 按 HOME 解析（18.10.4 上不跟随），且加载读 omp-plugins.lock.json 里的登记、不是目录里有什么——临时 HOME 里只放软链不加载，omp install 过才加载。因此 test:install 的端到端改成把 omp install . 装进它自己起的那个临时 HOME：自包含，且不再在真实 HOME 留 pi-a2a-ext 登记。四处写「插件目录不跟随 HOME」的实测结论改成带版本的写法。第一次判定「不跟随」用的是 </dev/null 起的宿主，stdin EOF 即退出、什么都没加载——harness 早已记着这条"
   source: "本地实测三组 + 九个宿主核验与站点守卫重跑；commit e5e8f61"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-16T04:18:02
+  kind: decision
+  summary: "发布卫生：一个装不上的版本从 GitHub Release 撤掉，而不是标 prerelease 或加一句「请用新版」——发布入口里不该留着一个装不上的东西。v0.1.0 与 v0.2.0 的 Release 于 2026-10-16 撤下，三个 tag 全留（gh release delete 不加 --cleanup-tag），可安装入口只留 v0.2.1。CHANGELOG 的历史节不动，开头补一句现状"
+  source: "操作者决定（2026-10-16）；commit 88dc4f9"
   affects: [a2a-mcp-bridge]
