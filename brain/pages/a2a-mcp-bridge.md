@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-15T09:19:41"
+updated: "2026-10-16T03:18:36"
 ---
 
 <!-- compiled_truth -->
@@ -731,4 +731,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: reversal
   summary: "版本号从 package.json 读引出的新失败模式（2026-10-15）。v0.2.0 把 serverInfo.version 从字面量改成读 ../package.json 是对的（旧字面量 0.1.0 与 docs/protocol.md 互相背书、没人比对），但那次 readFileSync 在模块顶层且不兜底，于是在 extensions/ 直接躺在 agent 目录下、旁边没有 package.json 的布局里，一个版本号就能让整个扩展加载失败——这是在模拟真实复制品布局时才撞出来的，本机工作树形状暴露不了。改成读不到就报 unknown：一个因为版本号而加载不起来的桥，比一个报 unknown 的桥更糟。"
   source: extensions/a2a-bridge.ts
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-16T03:18:36
+  kind: decision
+  summary: "远程经公网 URL + token 访问是一等受支持场景，实测可用（2026-10-16，操作者原话：必须满足这个使用场景）。测法：数据中心这一侧的进程当 MCP 客户端，经 cloudflare quick tunnel（https://…trycloudflare.com）驱动一台 Windows 上跑着的宿主，18 项全过——initialize 回 serverInfo.version=0.2.1（顺带证明该机装的已是修好的 v0.2.1 而非装不上的 v0.2.0）、tools/list 22 个（宿主注册表逐字，含 write/edit/bash）、tools/call bash 真跑出输出、write 建文件、read 读回、edit 改行、POST /blob 15 字节原样落盘、未知工具与未知方法（-32601）都报错、错/缺 token 401、bogus session 404、DELETE 204。机制侧：桥不校验 Host/Origin，绑 0.0.0.0 或经反向代理都通；TLS 由隧道提供，token 是唯一的门。**据此，README「默认只监听 127.0.0.1，跨机器要用 SSH 端口转发」与协议页「真要对外暴露，防火墙自己负责」的措辞，把隧道/公网 URL 当成旁门而非一等路径，需要改**（本页此前的印象也是「只绑回环」，操作者这次纠正为「这个场景必须满足」）。操作者当时只要实测结论，文档改动挂起。附带一条宿主事实：这台机器的 edit 是 Hashline 补丁 DSL（单个 input 字段，[PATH#TAG] + PUT N.=M:），不是 oldString/newString——远端客户端必须按每个宿主工具自己的 schema 说话，桥一个字不加。"
+  source: "公网隧道实测 2026-10-16"
   affects: [a2a-mcp-bridge]
