@@ -145,6 +145,20 @@ A2A bridge listening on http://127.0.0.1:<port> (token <前6字符>…)
 
 连上后远程侧会看到 `mcp__omp-host__read`、`mcp__omp-host__bash` 之类的工具，直接调用即可。
 
+## 给远程 agent 的提示词
+
+远程 agent 会拿宿主的工具当自己熟悉的同名工具来调，而 `tools/list` 回的是宿主注册表逐字——这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），不是 `oldString`/`newString`，猜错换来的是 `File not found`。把下面这段放进它的会话或系统提示，`<port>`、`<token>` 与工具前缀按 `mcp.json` 里的名字替换。
+
+```text
+你通过 MCP 服务 omp-host 拿到了另一台机器（下称宿主）的工具。
+
+- 这些工具在宿主上真执行：bash 在宿主的 shell 里跑，read/write/edit 读写宿主磁盘上的文件。路径是宿主机的路径，不是你运行环境的路径——拿不准就先 bash 看 $HOME 和 pwd。
+- 工具清单与每个工具的 schema 以 tools/list 为准，宿主当前开了哪些就有什么。调用前先读那个工具的 schema，它与你在别处用过的同名工具不一定同形。
+- 宿主不发模型请求，也没有 agent 替你干活：bash/read 返回什么就是什么，推理在你这边。
+- 宿主可能给某些工具配了审批；宿主无交互界面时这类调用会一直挂着而不是报错。给每次调用设一个超时。
+- 能一条命令说清的事，别拆成一串来回。
+```
+
 ## 跨机转发
 
 默认只绑回环，不对外网开放。远程机做 SSH 端口转发：

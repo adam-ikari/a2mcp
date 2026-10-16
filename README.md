@@ -153,6 +153,20 @@ The remote omp's `mcp.json`:
 
 Once connected, the remote side sees tools like `mcp__omp-host__read` and `mcp__omp-host__bash` and can call them directly.
 
+## Prompt for the remote agent
+
+A remote agent will call the host's tools as if they were the same-named tools it already knows, and `tools/list` returns the host's registry verbatim — on this machine `edit` is a patch syntax (`[PATH#TAG]` plus `PUT N.=M:`), not `oldString`/`newString`, and a guess gets back `File not found`. Put the block below in its session or system prompt, replacing `<port>`, `<token>` and the tool prefix with the names from your `mcp.json`.
+
+```text
+You have been given the tools of another machine (the host) through the MCP server omp-host.
+
+- These tools really execute on the host: bash runs in the host's shell, read/write/edit read and write files on the host's disk. Paths are host paths, not paths in your own environment — when unsure, run bash first and look at $HOME and pwd.
+- The tool list and each tool's schema come from tools/list, and it holds exactly what the host currently has enabled. Read a tool's schema before calling it; it is not necessarily the same shape as the same-named tool you have used elsewhere.
+- The host issues no model requests and has no agent working for you: bash/read return what they return, and the reasoning is yours.
+- The host may require approval for some tools; with no interactive UI on the host, such a call hangs rather than erroring. Put a timeout on every call.
+- If one command says it, do not split it across several round trips.
+```
+
 ## Cross-machine forwarding
 
 Loopback-only by default, never exposed to the network. Forward the port over SSH from the remote machine:
