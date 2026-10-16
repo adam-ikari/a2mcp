@@ -16,7 +16,7 @@
 | `bun run test:install` | 发布包自包含 + 端到端，33 项 | 是 | `PACKAGE OK` |
 | `bun run test:scenario` | 端到端场景，10 个叙事 / 54 步，约 45 秒 | 是 | `SCENARIOS: 54 steps, 0 failed` |
 
-统一前置（七个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程是另一个例外：它走 `omp install .` 装进**真实**插件目录，因为宿主解析 `~/.omp/plugins` 不受 `HOME` 影响、也没有环境变量能改道（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，blob 核验失败时还要多留 100 MB 级别的上传，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（七个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主 18.11.0 按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，blob 核验失败时还要多留 100 MB 级别的上传，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
 七个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
@@ -39,20 +39,20 @@
 
 ## 插件发现与 HOME：实测结论
 
-早先这个核验断言「宿主解析插件目录不受 `HOME` 影响」，并据此放弃了端到端。**那条结论是错的，来源是一次坏探针。** 实测：
+这个核验在插件目录上翻过一次，宿主换版本时又翻了第二次，所以这里带上版本。18.10.4 上实测 `~/.omp/plugins` 不跟随 `HOME`——**那次结论本身是对一次坏探针的更正**；18.11.0 上它跟随。实测：
 
 | 目录 | 是否跟随 `HOME` | 证据 |
 | --- | --- | --- |
 | `~/.omp/agent/extensions/` | **跟随** | 往临时 HOME 放一个只打印标记的扩展，标记出现了 |
-| `~/.omp/plugins/` | **不跟随** | 桥仍从真实插件目录加载；`OMP_PLUGIN_DIR`、`OMP_PLUGINS_DIR`、`XDG_DATA_HOME` 都不能改道 |
+| `~/.omp/plugins/` | **18.10.4 不跟随，18.11.0 跟随** | 18.11.0 上，临时 HOME 里 `omp install` 的插件会加载、真实 HOME 那份不会；加载读的是 `omp-plugins.lock.json` 里的登记，只放软链不加载（实测） |
 
-坏探针错在哪：它只往临时 HOME 的 agent 目录放标记，没往 plugins 目录放；而且**没给临时 HOME 写 `models.yml`**。
+第一次的坏探针错在哪：它只往临时 HOME 的 agent 目录放标记，没往 plugins 目录放；而且**没给临时 HOME 写 `models.yml`**。
 
 第二点是关键，也单独吃过一次亏：**宿主没有模型配置就不创建 session，扩展在 `session_start` 加载，于是桥永远不广播**。这个症状与「插件发现忽略了我的 HOME」完全一样。写「桥没起来」的失败信息时，先看有没有这句 `No models available`。所有起宿主的核验都走 `test/harness.ts` 播种 `models.yml`（不可达 provider，够启动即可，桥不推理）。这个播种的边界要写清：它证明的是「桥不靠模型回答也能跑」，证不了「宿主不发模型请求」——不可达的请求静默失败，计数看不见。现实里确实有一条链从这个盲区漏出去：远程 `bash` 超过宿主 300 秒超时会被宿主转成后台任务，任务完成的 `async-result` 通知进会话，唤醒宿主自己的 agent 开始推理（远程 Windows 宿主实测，见 [computer-use](./computer-use.md)）。当时现有核验没有一条走后台任务路径——审批探针把 `bash` 挂住就看结论，超时转后台这条路没碰过。这条盲区由 2026-10-12 的第七核验收口：`test:takeover` 在带接管与撤掉接管两种状态下各测一次长 `bash`，唤醒链在负控那侧被真实地跑起来并数到（见「test:takeover」一节）。
 
-所以端到端这组**不假装自己验证了干净机器**——插件发现确实无法用环境变量改道。
+所以端到端这组现在是自包含的：它把插件装进自己那个临时 `HOME`，宿主从同一个 `HOME` 加载，真实机器上不留登记。
 
-它每次先卸载再 `omp install .`，所以插件目录里那份永远是链接、永远指向工作区。原先
+它每次先卸载再 `omp install .`，所以那个临时 HOME 的插件目录里那份永远是链接、永远指向工作区。原先
 写的是「已装就跳过」，那是个洞：git URL 装出来的是实体拷贝，冻结在装的那一刻，于是
 改坏工作区的 `src/bridge.ts` 之后端到端全绿报 `PACKAGE OK`——它根本没看工作区。实测
 复现过。现在破坏工作区会如实变红并点名那个文件。

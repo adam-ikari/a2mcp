@@ -81,12 +81,12 @@ The URL has to be the full `https://….git` — a GitHub `owner/repo` shorthand
 rejected as an invalid package name, and pointing it at a `.tgz` fails with
 `ENOTDIR`.
 
-All of the above was measured, and `bun run test:install` checks the package, then
-starts a host and drives the bridge over MCP as a remote client. One thing it
-cannot do is pretend the machine is clean: the host resolves `~/.omp/plugins`
-independently of `HOME`, and no env var redirects it — so that half runs against
-the real plugin directory an `omp install` writes to. See
-[docs/testing.md](docs/testing.md).
+All of the above was measured, and `bun run test:install` checks the package,
+installs it into a temporary `HOME`, starts a host there, and drives the bridge
+over MCP as a remote client. Host 18.11.0 resolves `~/.omp/plugins` by `HOME`, and
+what loads is the registration in `omp-plugins.lock.json` — a bare symlink loads
+nothing. So that half is self-contained, and it leaves no registration on your
+real machine. See [docs/testing.md](docs/testing.md).
 
 Nor hand-symlink into `~/.omp/agent/extensions/`:
 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` only works when `$PWD` happens to be

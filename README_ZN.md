@@ -76,10 +76,11 @@ omp plugin uninstall pi-a2a-ext
 URL 必须是完整的 `https://….git`——GitHub 的 `owner/repo` 简写会被当作非法包名
 拒绝；指向 `.tgz` 会报 `ENOTDIR`。
 
-上面这些是实测过的，`bun run test:install` 也覆盖：核验发布包、再起一个宿主、
-以远程客户端身份把桥的 MCP 面走完。做不到的是假装机器是干净的——宿主解析
-`~/.omp/plugins` 不受 `HOME` 影响，也没有环境变量能改道，所以端到端那半程跑的是
-`omp install` 真实写入的那个插件目录。见 [docs/testing.md](docs/testing.md)。
+上面这些是实测过的，`bun run test:install` 也覆盖：核验发布包、把插件装进一个临时
+`HOME`、在那里起宿主，以远程客户端身份把桥的 MCP 面走完。宿主 18.11.0 起按 `HOME`
+解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记——光有软链不加载，
+已实测。所以那半程是自包含的，也不会在你的真实机器上留下登记。见
+[docs/testing.md](docs/testing.md)。
 
 也别手工软链到 `~/.omp/agent/extensions/`：`ln -s "$PWD/extensions/a2a-bridge.ts" ...`
 只在 `$PWD` 恰好是仓库根目录时有效，换个目录执行就链到一个不存在的路径，桥静默地

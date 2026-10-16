@@ -60,8 +60,9 @@ export function seedModels(agentDir: string): string {
  * a bridge bug and is not one.
  *
  * Note the direction this proves: the host follows HOME for `~/.omp/agent/
- * extensions/` but not for `~/.omp/plugins/`. A probe that relies on the real
- * plugin directory tests whatever is installed there, not this checkout.
+ * extensions/`, and as of host 18.11.0 for `~/.omp/plugins/` too (on 18.10.4 it
+ * did not — see the header of test/install-probe.ts). A probe that leans on the
+ * real plugin directory now loads nothing at all under a temp HOME.
  */
 export function linkExtension(agentDir: string): void {
 	const REPO = resolve(import.meta.dir, "..");

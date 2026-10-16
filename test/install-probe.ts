@@ -15,20 +15,24 @@
  *
  * ## On plugin discovery and HOME
  *
- * An earlier version of this probe asserted the host's plugin directory is
- * isolated by `HOME`, and that turned out to be half true. Measured:
+ * Measured twice on two host versions, and the answer moved, so the version is
+ * part of the note:
  *
- *   ~/.omp/agent/extensions/   follows HOME  (a marker extension planted in a
- *                                        temp HOME does load)
- *   ~/.omp/plugins/            ignores HOME  (the bridge still loads from the
- *                                        real one; OMP_PLUGIN_DIR,
- *                                        OMP_PLUGINS_DIR and XDG_DATA_HOME do
- *                                        not redirect it)
+ *   ~/.omp/agent/extensions/   follows HOME             (a marker extension
+ *                                        planted in a temp HOME does load)
+ *   ~/.omp/plugins/            follows HOME as of 18.11.0  (on 18.10.4 it did
+ *                                        not; a temp HOME's registry is what
+ *                                        the host reads now)
  *
- * So discovery is not redirectable by env var. The end-to-end half below
- * therefore does not pretend to a clean machine: it drives the host over the
- * real plugin directory, which is where an installed bridge actually lives, and
- * asserts on what the bridge does rather than on which directory it came from.
+ * What loads is the *registration*, not the directory: `omp install` writes the
+ * plugin into `<plugins>/omp-plugins.lock.json` and the host loads from that
+ * lock. A bare symlink into a temp HOME's `node_modules`, with no lock entry,
+ * loads nothing — demonstrated on 18.11.0.
+ *
+ * So the end-to-end half below installs into the *same* HOME it boots with. That
+ * makes it self-contained, and it drops a side effect the earlier shape had:
+ * installing under the real HOME left pi-a2a-ext registered on the developer's
+ * machine.
  *
  * A second trap cost an hour and is worth writing down: **the host refuses to
  * create a session without model configuration, and extensions load on
@@ -44,7 +48,7 @@
  */
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { seedModels } from "./harness";
@@ -252,34 +256,50 @@ console.log(`  ${e2eNote}`);
 // it links the working tree, so the host loads whatever is there right now. The
 // README's git URL installs a copy of master, which cannot test uncommitted work.
 // A local install is a test fixture here, not a supported install method.
-const installedPlugin = join(homedir(), ".omp", "plugins", "node_modules", "pi-a2a-ext");
+// A local install is a test fixture here, not a supported install method.
+//
+// Install under `e2eHome`, the HOME the host below boots with: as of host
+// 18.11.0 the plugin registry is HOME-scoped, so an install under the real HOME
+// is invisible to that host (see the header).
+const e2eEnv = { ...process.env, HOME: e2eHome };
+const installedPlugin = join(e2eHome, ".omp", "plugins", "node_modules", "pi-a2a-ext");
+const lockPath = join(e2eHome, ".omp", "plugins", "omp-plugins.lock.json");
 let installNote = "";
 try {
 	// Uninstall first: a leftover git-URL copy is a real directory, and install
 	// would treat it as already present.
-	execFileSync("omp", ["plugin", "uninstall", "pi-a2a-ext"], { stdio: "ignore" });
+	execFileSync("omp", ["plugin", "uninstall", "pi-a2a-ext"], { env: e2eEnv, stdio: "ignore" });
 } catch {
 	// Nothing installed is the normal case on a fresh machine.
 }
 try {
-	const out = execFileSync("omp", ["install", REPO], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	const out = execFileSync("omp", ["install", REPO], {
+		env: e2eEnv,
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+	});
 	installNote = out.trim().split("\n").pop() ?? "installed";
 } catch (e) {
 	const err = String((e as { stderr?: string }).stderr ?? "");
 	check(false, "omp install links the extension", err.trim() || String(e));
 }
+// The two halves only work together: the host loads from the lock, so a link with
+// no lock entry loads nothing. Kept as one item, and the detail says which half
+// is missing.
+const linked = existsSync(installedPlugin);
+const registered = existsSync(lockPath) && readFileSync(lockPath, "utf8").includes('"pi-a2a-ext"');
 check(
-	existsSync(installedPlugin),
-	"omp install puts pi-a2a-ext in the real plugin directory",
-	`looked for ${installedPlugin}; omp install said: ${installNote}`,
+	linked && registered,
+	"omp install links the plugin and registers it in the lock, under the HOME it ran in",
+	`link: ${linked ? "present" : "missing"}; lock entry: ${registered ? "present" : "missing"}; omp install said: ${installNote}`,
 );
-// The host loads whatever sits in that directory, so if it is not the working
-// tree the ten assertions below are about a stale copy. A link is the only shape
-// that guarantees that; a copy is frozen at install time.
+// The host loads whatever the lock points at, so if it is not the working tree
+// the assertions below are about a stale copy. A link is the only shape that
+// guarantees that; a copy is frozen at install time.
 check(
-	realpathSync(installedPlugin) === realpathSync(REPO),
+	linked && realpathSync(installedPlugin) === realpathSync(REPO),
 	"the plugin directory points at this working tree, not a copy of it",
-	`${installedPlugin} -> ${realpathSync(installedPlugin)}`,
+	linked ? `${installedPlugin} -> ${realpathSync(installedPlugin)}` : `${installedPlugin} is missing`,
 );
 
 const host = spawn("omp", ["--mode", "rpc"], {
