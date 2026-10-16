@@ -1,6 +1,6 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**不发布到 npm** —— 安装方式只有 `omp install <git-url>` 一条，见 README。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**不发布到 npm** —— 安装方式只有 `omp install <git-url>` 一条，见 README。可安装的 Release 现在只有 `v0.2.1`：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，tag 全部保留（见当日一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
@@ -14,6 +14,7 @@
 - docs: 「插件目录不跟随 `HOME`」这条实测结论写在四处（两份 README、`docs/testing.md` 的表、探针与 harness 的注释），四处一起改成带版本的写法：18.10.4 不跟随、18.11.0 跟随。旧结论本身是对更早一次坏探针的更正，所以这次把版本写进结论里，下次它再翻也能看出来
 - docs: 协议页的内存表按 `test/rss-18.11.0.json` 刷新（第三十一轮）：空闲 461 MB，单个 +18、并发 +43，两项峰值都等于安顿。文件名带宿主版本，旧版本那份 `rss-18.10.4.json` 留在 `test/` 里当历史，表指向最新那份
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
+- release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
 
 ## v0.2.1 — 修：换机器装不上
