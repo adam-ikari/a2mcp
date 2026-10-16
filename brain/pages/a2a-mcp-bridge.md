@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-16T03:28:42"
+updated: "2026-10-16T04:02:22"
 ---
 
 <!-- compiled_truth -->
@@ -743,4 +743,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "文档不写公网/隧道这条（2026-10-16，操作者：不用写上）。前一条 decision 里「README 与协议页措辞需要补上一等隧道路径、文档改动挂起」到此关闭：**不改**，对外部署说明维持现状（README 讲 SSH 端口转发，协议页讲「真要对外暴露，防火墙自己负责」）。公网隧道是受支持且实测可用的场景（见前条 18 项），只是不落进文档。"
   source: operator 2026-10-16
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-16T04:02:22
+  kind: decision
+  summary: "宿主 omp 18.11.0（2026-10-16，宿主自己升的）：pin 与 bun.lock 同步到 18.11.0（版本守卫如期红两条）。18.11.0 起 ~/.omp/plugins 按 HOME 解析（18.10.4 上不跟随），且加载读 omp-plugins.lock.json 里的登记、不是目录里有什么——临时 HOME 里只放软链不加载，omp install 过才加载。因此 test:install 的端到端改成把 omp install . 装进它自己起的那个临时 HOME：自包含，且不再在真实 HOME 留 pi-a2a-ext 登记。四处写「插件目录不跟随 HOME」的实测结论改成带版本的写法。第一次判定「不跟随」用的是 </dev/null 起的宿主，stdin EOF 即退出、什么都没加载——harness 早已记着这条"
+  source: "本地实测三组 + 九个宿主核验与站点守卫重跑；commit e5e8f61"
   affects: [a2a-mcp-bridge]
