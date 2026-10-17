@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-17T17:18:54"
+updated: "2026-10-17T17:36:13"
 ---
 
 <!-- compiled_truth -->
@@ -845,4 +845,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "订正一处说法：钉的是**归档**的 sha256，登记（a2a-bridge.installs.json）存的是解出来那个二进制自己的 sha256，两者不同名，所以「~/.local/bin 已存在且哈希等于钉值就复用」这句是错的——复用比对的是登记那一行，失败消息里两个哈希都打印。代码从一开始就是对的，错的是文档与 CHANGELOG 的措辞。差点被当成校验失效：那次 e2e 里 dufs 装成功后 cloudflared 下载超时，登记写的是 2c91337a…，钉值是 817769f7…。"
   source: "端到端 e2e（两个二进制都缺、隔离 HOME、PATH 只剩三条）跑出来的核对"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-17T17:36:13
+  kind: evidence
+  summary: "两个二进制都由一次 xfer_share 拉，实测 14.0 秒返回：installed 同时点名 dufs 0.46.0 与 cloudflared 2026.10.1，两份都落进桥自己的 HOME（6.4 MB / 38.4 MB，0755），登记各一行，审计 install 两条加 share/stop；loopback GET 字节一致、PUT 201 落盘、错密码 401、停止后端口释放，操作者真正的 ~/.local/bin 依然没有 dufs。出网差时的另一遍留下对照：dufs 装成功、cloudflared 的 40 MB 卡在流里、120 秒到点回 isError 带失败原文，共享没开成、dufs 服务被收走、无孤儿进程，整趟 229 秒。冷装的最坏值与正常值就此各有一个实测数，不需要再猜。"
+  source: "2026-10-17 端到端跑绿那一遍（真宿主、隔离 HOME、PATH 削到只剩宿主）"
   affects: [a2a-mcp-bridge]
