@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-17T03:50:56"
+updated: "2026-10-17T17:18:54"
 ---
 
 <!-- compiled_truth -->
@@ -149,9 +149,9 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 
 `xfer_share` / `xfer_status` / `xfer_stop`（`src/xfer.ts`）由桥自己服务，追加在宿主注册表之后，因此绕过宿主审批门；字节走普通 HTTP——dufs 在 `127.0.0.1` 上以随机端口和随机 basic auth 起服务，cloudflared quick tunnel 给它一个公网主机名。
 
-这条 2026-10-17 翻了面：原先的契约是「二进制只命名、不内置、也不下载」，现在是**缺的那一个由桥自己拉到 `~/.local/bin`**（操作者定死，dufs 与 cloudflared 都要，触发点是首次 `xfer_share`）。解析顺序四步：配置里的值含 `/` 就原样用且**绝不下载**（这是「这台机器永远不许下载」的唯一出口，裸写 `"dufs"` 不是出口）→ 在 `PATH` 上逐段找可执行文件（不起 shell、不 `which`，机器有就别抢）→ `~/.local/bin/<name>` 已存在且哈希等于钉值就复用 → 下载。
+这条 2026-10-17 翻了面：原先的契约是「二进制只命名、不内置、也不下载」，现在是**缺的那一个由桥自己拉到 `~/.local/bin`**（操作者定死，dufs 与 cloudflared 都要，触发点是首次 `xfer_share`）。解析顺序四步：配置里的值含 `/` 就原样用且**绝不下载**（这是「这台机器永远不许下载」的唯一出口，裸写 `"dufs"` 不是出口）→ 在 `PATH` 上逐段找可执行文件（不起 shell、不 `which`，机器有就别抢）→ `~/.local/bin/<name>` 已存在、且它自己的 sha256 等于登记里桥为这一条写下的那一行，就复用 → 下载。
 
-钉的是版本 + sha256 的字面量表（`src/obtain.ts`，键 `${platform}-${arch}`）：dufs 0.46.0 与 cloudflared 2026.10.1 各四行（linux-x64 / linux-arm64 / darwin-x64 / darwin-arm64），哈希取自 GitHub release 资产的 `digest`；cloudflared 那四行是 2026-10-17 出网恢复之后才读回来的，四个 asset 都真下载、哈希对着从头到尾的字节复算过。**没读到的哈希不写进表**这条仍然照着办：那天之前表里那一半是空的，桥对 cloudflared 就还是只认 PATH。形状差别记在 `kind`：dufs 四行都是归档，cloudflared 的 Linux 是裸 ELF、macOS 是里面只有一个 `cloudflared` 的 `.tgz`，取的都是普通构建不是 `-fips`。不变的约束：不请求 `latest`，不向发字节的同一台服务器要校验和，不覆盖别人的文件（目标已存在且哈希不等就拒绝并打印那个文件自己的 sha256），下载有界（64 MB、120 秒，上限按钉表里最大的 asset——cloudflared 的 Linux 构建 40 MB——留出升级余量），同一 name 并发单飞，解包只进新建的临时目录并 realpath 断言包含性，安装排在审计之后（`tool: "xfer"`，`action: "install"`，遵守 2026-10-10 那条「唯一痕迹不能排在可能抛错的步骤后面」），每次安装另记一行 `<agentDir>/a2a-bridge.installs.json`，复用看的是它。回包多一个 `installed: {dufs, cloudflared}`，让调用方知道自己为什么多等了几秒；下载就地等完，没有「正在装，稍后再来」的中间态。
+钉的是版本 + **归档** sha256 的字面量表（GitHub release 资产 `digest` 是归档的哈希，不是解出来那个文件的；对完归档才解包，解出来那份自己的 sha256 另写进登记，所以「哈希等于钉值」这种说法本身是错的，两个哈希不同名）（`src/obtain.ts`，键 `${platform}-${arch}`）：dufs 0.46.0 与 cloudflared 2026.10.1 各四行（linux-x64 / linux-arm64 / darwin-x64 / darwin-arm64），哈希取自 GitHub release 资产的 `digest`；cloudflared 那四行是 2026-10-17 出网恢复之后才读回来的，四个 asset 都真下载、哈希对着从头到尾的字节复算过。**没读到的哈希不写进表**这条仍然照着办：那天之前表里那一半是空的，桥对 cloudflared 就还是只认 PATH。形状差别记在 `kind`：dufs 四行都是归档，cloudflared 的 Linux 是裸 ELF、macOS 是里面只有一个 `cloudflared` 的 `.tgz`，取的都是普通构建不是 `-fips`。不变的约束：不请求 `latest`，不向发字节的同一台服务器要校验和，不覆盖别人的文件（目标已存在、它的 sha256 与登记那一行不等就拒绝，并把文件自己的哈希与钉值一起打印），下载有界（64 MB、120 秒，上限按钉表里最大的 asset——cloudflared 的 Linux 构建 40 MB——留出升级余量），同一 name 并发单飞，解包只进新建的临时目录并 realpath 断言包含性，安装排在审计之后（`tool: "xfer"`，`action: "install"`，遵守 2026-10-10 那条「唯一痕迹不能排在可能抛错的步骤后面」），每次安装另记一行 `<agentDir>/a2a-bridge.installs.json`，复用看的是它。回包多一个 `installed: {dufs, cloudflared}`，让调用方知道自己为什么多等了几秒；下载就地等完，没有「正在装，稍后再来」的中间态。
 
 判据写在 AGENTS.md 的例外清单里（现在三条），形状与 `POST /host-llm` 一样：桥已经替宿主决定了用 dufs，这次只多一个意见——字节从哪来——而不是多一个权威。代价如实是审计、文档，和那个只有显式路径才成立的出口。升级钉版本就是改这个仓库的一次带哈希的提交，这是刻意的：不要无感漂移。
 
@@ -833,4 +833,16 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: Rewrote compiled_truth to the new best understanding
   source: "2026-10-17 出网恢复：cloudflared 四个 asset 真下载并复算哈希后填进钉表，下载上限随之从 32 MB/90 秒改成 64 MB/120 秒"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-17T17:18:37
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: "2026-10-17 两个二进制都缺的端到端：钉的是归档 sha256、登记存的是解出来那份二进制的 sha256，此前真值页写成「复用看钉值」是错的"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-17T17:18:54
+  kind: evidence
+  summary: "订正一处说法：钉的是**归档**的 sha256，登记（a2a-bridge.installs.json）存的是解出来那个二进制自己的 sha256，两者不同名，所以「~/.local/bin 已存在且哈希等于钉值就复用」这句是错的——复用比对的是登记那一行，失败消息里两个哈希都打印。代码从一开始就是对的，错的是文档与 CHANGELOG 的措辞。差点被当成校验失效：那次 e2e 里 dufs 装成功后 cloudflared 下载超时，登记写的是 2c91337a…，钉值是 817769f7…。"
+  source: "端到端 e2e（两个二进制都缺、隔离 HOME、PATH 只剩三条）跑出来的核对"
   affects: [a2a-mcp-bridge]

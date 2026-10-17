@@ -8,15 +8,17 @@
 
 `xfer_*` 在这台机器上其实不可用：`dufs` 不在 PATH 上，而契约写的是「二进制只命名、不内置、不下载」，报的错误要求人手去 GitHub 拖包。这条契约今天翻面——缺的自己拉，版本与哈希钉死，唯一的出口是配置里写路径。诚实的说法不是「图方便」：桥已经替宿主决定了用 dufs，这次只多一个意见（字节从哪来），不是多一个权威。
 
-- feat: `src/obtain.ts` 的 `resolveBinary(name, configured, sid, deps)`，四步：配置里的值含 `/` 就原样用（`access(X_OK)` 检查，**绝不下载**）→ 在 `PATH` 上逐段找可执行文件（不起 shell、不 `which`，机器有就别抢）→ `~/.local/bin/<name>` 已存在且哈希等于钉值就复用 → 下载
-- feat: 钉表是模块里的字面量，键 `${platform}-${arch}`，两个二进制各四行（linux-x64 / linux-arm64 / darwin-x64 / darwin-arm64）：dufs 0.46.0 的哈希取自 GitHub release 资产的 `digest`，cloudflared 2026.10.1 那天出网通了才读回来。哈希一律不向发字节的那一步要：cloudflared 四行、dufs 的 linux-x64 一行是手动下载复算的，其余由 `bun run test:obtain` 每轮把八个 URL 全 `HEAD` 一遍、本机那一行真下真跑。形状差别记在 `kind` 里：dufs 四行都是归档，cloudflared 的 Linux 是裸 ELF、macOS 是里面只有一个 `cloudflared` 的 `.tgz`；取的是普通构建不是 `-fips`，没有宿主要过 FIPS
+- feat: `src/obtain.ts` 的 `resolveBinary(name, configured, sid, deps)`，四步：配置里的值含 `/` 就原样用（`access(X_OK)` 检查，**绝不下载**）→ 在 `PATH` 上逐段找可执行文件（不起 shell、不 `which`，机器有就别抢）→ `~/.local/bin/<name>` 已存在、且它自己的 sha256 等于登记里桥为这一条写下的那一行，就复用 → 下载
+- feat: 钉表是模块里的字面量，键 `${platform}-${arch}`，两个二进制各四行（linux-x64 / linux-arm64 / darwin-x64 / darwin-arm64）：dufs 0.46.0 的哈希取自 GitHub release 资产的 `digest`，cloudflared 2026.10.1 那天出网通了才读回来。哈希一律不向发字节的那一步要：cloudflared 四行、dufs 的 linux-x64 一行是手动下载复算的，其余由 `bun run test:obtain` 每轮把八个 URL 全 `HEAD` 一遍、本机那一行真下真跑。形状差别记在 `kind` 里：dufs 四行都是归档，cloudflared 的 Linux 是裸 ELF、macOS 是里面只有一个 `cloudflared` 的 `.tgz`；取的是普通构建不是 `-fips`，没有宿主要过 FIPS。钉的是**归档**的 sha256——GitHub release 资产的 `digest` 就是归档的，不是解出来那个文件的——所以回来先对归档，解包，再把解出来那份自己的 sha256 写进登记；两哈希不同名这件事端到端那一遍才暴露，此前文档写成「复用看的是钉值」，实际看的是登记那一行
 - fix: 下载有界——64 MB 上限、120 秒墙上时钟、边流式边哈希；上限按钉表里最大的那个 asset（cloudflared 的 Linux 构建 40 MB）留了升级的余量。不请求 `latest`，也不向发字节的同一台服务器要校验和
 - fix: 解包只进新建的 `mkdtemp`，`tar -tzf` 先点名条目，解完 `realpath` 断言还在那个目录里；落盘是同目录 `.part` + `rename`，`0o755`；同一个 name 的并发调用单飞，第二个人等同一条 promise；平台不在表里就报错点名 `platform/arch`
-- fix: 目标位置已有文件时，先哈希再决定——等于钉值才复用，不等就拒绝并打印那个文件自己的 sha256。桥不覆盖别人的文件，也不留 marker
+- fix: 目标位置已有文件时，先哈希再决定——等于登记里那一行才复用，不等就拒绝并打印那个文件自己的 sha256，同时把钉值一并摆出来。桥不覆盖别人的文件，也不留 marker
 - fix: 安装记录在 `spawn` 之前落审计（`tool: "xfer"`，`action: "install"`），每次安装另记一行到 `<agentDir>/a2a-bridge.installs.json`（`A2A_BRIDGE_INSTALLS` 可指走），复用看的是它
 - fix: `xfer_share` 的回包多一个 `installed: {dufs, cloudflared}`，让调用方知道自己为什么多等了几秒；下载就地等完，没有「正在装，稍后再来」的中间态
 - fix: `xfer_stop` 对着真隧道不返回——端到端跑出来的，25 秒客户端超时。关闭那条路径先给 dufs 发 `SIGTERM`，等隧道拆完，然后才 `once("exit")` 去听那个子进程；dufs 回 `SIGTERM` 只用几毫秒，事件在订阅之前就发过了，那个 await 永远等不到，第二次 `xfer_share` 顶替旧共享时卡的是同一处。等待现在在发信号之前登记，并且先读 `exitCode`：孩子已经不在了就当场过。共享实际早就关干净了，卡的只是答复
 - fix: `test:install` 那条「首次启动只写哪些键」的形状断言按 `xfer` 块补齐——昨天加默认块时没动它，`bun run test:install` 一直红着这一项（`PACKAGE` 1 check failed），今天全量回归才撞上。测试页的项数跟着按实测改：探针 35 项（总览表原写 33、节标题原写 28，两处都过期），内容那组 8 → 15 并把「只依赖一个宿主包」那两条补进断言清单
+- test: 补跑「两个二进制都缺」那一遍端到端（真宿主、隔离 `HOME`、`PATH` 削到只剩宿主自己）——这一条此前谁都没覆盖：探针里 cloudflared 是写明路径那一侧，单测把获取整个 stub 掉。跑到的是 dufs 由工具装成功、登记与 `install` 审计都落对，cloudflared 那 40 MB 在流里停住、120 秒到点回 `isError` 带失败原文，共享没开成、dufs 服务被收走、没有孤儿进程，整趟 229 秒返回；全绿那一遍卡在出网（同一个 asset 一会儿 200 一会儿证书错误），覆盖缺口如实写进测试页
+- fix: 端到端那一遍顺手纠正一处措辞。登记里 dufs 的 sha256 是 `2c91337a…` 而钉值是 `817769f7…`，看着像校验没对上却装了：其实钉的是**归档**的 sha256（release 资产的 `digest` 本来就是归档的），登记存的是解出来那个二进制自己的。**复用比对的是登记那一行，不是钉值**——CHANGELOG 与 brain 真值页那句「哈希等于钉值才复用」写错了，代码一直是对的，失败消息也同时打印两个哈希
 - test: 新增 `test/obtain.test.ts`（19 项，本地 `Bun.serve` 扮 GitHub，不靠外网）：哈希不符、哈希长度不对、tar slip、解出多余条目、目标是别人那份文件时拒绝、单飞只下载一次、超上限截断、超时、不支持的平台、PATH 命中不下载、显式路径不下载，以及 `spawn` 收到的是解析器给的绝对路径；钉表本身在两项里被检查——每一行的哈希是 64 位小写十六进制、URL 拼出来是 `<tag>/<asset>` 且不带 `latest`，两个二进制各自四行的形状
 - test: 新增 `bun run test:obtain`（`test/obtain-probe.ts`，31 项，进 CI 的 `host-probes`）：两个二进制都真下载、真跑 `--version`、真复用 → 用拉来的 dufs 起真共享 → GET 字节一致、Range 206、PUT 落盘、错密码 401、目录列表 200、关闭后端口释放 → 钉表八行 URL 全 `HEAD`。**`--auth user:pass@/:rw` 在 0.46.0 上重测过**，这条门过了版本号才进 README；真隧道那半程用第一节拉下来的那份 cloudflared 起，仍然只 `info:` 报告
 - test: 新增 `test/tunnel.test.ts`（4 项）钉住隧道输出读取的转录上限；`test/xfer.test.ts` 那条「dufs 缺失」改用路径形状（裸名现在是下载分支），另加一项断言裸名走解析器，以及上面那条关闭挂死的回归——它的隧道 stub 必须真花掉几十毫秒的事件循环时间，杀信号与订阅挨在一起就量不出这个洞
