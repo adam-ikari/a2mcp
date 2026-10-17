@@ -60,8 +60,8 @@ function serializeArgs(args: unknown): string {
  * `stat` → `rename` → `appendFile` is three steps and two calls in flight together
  * both read a size over the cap. Without this chain the second rotation writes over
  * the `.1` the first one just parked the previous generation in, and what vanishes is
- * the record another call wrote milliseconds earlier — for `POST /blob` that is the
- * whole trace, since that endpoint never goes through the host's approval gate.
+ * the record another call wrote milliseconds earlier, and that record is the whole
+ * trace of the call it belongs to.
  *
  * The returned promise is the tail of that chain, and callers await it before they
  * answer the request. It used to be handed the line and return, fire-and-forget, and
@@ -78,9 +78,8 @@ function serializeArgs(args: unknown): string {
  *     `start` to be on disk *before* the tool ran. Fire-and-forget let the tool's
  *     side effect land first, so a crash in that window left no trace at all rather
  *     than an incomplete one.
- *   - `POST /blob`'s record is the compensating control for the one write path that
- *     bypasses the host's approval gate. A 200 that beats its own trace is a weaker
- *     control than the documentation claims.
+ *   - a record that lands after its own response is a weaker control than the
+ *     documentation claims: the caller is told the call is on disk before it is.
  *
  * What it costs is one queued append per record: measured at ~99 µs for
  * `stat` + `appendFile` + `chmod` on this filesystem, serialized, so a request waits
@@ -134,7 +133,7 @@ function appendLine(line: string, env?: NodeJS.ProcessEnv): Promise<void> {
 			// Still swallowed: a rejection per line noise-floods the host's error log,
 			// and auditing must not become a way for the log to break the call
 			// (test/audit.test.ts pins this). Swallowed is not silent — the bridge's own
-			// safety argument is that this file is the only trace of a `POST /blob`, and
+			// safety argument is that this file is the only trace of a call, and
 			// an unwritable path would hollow that out with nothing to show. So the first
 			// failure on a path says so, then every hundredth failure overall, and the
 			// count stays readable through `auditWriteFailures()`.
@@ -201,52 +200,12 @@ export function auditDone(
 }
 
 /**
- * One record per `POST /blob` write.
- *
- * A single line rather than a start/done pair: the write either completes or the
- * request fails, and there is no approval prompt that could leave it hanging —
- * the blob endpoint never waits on a UI (see src/blob.ts for why it cannot).
- *
- * `args` carries metadata only. The payload is the file's bytes and never
- * appears here; `bytes` is the count. A failure is recorded with `error` set and
- * `bytes: 0`, so an audit grep distinguishes "wrote 16 MB" from "tried and
- * could not".
- *
- * Awaited before the endpoint answers, on every one of its five exits. That is
- * the whole point of this record: `/blob` is the one write path that does not go
- * through the host's approval gate, so a caller who gets a 200 should be able to
- * find the line that says so without polling for it.
- */
-export function auditBlob(
-	sid: string | null,
-	path: string,
-	offset: number,
-	bytes: number,
-	error: string | null,
-	env?: NodeJS.ProcessEnv,
-): Promise<void> {
-	const args = { path, offset, bytes };
-	return appendLine(
-		`${JSON.stringify({
-			ts: new Date().toISOString(),
-			id: randomUUID(),
-			sid,
-			phase: "done",
-			tool: "blob:write",
-			isError: error !== null,
-			args: serializeArgs(args),
-			...(error ? { error: error.slice(0, 200) } : {}),
-		})}\n`,
-		env,
-	);
-}
-
-/**
  * One record per `POST /host-llm` toggle.
  *
- * Same single-record shape as `auditBlob`: the action is one state write with an
- * immediate answer, there is no approval gate that could leave it half-done, so
- * a `start`/`done` pair would only add a way to lose the second line. The
+ * Same single-record shape as the tools/call pair above, condensed: the action is
+ * one state write with an immediate answer, and there is no approval gate that
+ * could leave it half-done, so a `start`/`done` pair would only add a way to lose
+ * the second line. The
  * `deny` half of the switch is worth a record precisely because it is the one
  * thing the bridge does *to the host* rather than *for the caller*: whoever
  * flipped it should be findable by `sid`, and whoever tripped the takeover's
@@ -266,6 +225,39 @@ export function auditHostLlm(
 			sid,
 			phase: "done",
 			tool: "host_llm",
+			isError: error !== null,
+			args: serializeArgs(args),
+			...(error ? { error: error.slice(0, 200) } : {}),
+		})}\n`,
+		env,
+	);
+}
+
+/**
+ * One record per `xfer_*` tool call.
+ *
+ * The bridge owns these tools rather than forwarding them to the host, so nothing
+ * in the host's own log accounts for them — and what they do is hand a host path
+ * to an HTTP server behind a public hostname. Every action that opens, closes or
+ * fails to open a share lands here, with `args` carrying the path, the local port
+ * and the TTL rather than any content: the payload is whatever the caller moves
+ * through that URL afterwards, which this log never sees.
+ */
+export function auditXfer(
+	sid: string | null,
+	action: string,
+	detail: Record<string, unknown>,
+	error: string | null,
+	env?: NodeJS.ProcessEnv,
+): Promise<void> {
+	const args = { action, ...detail };
+	return appendLine(
+		`${JSON.stringify({
+			ts: new Date().toISOString(),
+			id: randomUUID(),
+			sid,
+			phase: "done",
+			tool: "xfer",
 			isError: error !== null,
 			args: serializeArgs(args),
 			...(error ? { error: error.slice(0, 200) } : {}),

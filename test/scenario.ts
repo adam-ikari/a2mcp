@@ -7,8 +7,6 @@
  * verified through a channel other than the one that produced it**:
  *
  *   - a remote `bash` call is verified by looking at the file it wrote
- *   - a `POST /blob` write is verified by reading it back with the host's own
- *     `read` tool
  *   - a token rotation is verified by which token the *running server* accepts
  *   - a port that the bridge gave up is verified by connecting to it
  *   - a config that must be refused is verified by the silence that follows
@@ -31,8 +29,6 @@
  *     suite entirely green, because no scenario calls a name outside the
  *     registry.
  *   - wire-level refusals (401/400/404/405, batch, bad jsonrpc) -> test:hardening
- *   - byte-identity of a single /blob write, offset conflicts, verb handling
- *     -> test:blob
  *   - the prompt-tier hang and its 90s client timeout -> test:approval
  *   - package self-containment -> test:install
  */
@@ -261,83 +257,6 @@ async function portAccepts(port: number): Promise<boolean> {
 }
 
 // --- the scenarios ---------------------------------------------------------
-
-/**
- * S1 + S2, one host (default approval mode).
- *
- * S1 is the only place the two doors meet: bytes go in through the bridge's own
- * `POST /blob` (whose path resolution the bridge owns) and come back out through
- * the host's `read` tool. Byte-comparing a /blob write against itself would pass
- * even if both ends resolved the path the same wrong way.
- *
- * S2 pins the audit record to the side effect it claims to describe.
- */
-await scenario("blob write is readable by the host's own read tool", async () => {
-	const host = await boot("s1");
-	step(!!host.announced, "bridge announced", host.announced?.[1] ?? host.err().slice(-200));
-
-	const { token: tk, sid } = await handshake(host);
-	const payload = Buffer.from(`scenario-payload-${Date.now()}\n`.repeat(64), "utf8");
-	// A path the bridge must resolve itself: `~` expansion plus a directory that
-	// does not exist yet.
-	const target = `~/a2a-scenario-${Date.now()}/payload.bin`;
-
-	const up = await fetch(`${baseOf(host)}blob?path=${encodeURIComponent(target)}`, {
-		method: "POST",
-		headers: { authorization: `Bearer ${tk}`, "mcp-session-id": sid },
-		body: payload,
-	});
-	step(up.status === 200, "POST /blob accepted the upload", `status ${up.status}`);
-
-	const absolute = join(host.agentDir.replace(/\/\.omp\/agent$/, ""), target.slice(2));
-	step(existsSync(absolute), "the file landed where the bridge said it would", absolute);
-	step(readFileSync(absolute).equals(payload), "bytes on disk match what was sent", `${payload.length} B`);
-
-	// Second channel: the host's own read tool, through tools/call.
-	const readBack = await rpc(
-		host,
-		"tools/call",
-		{ name: "read", arguments: { path: absolute } },
-		{ token: tk, sid, ms: 20_000 },
-	);
-	const text = (readBack.body?.result?.content ?? []).map((c) => c.text ?? "").join("");
-	step(
-		readBack.body?.result?.isError === false,
-		"host read tool read it back",
-		`isError=${readBack.body?.result?.isError}`,
-	);
-	// The host's read is not raw content: it returns a `[path#hash]` header and
-	// numbers every line, like `cat -n`. Comparing our bytes against that output
-	// directly fails on presentation rather than on data, so undo the
-	// presentation first and then compare.
-	const lines = text
-		.split("\n")
-		.filter((l) => !/^\[.*#[0-9A-Fa-f]{4,}\]$/.test(l.trim()))
-		.map((l) => l.replace(/^\d+:/, ""));
-	const payloadLine = payload.toString("utf8").split("\n")[0];
-	const got = lines.filter((l) => l === payloadLine).length;
-	step(got === 64, "host read returned every line the bridge wrote", `${got}/64 lines, ${text.length} chars`);
-
-	// Append a second, distinguishable part at an explicit offset. Without this
-	// the scenario cannot see a write-mode regression at all: on a file that does
-	// not exist yet, "append" and "truncate" are the same operation. (Verified —
-	// forcing the bridge to always truncate left this scenario green.)
-	const tail = Buffer.from(`scenario-tail-${Date.now()}\n`.repeat(8), "utf8");
-	const append = await fetch(`${baseOf(host)}blob?path=${encodeURIComponent(target)}&offset=${payload.length}`, {
-		method: "POST",
-		headers: { authorization: `Bearer ${tk}`, "mcp-session-id": sid },
-		body: tail,
-	});
-	step(append.status === 200, "POST /blob appended at an explicit offset", `status ${append.status}`);
-	const whole = readFileSync(absolute);
-	step(whole.equals(Buffer.concat([payload, tail])), "the file now holds both parts, in order", `${whole.length} B`);
-	step(
-		whole.subarray(0, payload.length).equals(payload) && whole.subarray(payload.length).equals(tail),
-		"the first part was not truncated by the second",
-	);
-
-	await shutdown(host);
-});
 
 await scenario("a remote bash call's side effect is on disk and in the audit log", async () => {
 	const host = await boot("s2");
@@ -612,45 +531,6 @@ await scenario("the host releasing the session releases the port", async () => {
 		stillUp = await portAccepts(port);
 	}
 	step(!stillUp, "and stops accepting once the host is gone", `port ${port}`);
-});
-
-await scenario("parallel uploads stay isolated from each other", async () => {
-	const host = await boot("s9");
-	step(!!host.announced, "bridge announced");
-	const { token: tk, sid } = await handshake(host);
-
-	const n = 8;
-	const bodies = Array.from({ length: n }, (_, i) => Buffer.alloc(200_000 + i * 1000, 65 + i));
-	const stamp = Date.now();
-	const results = await Promise.all(
-		bodies.map((body, i) =>
-			fetch(`${baseOf(host)}blob?path=${encodeURIComponent(`~/a2a-par-${stamp}-${i}.bin`)}`, {
-				method: "POST",
-				headers: { authorization: `Bearer ${tk}`, "mcp-session-id": sid },
-				body,
-			}).then(async (r) => ({ status: r.status, i, body })),
-		),
-	);
-	step(
-		results.every((r) => r.status === 200),
-		"every parallel upload was accepted",
-		results.map((r) => r.status).join(","),
-	);
-
-	// Each file must hold exactly its own bytes: the failure mode of a shared
-	// buffer or a mis-read offset is two files with the same content.
-	let isolated = true;
-	const sizes: string[] = [];
-	for (const { i, body } of results) {
-		const p = join(host.agentDir.replace(/\/\.omp\/agent$/, ""), `a2a-par-${stamp}-${i}.bin`);
-		const onDisk = existsSync(p) ? readFileSync(p) : Buffer.alloc(0);
-		sizes.push(`${onDisk.length}`);
-		if (!onDisk.equals(body)) isolated = false;
-	}
-	step(isolated, "each file holds exactly its own bytes", `sizes ${sizes.join("/")}`);
-	step(new Set(sizes).size === n, "and no two files share a size", `${new Set(sizes).size}/${n} distinct`);
-
-	await shutdown(host);
 });
 
 await scenario("a mounted device is reachable through a tool path, not a tool name", async () => {

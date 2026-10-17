@@ -1,7 +1,7 @@
 {
   "name": "pi-a2a-ext",
   "version": "0.2.1",
-  "description": "Expose a running omp session's tools over MCP (Streamable HTTP), with a raw-byte upload endpoint",
+  "description": "Expose a running omp session's tools over MCP (Streamable HTTP), plus file transfer over HTTP through a quick tunnel",
   "license": "MIT",
   "type": "module",
   "keywords": [
@@ -36,12 +36,12 @@
     "test": "bun test",
     "test:smoke": "bun test/smoke.ts",
     "test:hardening": "bun test/hardening.ts",
-    "test:blob": "bun test/blob-probe.ts",
     "test:takeover": "bun test/takeover-probe.ts",
     "test:registry": "bun test/registry-probe.ts",
     "test:tree": "bun test/tree-probe.ts",
     "test:approval": "bun test/approval-probe.ts",
     "test:install": "bun test/install-probe.ts",
+    "test:obtain": "bun test/obtain-probe.ts",
     "test:scenario": "bun test/scenario.ts",
     "website": "cd website && bun run start"
   },

@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-16T04:18:02"
+updated: "2026-10-17T03:50:56"
 ---
 
 <!-- compiled_truth -->
@@ -142,6 +142,18 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 代价（如实）：100MB 文件不走 MCP 通道（走 SSH/`scp`，README 早已这么建议）；原子落盘（`.tmp` + `rename` + 0600）没有了，远程写文件用宿主的 `edit`/`bash`；远程会看到 `hidden` 工具——这是「不过滤」的必然结果。
 
 **教训：桥自带工具绕过宿主审批门，所以不得不自带沙箱——这是一个决定的两个后果，要一起删。** 只删其中一个，会得到一个比原来更糟的中间态。
+
+
+
+## 传文件的两个外部二进制：从「只命名」改为「缺的自己按钉值拉」（2026-10-17 修订）
+
+`xfer_share` / `xfer_status` / `xfer_stop`（`src/xfer.ts`）由桥自己服务，追加在宿主注册表之后，因此绕过宿主审批门；字节走普通 HTTP——dufs 在 `127.0.0.1` 上以随机端口和随机 basic auth 起服务，cloudflared quick tunnel 给它一个公网主机名。
+
+这条 2026-10-17 翻了面：原先的契约是「二进制只命名、不内置、也不下载」，现在是**缺的那一个由桥自己拉到 `~/.local/bin`**（操作者定死，dufs 与 cloudflared 都要，触发点是首次 `xfer_share`）。解析顺序四步：配置里的值含 `/` 就原样用且**绝不下载**（这是「这台机器永远不许下载」的唯一出口，裸写 `"dufs"` 不是出口）→ 在 `PATH` 上逐段找可执行文件（不起 shell、不 `which`，机器有就别抢）→ `~/.local/bin/<name>` 已存在且哈希等于钉值就复用 → 下载。
+
+钉的是版本 + sha256 的字面量表（`src/obtain.ts`，键 `${platform}-${arch}`）：dufs 0.46.0 与 cloudflared 2026.10.1 各四行（linux-x64 / linux-arm64 / darwin-x64 / darwin-arm64），哈希取自 GitHub release 资产的 `digest`；cloudflared 那四行是 2026-10-17 出网恢复之后才读回来的，四个 asset 都真下载、哈希对着从头到尾的字节复算过。**没读到的哈希不写进表**这条仍然照着办：那天之前表里那一半是空的，桥对 cloudflared 就还是只认 PATH。形状差别记在 `kind`：dufs 四行都是归档，cloudflared 的 Linux 是裸 ELF、macOS 是里面只有一个 `cloudflared` 的 `.tgz`，取的都是普通构建不是 `-fips`。不变的约束：不请求 `latest`，不向发字节的同一台服务器要校验和，不覆盖别人的文件（目标已存在且哈希不等就拒绝并打印那个文件自己的 sha256），下载有界（64 MB、120 秒，上限按钉表里最大的 asset——cloudflared 的 Linux 构建 40 MB——留出升级余量），同一 name 并发单飞，解包只进新建的临时目录并 realpath 断言包含性，安装排在审计之后（`tool: "xfer"`，`action: "install"`，遵守 2026-10-10 那条「唯一痕迹不能排在可能抛错的步骤后面」），每次安装另记一行 `<agentDir>/a2a-bridge.installs.json`，复用看的是它。回包多一个 `installed: {dufs, cloudflared}`，让调用方知道自己为什么多等了几秒；下载就地等完，没有「正在装，稍后再来」的中间态。
+
+判据写在 AGENTS.md 的例外清单里（现在三条），形状与 `POST /host-llm` 一样：桥已经替宿主决定了用 dufs，这次只多一个意见——字节从哪来——而不是多一个权威。代价如实是审计、文档，和那个只有显式路径才成立的出口。升级钉版本就是改这个仓库的一次带哈希的提交，这是刻意的：不要无感漂移。
 
 
 ## Timeline
@@ -755,4 +767,70 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "发布卫生：一个装不上的版本从 GitHub Release 撤掉，而不是标 prerelease 或加一句「请用新版」——发布入口里不该留着一个装不上的东西。v0.1.0 与 v0.2.0 的 Release 于 2026-10-16 撤下，三个 tag 全留（gh release delete 不加 --cleanup-tag），可安装入口只留 v0.2.1。CHANGELOG 的历史节不动，开头补一句现状"
   source: "操作者决定（2026-10-16）；commit 88dc4f9"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-16T05:29:02
+  kind: decision
+  summary: "桥把 Bun.serve 的 idleTimeout 显式设成 255（Bun 的上限），并把 body 读取失败收进 /blob 的审计。原因是 Bun 的默认值 10 秒量的是**请求体没有字节到达**的时间，不是请求总时长——Bun 1.3.14 本机 A/B 实测：31.4 MB 的 body 以 1 MB/s 连续传 31.8 秒正常收完；同一个 body 在中途停 15 秒，服务器先打 `[Bun.serve]: request timed out after 10 seconds`，再让 handler 里的 req.arrayBuffer() 抛 `AbortError: The connection was closed.`，客户端 socket 已关。改前那个异常逃出 handleBlob、撞在 server.ts 的兜底上：调用方拿到一个无从接收的 500 internal error，审计（这个端点唯一的痕迹）一条也没有。现在落成一条 `blob:write`（bytes: 0，error `body ended early: …`）并回 400。核验：bun test 162/162；test:blob 新增的「body 中途停 15 秒仍字节一致」通过（这条在旧默认值下必然失败），真实宿主 18.11.0 一轮全绿。"
+  source: "2026-10-16 现场：31.6 MB APK 经 cloudflared quick tunnel 上传失败"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-16T05:29:52
+  kind: evidence
+  summary: "2026-10-16 隧道上传失败现场的完整链条与两份线速，记在这里是因为操作者要求这类现场只留在 brain，不写进 README/docs/website。(1) 拓扑：宿主在 Windows（omp 18.11.0，cwd C:\\chenzhaodi\\Repo\\omp_mcp，cloudflared quick tunnel paid-joining-wayne-formed.trycloudflare.com → http://localhost:62133，出口 v4 42.84.234.48 联通、另有原生 v6 2408:…），调用方是本机（Linux，eth0 192.168.1.57/24 → NAT → 119.112.242.125，**无 IPv6**，sshd 听 0.0.0.0:22），源文件是 vimact 的 debug APK 31,597,173 字节。(2) 三次尝试：第一次被 omp 的 60 秒 bash 超时自己掐掉；第二次 curl 27.2 秒传完整个 body 却拿到 502；第三次 size_upload=31597173 time=135.572723s 拿到 524（≈233 KB/s）。cloudflared 端记 `Incoming request ended abruptly: context canceled`（connIndex=0 event=1 ingressRule=0）——时间戳落在第三次开始后约 10 秒，正是桥侧 idleTimeout 掐断的时刻；桥端记 AbortError internal error；文件没落盘、审计无记录。(3) 线速对照：本机上传 Cloudflare 2.0–2.5 MB/s，但下载 Cloudflare 只有 23 KB/s（60 秒超时），同一台机器从 CN 镜像下载 36.6 MB/s，GitHub 归档 0 B/s——说明国际段的快慢是代理/路由在决定，不是这条线本身。宿主方向：从宿主连本机 119.112.242.125 的 22/8899 都是 Could not connect（无端口转发），宿主对本机没有入向路径。(4) 结论：这台机器与宿主之间现在没有点对点通路；隧道替它们当中转，代价就是 Cloudflare 对 origin 的 100 秒窗口 + 本例里宿主的接收速率。点对点选项按代价排序：路由器端口转发 + ssh/rsync（本机已听 22，且是真实公网 IP 而非 CGNAT，所以只差一条转发）；给本机接上 IPv6（宿主已有 v6，两端都通就免转发）；Tailscale/ZeroTier 之类的 mesh；VPS + frp/ssh -R 中继。另外一条零基建的反向做法：让**持有文件的那一侧当 server**（静态服务器 + 自己的 quick tunnel），另一侧 GET——响应可以流式传输，不受 100 秒 TTFB 窗口约束，只受该侧上行限制。"
+  source: "2026-10-16 现场 + 经仍存活的 quick tunnel 实测"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-16T05:51:11
+  kind: evidence
+  summary: "2026-10-16 结论：在当前拓扑下「不假定任何基础设施、只走 HTTP 或点对点」不可实现，已逐项实测排除。拓扑与证据：(1) 调用方本机 LAN 192.168.1.57/24、公网 119.112.242.125（NAT 后），**只有 link-local 的 IPv6**（/proc/net/if_inet6 无 global，无 v6 默认路由），其路由器 192.168.1.1 **不应答 SSDP**（UPnP IGD 关）；更要紧的是该路由器在做 fake-ip 分流：trycloudflare.com / cloudflare.com / github.com 都解析到 198.18.x（Clash 风格），mirrors.aliyun.com 才是真实 IP——也就是说经 Cloudflare 那条路**整个走的是路由器上的代理**，不是这条线本身（这条线同机实测 CN 镜像下载 36.6 MB/s）。这解释了本次现场的不稳定：2 MB 分块一次 44.6 秒（约 47 KB/s）、下一次直接 502，而早先整包 31.6 MB 平均 233 KB/s、speed.cloudflare.com 上传 2.0–2.5 MB/s、下载 23 KB/s——同一台机器上这些数字相差五十倍，代理在决定。(2) 宿主 LAN 172.21.201.185/16（网关 172.21.201.17，企业/热点网），公网 v4 42.84.234.48，**有原生全球 IPv6 2408:8430:2000:2cd1:1985:3af7:528a:3196**；其路由器同样不应答 SSDP，Windows 侧 UPnP COM（UPnP.UPnPDeviceFinder / HNetCfg.NATUPnP）在本机不可用（值不在预期范围内），PowerShell 裸 SSDP 也无应答——两端都无法自己开映射。(3) 两条可能的直连通路都差一环：v6 只有宿主一侧有（客户端侧要 PVE/路由器补 v6 配置），打洞则缺 rendezvous 且两端 NAT 行为未知（宿主在企业网 172.21/16 后面，对称 NAT 概率高）。(4) 因此只剩下「制造一条路」的三个选项，各自只差一件事：①本机家用路由器上做一条端口转发（→192.168.1.57），之后全程是宿主主动发起的**纯 HTTP**（宿主 curl 客户端的 /blob 或静态服务器），不引入任何第三方；②给客户端补全球 IPv6，宿主已有公网 v6，之后同样纯 HTTP 直连、免映射；③若①②都不许，则必须有中继，此时最省的是现有隧道，而它不稳的根因在路由器代理策略上——把隧道域名/宿主 IP 放进 DIRECT 旁路（同样是路由器上的一条规则）。操作者 2026-10-16 的约束原话：「不能假定有任何基础设施」「只能使用 http 或者点对点」。"
+  source: "2026-10-16 实测：本机路由/DNS/UPnP、宿主 LAN 与 UPnP、分块上传速率"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-16T06:19:28
+  kind: reversal
+  summary: " 现在存在：/blob 由「上传专用」变成双向——POST 写、GET 读，同一 token、同一套路径解析（无根、无白名单）。GET 支持单区间 Range（bytes=a-b / bytes=a- / bytes=-N），206 带 content-range，越界 416，缺文件 404，目录 400，其他动词 405；每次读取落一条 `blob:read`（offset/bytes 是**实际发出的区间**），404/416 同样记录。被推翻的是 docs/protocol.md「没有下载，这是有意的」与 README「Download does not work」那份论证：它列的三条宿主侧限制（read 单行 150 KB 拒绝、bash 输出 768 字节即截断、read artifact 约 150 KB）限制的是**宿主自己的工具**，不是这个端点；而在没有它的时候，调用方照样能靠 bash+base64 分块把任意文件取出来——MCP 侧根本没有二进制通道（JSON-RPC 是文本，image/resource 块也是 base64），所以那次拒绝没有换来机密性，只换来 33% 多传和一条更慢的路。真正变化的是桥现在会**读**它能写的地方，所以每次读取都必须留痕；这也是这次改动的审计理由。边界照旧：不经宿主审批门、桥自己解释路径、内存代价按每个在途请求算（上传仍是 maxRequestBodySize 128 MB 缓冲）。核验：bun test 168/168（新增 6 条：字节一致、206 分槽与续传、416、404/400、401 不落痕、其他动词 405），test:blob 新增「GET 原样取回」「Range 续传」「越界 416」「缺文件 404」与 blob:read 审计断言。"
+  source: "2026-10-16：操作者要求「同一条 HTTP 通道走上传下载」并追问「必须 base64 吗，没有二进制通道吗」"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-16T08:37:37
+  kind: reversal
+  summary: "传文件面整体推翻重做，方向由操作者定死（2026-10-16 原话：「文件传输协议全部删除」「不是本机或者局域网就使用quick tunnel创建隧道传输文件」「内置quick tunnel」「选一个适合的文件传输工具 直接集成到mcp端点」）。最终形态：**桥自己不传字节**，而是实现三个 MCP 工具  /  / （src/xfer.ts，在 extensions/a2a-bridge.ts 里追加进 tools/list 并在分派时先于宿主执行器）， 让 dufs 在 127.0.0.1 上以随机端口 + 随机 basic auth 起 HTTP，再用进程内开的 cloudflared quick tunnel（src/tunnel.ts）给它公网主机名，返回带凭据的 URL；默认 TTL 3600，第二个 share 替换第一个，桥停止时带走共享；每次调用落一条  审计（args 只有 action/path/port/ttl）。被推翻的先后有两条：①（当初的理由是「宿主审批门配 prompt 时写会把无头调用方挂住 ≥90s，这是唯一不挂的写路径」）；②我当天刚加的 。推翻的判据是「字节走 JSON-RPC 本来就绕不开 base64 与 tool-result 截断（约 150 KB），而驱动一个成熟 HTTP 文件服务器不需要为每个字节付任何代价，Range/续传/目录列表全都白拿」。工具选 dufs 的理由：单文件静态二进制（Windows/Linux 都有）、无运行时无配置无账号、GET(+Range)/PUT/DELETE/WebDAV/目录列表/内置 basic auth 齐备；排除了 croc（自带第三方中继，与「走 quick tunnel」这条定死的路冲突）、python -m http.server（无 PUT，且宿主机是 Windows Git Bash 没有 python）、miniserve（只读）、rclone（体积与 WebDAV 配置都重）、tusd（等于再造一套协议）。二进制不内置： /  配置项给名字（默认按 PATH 找），缺了报名字不静默退化，也不下载任何东西。**取文件到宿主这一半故意不做**：宿主的 bash+curl 已经能做，而且那条路走宿主的审批门，桥自己写文件正是刚删掉的那种越门写入。"
+  source: "2026-10-16 操作者四条指令 + 本轮实现"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-16T08:38:39
+  kind: reversal
+  summary: "（重发：上一条同题 summary 里的反引号被 shell 吃掉了，以本条为准）传文件面整体推翻重做，方向由操作者定死（2026-10-16 原话：文件传输协议全部删除 / 不是本机或者局域网就使用 quick tunnel 创建隧道传输文件 / 内置 quick tunnel / 选一个适合的文件传输工具 直接集成到 mcp 端点）。最终形态：**桥自己不传字节**，而是实现三个 MCP 工具 `xfer_share` / `xfer_status` / `xfer_stop`（src/xfer.ts，在 extensions/a2a-bridge.ts 里追加进 tools/list，并在分派时先于宿主执行器），`xfer_share {path, ttlSeconds?}` 让 dufs 在 127.0.0.1 上以随机端口 + 随机 basic auth 起 HTTP，再用进程内开的 cloudflared quick tunnel（src/tunnel.ts）给它公网主机名，返回带凭据的 URL；默认 TTL 3600 秒，第二个 share 替换第一个，桥停止时带走共享；每次调用落一条 `tool: \"xfer\"` 审计（args 只有 action/path/port/ttl）。被推翻的先后有两条：①`POST /blob`（当初理由：宿主审批门配 prompt 时写会把无头调用方挂住 ≥90s，那是唯一不挂的写路径）；②我当天刚加的 `GET /blob`。推翻的判据是「字节走 JSON-RPC 本来就绕不开 base64（+33%）与 tool-result 截断（约 150 KB），而驱动一个成熟 HTTP 文件服务器不必为每个字节付任何代价，Range/续传/目录列表/WebDAV 全都白拿」。工具选 dufs 的理由：单文件静态二进制（Windows/Linux 都有）、无运行时无配置无账号、GET(+Range)/PUT/DELETE/WebDAV/目录列表/内置 basic auth 齐备；排除了 croc（自带第三方中继，与定死的 quick tunnel 这条路冲突）、`python -m http.server`（无 PUT，且宿主机是 Windows Git Bash 没有 python）、miniserve（只读）、rclone（体积与 WebDAV 配置都重）、tusd（等于再造一套协议）。二进制不内置：`xfer.dufs` / `xfer.cloudflared` 配置项给名字（默认按 PATH 找），缺了报名字、不静默退化，也不下载任何东西。**把远端文件取回宿主这一半故意不做**：宿主的 bash + curl 已经能做，而且那条路走宿主的审批门——桥自己写文件正是刚删掉的那种越门写入。"
+  source: "2026-10-16 操作者四条指令 + 本轮实现"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-16T08:39:39
+  kind: evidence
+  summary: "本轮（2026-10-16）实测与未测，按可核验性分开记。**测成了**：(1) 单测 `bun test` 160/160（新增 test/xfer.test.ts 11 项：工具面、路径解析、四种拒绝、共享生命周期——含「服务端校验的凭据就是桥生成的那一份」「stop 释放端口」「第二个 share 替换第一个」「TTL 到期后端口释放」），用以运行时写出的可执行 stub 顶替 dufs、注入隧道开洞器；`lint` / `tsc` 干净。(2) 真机 dufs 0.43.0 二进制直接驱动 src/xfer.ts，8 项全过：GET 字节一致、Range 请求 206 且内容一致、PUT 落盘、错密码 401、根目录列表 200、审计落 `tool: \"xfer\"`、共享关闭后原端口可再绑（即真的释放）。这一步抓到一个真缺陷：dufs 的 `--auth` 语法是 `user:pass@/path:rw`，我最初只传 `user:pass`，二进制直接 exit 1 报 Invalid auth。**没测成**：(3) 经公网隧道端到端。cloudflared 侧确实起得到 `https://<random>.trycloudflare.com`（本机实测打印出主机名），但**这台调用方机器所在网络对代理域名重签 TLS**（其路由器做 fake-ip 分流：trycloudflare/cloudflare/github 都解到 198.18.x），`curl` 与 Bun fetch 走公网 URL 分别报 `unexpected eof while reading` 与 unknown certificate verification error，所以「隧道这一跳 + dufs + 凭据」的端到端从未在这台机器上跑通。要在真机上验，得在一台不做 TLS 中间劫持的机器上起桥（或把这个域名放进路由器的 DIRECT 旁路）再 `curl` 那个 URL。**已知边界**：(4) quick tunnel 主机名与进程同生共死，没有重试与监督，`stop()` 之外没有生命周期管理；(5) 共享的 URL 是能力凭证，谁拿到谁能读写那个路径，只有 basic auth 一层（随机 16 字符口令）+ TTL（默认 1 小时）兜着；(6) 文档侧只写契约与用法，决策全部留在 brain（操作者 2026-10-16 明确要求），AGENTS.md 的「Don t grow a second system」按 /host-llm 的先例补了一条例外。"
+  source: "2026-10-16 本轮核验"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-17T03:21:54
+  kind: reversal
+  summary: "「二进制只命名、不内置、不下载」这条 2026-10-16 定的契约，2026-10-17 由操作者推翻：缺 dufs 或 cloudflared 时，桥在首次 `xfer_share` 自己把它拉到 `~/.local/bin`，版本与 sha256 钉在 `src/obtain.ts` 的字面量表里（按 `${platform}-${arch}` 键）。推翻的直接起因是这台机器上 `dufs` 根本不在 PATH 上——契约在这里等于传文件功能不可用，而报错要求人手去 GitHub 拖包。留下的出口只有一条且必须是形状：配置里 `xfer.dufs` / `xfer.cloudflared` 写成含 `/` 的路径，那条路径原样使用、绝不下载；裸写名字不是出口。不变的边界：不请求 `latest`，不向发字节的同一台服务器要校验和，cloudflared 的钉表行是空的（取不到 release 元数据就没读到的哈希不写），目标位置已有别人的文件就拒绝并打印那个文件自己的 sha256，下载 32 MB / 90 秒有界，并发单飞，解包进新建临时目录并 realpath 断言，`install` 记录排在 `spawn` 之前。判据写进 AGENTS.md 例外清单第三条（与 `POST /host-llm` 同形）：桥已经替宿主决定了用 dufs，这次只多一个意见——字节从哪来——不是多一个权威。"
+  source: "2026-10-17：操作者定「宿主自动安装 dufs」，范围=桥内置自动安装，落点 ~/.local/bin，触发=首次 xfer_share 按需，dufs 钉 0.46.0（跑完实测才写进文档），cloudflared 也自动装"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-17T03:21:54
+  kind: evidence
+  summary: "2026-10-17 本轮实测与未测，按可核验性分开记。**测成了**：(1) `bun run test:obtain`（`test/obtain-probe.ts`，18 项）真下载钉表的 linux-x64 那行 → 解到临时 binDir → `--version` 自报 0.46.0 → 账本落哈希 → 第二次调用不重下；再用**拉来的那个二进制**经 `xfer_share`（空 PATH + 空安装目录，所以获取确实发生在工具里面，回包 `installed.dufs = \"0.46.0\"`）起真共享：GET 字节一致、Range 206、PUT 201 且落盘、错密码 401、目录列表 200、`xfer_stop` 后端口释放、下一次共享复用安装而 `installed` 回 `null`。**这一步的门是 `--auth user:pass@/:rw` 在 0.46.0 上重测**——那条语法当年只在 0.43.0 上验过，门过了版本号才进 README。(2) 单测 `bun test` 184/184（14 文件），新增 `test/obtain.test.ts` 18 项（本地 `Bun.serve` 扮 GitHub：哈希不符、哈希长度不对、tar slip、解出多余条目、目标是别人的文件时拒绝、单飞只下载一次、超上限截断、超时、不支持的平台、PATH 命中不下载、显式路径不下载）与 `test/tunnel.test.ts` 4 项；`lint` / `tsc` 干净；CI 的 `host-probes` 里那条指向已删除的 `test:blob` 的步骤换成 `test:obtain`。**没测成**：(3) 经公网隧道端到端照旧——真 cloudflared 起得到 `https://<random>.trycloudflare.com`，但从发布它的那台机器 curl 回去报 unknown certificate verification error（本机路由器对代理域名做 fake-ip 分流并重签 TLS），所以探针的断言全部打在 `127.0.0.1:<port>` 上、隧道用注入的开洞器。(4) cloudflared 的自动装只有代码路径没有钉值：这台机器此刻取不到 GitHub release 元数据，表里那行是空的，报错点名「拿不到可验证的构建」。(5) 一处现象记在探针文件头而没有归因：探针自己同时握住真 cloudflared 与那次公网取回时，两次都是本地各项全绿、之后不再返回，满核空转、无系统调用（读 156 MB、写 59 MB，都没归因）。它不进断言也不进结论，因为没归因的事两者都不配。**夹具的两条教训**（写进 `test/tunnel.test.ts` 的文件头，下一个改的人会重新发明）：子进程不加节奏地写，到父进程这边是十来个体积不等的读事件，实测有一次把 200 KB 塞进第一个事件，于是「满了就不再追加」这个错写法也不会红，每行之间要 `await Bun.sleep(5)` 才真是一行一个事件；`process.stdout.write` 循环后接 `console.log`，Bun 会让那句同步写越过排队的异步写，主机名直接跑到第一个 chunk 里。"
+  source: "2026-10-17 现场：bun run test:obtain 全过（真下载真共享）+ bun test 184/184"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-17T03:22:08
+  kind: decision
+  summary: "compiled_truth 增一节「传文件的两个外部二进制」：契约由「只命名、不下载」改为「缺的自己按钉值拉到 ~/.local/bin」，含四步解析顺序、钉表边界与 AGENTS.md 例外清单的判据"
+  source: "2026-10-17：src/obtain.ts 落地 + bun run test:obtain 真下载真共享"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-17T03:50:56
+  kind: decision
+  summary: Rewrote compiled_truth to the new best understanding
+  source: "2026-10-17 出网恢复：cloudflared 四个 asset 真下载并复算哈希后填进钉表，下载上限随之从 32 MB/90 秒改成 64 MB/120 秒"
   affects: [a2a-mcp-bridge]

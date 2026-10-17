@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { auditBlob, auditDone, auditHostLlm, auditStart, auditWriteFailures } from "../src/audit.ts";
+import { auditDone, auditHostLlm, auditStart, auditWriteFailures } from "../src/audit.ts";
 
 /**
  * Rotation retention.
@@ -123,7 +123,6 @@ describe("audit never loses a call", () => {
 		for (const [name, call] of [
 			["auditStart", () => auditStart("shape-start", "sid", "read", {}, env)],
 			["auditDone", () => auditDone("shape-done", "sid", "read", {}, false, env)],
-			["auditBlob", () => auditBlob("sid", "shape.bin", 0, 0, null, env)],
 			["auditHostLlm", () => auditHostLlm("sid", true, null, env)],
 		] as const) {
 			const returned = call();
@@ -135,11 +134,9 @@ describe("audit never loses a call", () => {
 		const onDisk = readRecords().map((r) => String(r.id));
 		expect(onDisk).toContain("shape-start");
 		expect(onDisk).toContain("shape-done");
-		// auditBlob and auditHostLlm mint their own uuid, so the identifying content
-		// is in the record rather than in its id — and `args` is itself a serialized
-		// string, so the payload shows up escaped inside the line.
-		expect(raw).toContain("shape.bin");
-		expect(raw).toContain('"tool":"blob:write"');
+		// auditHostLlm mints its own uuid, so the identifying content is in the record
+		// rather than in its id — and `args` is itself a serialized string, so the
+		// payload shows up escaped inside the line.
 		expect(raw).toContain('"tool":"host_llm"');
 	});
 
@@ -173,7 +170,7 @@ describe("audit never loses a call", () => {
 		// The `appendLine` chain ends in a `.catch` for a reason: an audit
 		// failure that surfaces as an unhandled rejection noise-floods the host's own
 		// error log, which is a worse outcome than a missing line. Swallowed is not
-		// silent, though — the log is the only trace of a `POST /blob`, so a bridge that
+		// silent, though — the log is the only trace of a call, so a bridge that
 		// cannot write it has to say so once and keep a count.
 		const dead = { A2A_BRIDGE_AUDIT: join(dir, "no-such-dir", "audit.log") } as NodeJS.ProcessEnv;
 		const unhandled: unknown[] = [];
@@ -204,60 +201,6 @@ describe("audit never loses a call", () => {
 	});
 });
 
-describe("audit record shape for a blob upload", () => {
-	const dir = `/tmp/a2a-audit-blob-${process.pid}`;
-	const file = join(dir, "audit.log");
-	const env = { A2A_BRIDGE_AUDIT: file } as NodeJS.ProcessEnv;
-
-	const recordHolding = (needle: string) => {
-		// One read, no polling — the callers below await their own `auditBlob`, so a
-		// miss here means the ordering is broken, not that the disk is slow. See the
-		// same note on `recordFor`.
-		if (!existsSync(file)) throw new Error(`no audit log at ${file}`);
-		const hit = readFileSync(file, "utf8")
-			.split("\n")
-			.filter(Boolean)
-			.find((l) => l.includes(needle));
-		if (!hit) throw new Error(`no audit record holding ${needle}`);
-		return JSON.parse(hit) as Record<string, unknown>;
-	};
-
-	beforeAll(() => {
-		rmSync(dir, { recursive: true, force: true });
-		mkdirSync(dir, { recursive: true });
-	});
-
-	afterAll(() => {
-		rmSync(dir, { recursive: true, force: true });
-	});
-
-	test("a successful upload is ONE done line carrying metadata, not a start/done pair", async () => {
-		// The blob endpoint never waits on a UI, so there is no half-settled state to
-		// pair; docs/protocol.md sells this asymmetry against tools/call. If a second
-		// phase ever shows up here, the protocol page is lying somewhere.
-		await auditBlob("sid-1", "fw.bin", 0, 16, null, env);
-		const rec = recordHolding("fw.bin");
-		expect(rec).toMatchObject({ phase: "done", tool: "blob:write", sid: "sid-1", isError: false });
-		expect("error" in rec).toBe(false);
-		expect(rec.args).toBeTypeOf("string");
-		expect(String(rec.args)).toContain('"path":"fw.bin"');
-		expect(String(rec.args)).toContain('"offset":0');
-		expect(String(rec.args)).toContain('"bytes":16');
-	});
-
-	test("a failed upload records bytes 0 and an error cut at 200 chars", async () => {
-		// The failure must be greppable as a failure and the message bounded: the
-		// OS hands back multi-kB EACCES strings with absolute host paths in them,
-		// and this log is read by whoever holds the token, not only by the host.
-		await auditBlob(null, "bad.bin", 8, 0, "E".repeat(300), env);
-		const rec = recordHolding("bad.bin");
-		expect(rec.isError).toBe(true);
-		expect(rec.sid).toBeNull();
-		expect(String(rec.error)).toHaveLength(200);
-		expect(String(rec.args)).toContain('"bytes":0');
-	});
-});
-
 /**
  * Concurrent writes across the rotation boundary.
  *
@@ -268,9 +211,9 @@ describe("audit record shape for a blob upload", () => {
  * sit in the current file when the extra rotation fired, written milliseconds
  * earlier, plus the whole generation that was rotated out of the way. The docs
  * promise one retained generation and the pair readable across both files; under
- * this race a call's `start` can be in neither, and a `POST /blob` — whose audit
- * line is its only trace, the endpoint does not go through the host's approval
- * gate — can leave no trace at all.
+ * this race a call's `start` can be in neither, and a call whose audit line is its
+ * only trace — one that does not go through the host's approval gate — can leave
+ * no trace at all.
  *
  * The log is primed to just under 512 KB and hit with a burst, so exactly one
  * rotation is needed to hold everything. That is the line the test draws: one

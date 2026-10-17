@@ -14,6 +14,7 @@ const VALID: BridgeConfig = {
 	token: "unit-test-token-0123456789abcdef",
 	host: "127.0.0.1",
 	host_llm: "allow",
+	xfer: { dufs: "dufs", cloudflared: "cloudflared" },
 };
 
 beforeAll(async () => {

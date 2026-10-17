@@ -33,19 +33,30 @@ The test for a proposed change: does it make the bridge more transparent, or doe
 
 ## The exceptions on record
 
-Two paths give the bridge an opinion it does not otherwise have, and both are paid for
-with auditing and documentation:
+Three paths give the bridge an opinion it does not otherwise have, and all three are
+paid for with auditing and documentation:
 
-- `POST /blob` resolves the path itself (no root, no allowlist) and writes without asking
-  the host's approval gate. **That gate is why it exists, not just what it costs:** with
-  `prompt` configured and a headless caller it never answers (measured hanging ≥90s,
-  approval probe `VERDICT: B`), so this is the one write path that does not hang. The
-  costs are listed in `docs/protocol.md` under what the endpoint gives up.
 - `POST /host-llm` reaches into the host session directly: shadowing registry rows,
   overriding settings, replacing the process `fetch`. What it limits is the host's own
   inference, and it acts only on the word of whoever holds the token. Its guarantee, its
   degraded state, and its residuals (lane refusals, the tripwire, and the request path
   that is not the global `fetch`) are in `docs/protocol.md` under 宿主推理切换.
+- The three `xfer_*` tools (`xfer_share` / `xfer_status` / `xfer_stop`, `src/xfer.ts`)
+  are served by the bridge rather than forwarded to the host: they resolve the path
+  themselves, hand it to `dufs` behind a cloudflared quick tunnel, and are appended to
+  `tools/list` after the host registry — so they bypass the host's approval gate and
+  bring no sandbox of their own. The cost is auditing (`tool: "xfer"`, one record per
+  call) and documentation. Asked for by the maintainer; the contract and usage are in
+  `docs/protocol.md` under 桥自己的工具 (`xfer_*`) and in the README under 传文件.
+- `src/obtain.ts` puts a binary on the host's disk. When a name in the `xfer` block
+  answers to nothing on PATH, the bridge downloads the pinned release asset, checks its
+  sha256 against the hash pinned next to the version, and installs it to
+  `~/.local/bin`. This is the smallest possible package manager, and the honest
+  description of what it adds is one opinion rather than a new authority: the bridge
+  already chose `dufs`, so the only question left was where those bytes come from. What
+  bounds it: no `latest`, no checksum taken from the download host, no write to a file
+  it did not install, no fetch at all for a configured value containing `/` (that is the
+  escape hatch), and an `install` audit record beside the `share` one.
 
 Everything else here still decides.
 

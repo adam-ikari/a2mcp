@@ -1,6 +1,6 @@
 /**
  * `POST /host-llm` at the dispatch layer: the order the handler checks things
- * in (method → auth → body → action, same as `/blob`), what each refusal shape
+ * in (method → auth → body → action), what each refusal shape
  * returns, and the audit record `auditHostLlm` leaves. The takeover itself is
  * stubbed — a real arm is the 7th host probe's job (`test/takeover-probe.ts`);
  * what lives here is the wiring the probe cannot vary cheaply: 401-before-body,
@@ -111,7 +111,13 @@ async function withServer(
 ): Promise<void> {
 	const takeover = makeTakeover();
 	const s = await startServer(
-		{ port: 0, host: "127.0.0.1", token: TOKEN, host_llm: "allow" as const },
+		{
+			port: 0,
+			host: "127.0.0.1",
+			token: TOKEN,
+			host_llm: "allow" as const,
+			xfer: { dufs: "dufs", cloudflared: "cloudflared" },
+		},
 		makeDeps(takeover),
 	);
 	try {
@@ -213,7 +219,13 @@ describe("POST /host-llm route dispatch", () => {
 
 	test("a bridge without takeover wiring answers 501 instead of pretending", async () => {
 		const s = await startServer(
-			{ port: 0, host: "127.0.0.1", token: TOKEN, host_llm: "allow" as const },
+			{
+				port: 0,
+				host: "127.0.0.1",
+				token: TOKEN,
+				host_llm: "allow" as const,
+				xfer: { dufs: "dufs", cloudflared: "cloudflared" },
+			},
 			makeDeps(undefined),
 		);
 		try {

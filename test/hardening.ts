@@ -156,8 +156,8 @@ try {
 	check(names.includes("read"), "tools/list contains read");
 	// The "no tools of its own" property is not checked here any more. This line used
 	// to assert no advertised name starts with `a2a_file_`, which was a real guard
-	// while the file-transfer surface existed — and became decoration the day
-	// `POST /blob` replaced it, since no code registers such a tool any more: it
+	// while the file-transfer surface existed — and became decoration once that
+	// surface was removed, since no code registers such a tool any more: it
 	// could not fail, while reading exactly like protection. The property itself is
 	// pinned where it can actually fail, in test/bridge.test.ts, which compares the
 	// built catalog for *equality* against the host registry the stub returns — an

@@ -50,9 +50,9 @@ graph TB
 ```
 
 - 扩展在 `session_start` 时启动 `Bun.serve`，实现 MCP `2025-11-25` 的 `initialize` / `tools/list` / `tools/call`，响应为纯 JSON（无 SSE）。
-- 端点是**每进程**一个，而宿主的 `session_start` / `session_shutdown` 是**每会话**一个（task 子代理、ACP 会话、持久化 revive 各有自己一套 handler）。后来的 `session_start` 复用已起的服务器（同时在途的两个只绑一个端点）；`session_shutdown` 只在宿主注册表里没有活的 `Main` 会话时才释放端口（宿主把 `AgentRef.session` 注释成「parked/aborted 时恰为 null」，而 `tools/call` 本来就拒绝那个状态），否则任何一次子代理结束都会把还在服务的端口拆掉。若那个事件落在绑定完成之前，它手里还没有端口可停，于是绑定的那一方完成后回头看一眼注册表：`Main` 没了就把刚绑上的端口收掉。释放用的是非强制的 `stop()`：监听立刻关、新建连接一律被拒，而已经在处理的那一次照常跑完并落审计——强制切断会让 `tools/call` 少一行 `done`，让 `POST /blob` 整条上传不留记录地消失。
+- 端点是**每进程**一个，而宿主的 `session_start` / `session_shutdown` 是**每会话**一个（task 子代理、ACP 会话、持久化 revive 各有自己一套 handler）。后来的 `session_start` 复用已起的服务器（同时在途的两个只绑一个端点）；`session_shutdown` 只在宿主注册表里没有活的 `Main` 会话时才释放端口（宿主把 `AgentRef.session` 注释成「parked/aborted 时恰为 null」，而 `tools/call` 本来就拒绝那个状态），否则任何一次子代理结束都会把还在服务的端口拆掉。若那个事件落在绑定完成之前，它手里还没有端口可停，于是绑定的那一方完成后回头看一眼注册表：`Main` 没了就把刚绑上的端口收掉。释放用的是非强制的 `stop()`：监听立刻关、新建连接一律被拒，而已经在处理的那一次照常跑完并落审计——强制切断会让 `tools/call` 少一行 `done`。
 - 目录、暴露门与执行读同一份注册表：宿主的 `Main` 会话（`getAllToolInfos()`，宿主也正是用它接出 `pi.getAllTools()`），执行随后就在同一个会话上按 `getToolByName` 解析名字。没有活的 `Main` 时（parked/aborted，端口尚未释放那一段），目录退回绑定它的那套 runner 自己的视图，而不是报出一份宿主其实并没有的空注册表。
-- 目录就是宿主注册表本身，桥不过滤（见「安全与边界」）。
+- 目录就是宿主注册表本身，加上桥自己的三个 `xfer_*` 工具，此外不增不减（见「安全与边界」）。
 - 桥自己从不请求模型：一次远程调用就是「收请求 → 跑工具 → 回结果」。但执行落在宿主的真实会话里，工具留下的会话级副作用可能唤醒宿主自己的 agent，那次推理花的是宿主的 token（见「安全与边界」）。宿主能不能自己推理，这件事本身也归远程接管：见「宿主推理接管」。
 
 ## 安装
@@ -102,7 +102,7 @@ A2A bridge listening on http://127.0.0.1:<port> (token <前6字符>…)
 配置文件 `~/.omp/agent/a2a-bridge.json`，首次启动自动生成，权限 `0600`（创建时即 0600，无权限窗口）：
 
 ```json
-{ "port": 0, "token": "<base64url 32B>", "host": "127.0.0.1", "host_llm": "allow" }
+{ "port": 0, "token": "<base64url 32B>", "host": "127.0.0.1", "host_llm": "allow", "xfer": { "dufs": "dufs", "cloudflared": "cloudflared" } }
 ```
 
 | 字段 | 含义 |
@@ -111,10 +111,12 @@ A2A bridge listening on http://127.0.0.1:<port> (token <前6字符>…)
 | `token` | Bearer token，首次启动自动生成（43 字符）；手写短于 32 字符的会被拒绝 |
 | `host` | 监听地址，默认 `127.0.0.1`（改成 `0.0.0.0` 会额外告警） |
 | `host_llm` | `"deny"` \| `"allow"`（默认）：宿主启动时自己的会话能不能发模型请求，见「宿主推理接管」。它只决定**启动状态**；桥跑起来之后，远程一侧随时可以用 HTTP 切换，与这里写的是什么无关 |
+| `xfer.dufs` | 服务共享路径的 HTTP 文件服务器，默认 `dufs`：先查 PATH，查不到就按钉死的版本拉一份构建装进 `~/.local/bin`。写的值里带 `/` 就当作路径直接用，桥一次都不下载。见「传文件」 |
+| `xfer.cloudflared` | 发布隧道的二进制，默认 `cloudflared`：查找和下载的规则同 `xfer.dufs`，本文写作时钉的是 2026.10.1 |
 
-只有这四个字段。**没有工具白名单或黑名单，没有文件沙箱**——桥不替宿主做权限决定，配置里加这些字段不会生效（多余字段被忽略）。`host_llm` 也不在此列：它管的不是调用方能执行什么（那由 token 和宿主自己的工具权限决定），是宿主自己能不能推理。
+只有这些字段：上面的四个顶层字段，加一个可选的 `xfer` 块。**没有工具白名单或黑名单，没有文件沙箱**——桥不替宿主做权限决定，配置里加这些字段不会生效（多余字段被忽略）。`host_llm` 也不在此列：它管的不是调用方能执行什么（那由 token 和宿主自己的工具权限决定），是宿主自己能不能推理。
 
-环境变量 `A2A_BRIDGE_CONFIG` 可覆盖配置文件路径；`A2A_BRIDGE_AUDIT` 可覆盖审计日志路径。
+环境变量 `A2A_BRIDGE_CONFIG` 可覆盖配置文件路径；`A2A_BRIDGE_AUDIT` 可覆盖审计日志路径；`A2A_BRIDGE_INSTALLS` 可覆盖桥记录「自己装过哪些二进制」的位置。
 
 校验是 **fail-closed** 的：字段类型非法（`port` 非整数/越界、`host` 非非空字符串、`token` 短于 32 字符或含空白、`host_llm` 不是 `deny`/`allow` 之一）时扩展拒绝启动并报错。唯一的例外是**缺失**的 `token`（或根本不是字符串）：自动生成并**写回配置**，保证跨重启稳定。谁手写进去的 token 不会被桥换成桥自己生成的那一个——那会让远程 `mcp.json` 对不上号，且没有任何地方说明原因。下限压在 `generateToken` 的产出（43 字符）之下，它拦的是占位符，不是从别处抄来的密钥。
 
@@ -209,33 +211,19 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 ## 传文件
 
-远程 agent 要把固件、镜像这类二进制放到宿主机上烧写，走 `POST /blob`。**它收原始字节，而这条路的价值不在省体积，在不会挂。**
+传文件走普通 HTTP：`xfer_share` 把一条宿主路径交给 `dufs`（[sigoden/dufs](https://github.com/sigoden/dufs)，单文件静态二进制），由 cloudflared quick tunnel 发布成公网主机名。桥自己不提供字节协议，字节不经过 JSON-RPC。
 
-宿主的写入工具（`write`、`edit`）和 `bash` 都过审批门。宿主把审批配成 `prompt` 而调用方没有交互 UI 时，那道门**永远等不到应答**——实测挂起 ≥90s 而不返回（见「审批」，审批核验每次都跑这一条，结论是 `VERDICT: B`）。无头远程调用方在这种配置下唯一不会挂的写入路径就是 `/blob`；它绕开审批门这件事，在这个场景里正是它存在的理由，而不是附带的缺陷。
+`xfer_share` 收 `{ path, ttlSeconds? }`——要服务的文件或目录——返回一个内嵌 HTTP basic auth 凭据的 URL（`https://omp:<secret>@<random>.trycloudflare.com/`）、本地端口与到期时间。下行 `curl -u omp:<secret> -O <host>/<name>`，上行 `curl -u omp:<secret> -T <local> <host>/<name>`；Range 请求续传，WebDAV 客户端可用。共享在 TTL（默认 3600 秒）到期、收到 `xfer_stop`、或桥停止时关闭；第二次 `xfer_share` 顶掉前一次。
 
-省体积是次要的（`bash` 里 `base64 -d >` 也能写，只是多 33% 字节与一次编码），真正只有 `/blob` 能做的是 100 MB 级的镜像一次请求传完：
+`xfer_status` 与 `xfer_stop` 不收参数。
 
-```sh
-curl -X POST --data-binary @firmware.bin \
-  -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:<port>/blob?path=/tmp/firmware.bin"
-```
+**这个 URL 就是一份能力**：谁拿着它，谁就能读、能写那条路径，直到共享关闭。
 
-单次上限 128 MB——核验每轮实测一次：100 MB 的镜像一次请求就传完，字节一致。不带 `offset` 就是追加，带上则必须等于当前文件大小，否则 409。更大的文件分块传，每块也是原始字节。完整约定见 [协议参考](docs/protocol.md)。
+前置的两个二进制，桥自己找：先查 PATH，查不到就拉一份钉死版本的构建装进 `~/.local/bin`，用它起服务。两个都钉版本号加 sha256，写在 `src/obtain.ts`：`dufs` 是 0.46.0，`cloudflared` 是 2026.10.1，各四个平台，每一个哈希都由 `bun run test:obtain` 对着 GitHub 实际下发的字节复验过。桥不要 `latest`，也不向递给它字节的那台服务器要校验和。
 
-代价照旧记着，见「安全与边界」：不经宿主审批门、桥自己解析路径（因此能写宿主能写的任何路径）。
+拉取是桥多出来的一个意见。它先前已经决定用 `dufs` 当文件服务器，这次只补一句「字节从哪来」。出口是写路径：`xfer.dufs` 写成 `"/srv/bin/dufs"`，桥就拿这个文件用，一次都不下载。写裸名字就是让它去找，找不到就去拉。别人放的文件桥不动：`~/.local/bin/dufs` 已经存在、又不是自己装的那一份，桥拒绝继续，并把它的 sha256 打出来。自己装过什么，记在 `<agentDir>/a2a-bridge.installs.json`。
 
-注意内存：请求体在到达 handler 之前由 Bun 缓冲，所以代价是**每个在途请求**的内存——十个并发的 100 MB 上传就是十份 100 MB 的缓冲，这笔算术不用实测。上传前后的宿主 RSS 核验每轮量一次，当前那张表在 [协议参考](docs/protocol.md)；这些数跟着 Bun 分配器走，只能当量级看，不能当预算排。并发上传要限量。
-
-**下载走不通。** 三处宿主侧的限制叠在一起，任一条单独都足以卡住：
-
-- `read` 单行超 150 KB 直接拒绝，报 `exceeds 150.0KB limit`；1 MB 的多行文件只回来约 16 KB
-- `bash` 输出超 768 字节就截断，尾巴指向 `artifact://N`
-- `read artifact://N` 自己也截断在约 150 KB
-
-所以远程 agent 拿不回本机的大文件，只能读小片段（实测 20 段 `dd` 累计约 3.2 MB / 4 MB，有缺口）。`/blob` 只解决上传。
-
-纯文本或小文件直接用 `write` 工具（单次约 900 KB）更省事，只是不走 `/blob` 的路径。
+需要拉取的共享会等拉完，回包用 `installed` 说清拉的是哪个版本，本来就在的地方是 `null`。每次调用一条审计，`tool: "xfer"`，拉取那几次是 `action: install`。
 
 ## 设备
 
@@ -265,15 +253,14 @@ curl -X POST --data-binary @firmware.bin \
 ## 安全与边界
 
 - **token 即工具执行全权（默认配置下）**：宿主默认 `approvalMode: yolo`，拿到 token 就可在宿主会话里直接执行任意暴露的工具（含 `bash`），不经过任何审批；只有宿主把工具配成 `prompt` 才有审批门可拦（无 UI 时见审批节）。配置文件保持 `0600`，不要进版本库。
-- **桥不做权限决定**：`tools/list` 就是宿主 `Main` 会话的注册表（`getAllToolInfos()`），原样透传，不过滤。因此它包含 `hidden` 工具、也包含宿主当前对自己模型禁用的工具——**omp 是什么权限，桥就是什么权限**。桥没有 `deny` 这类第二套名单：两份名单可以互相矛盾，而代码里没有定义谁优先。要收紧就配宿主自己的工具权限，桥不参与。
-- **执行走宿主原生工具**：`tools/call` 固定路由到宿主 `Main` 会话的 `getToolByName().execute()`，注入真实的 `session.settings` 与 `ExtensionContext ui`，所以宿主的审批门（`ExtensionToolWrapper`）照常生效，桥自己一套审批逻辑都没有。
+- **桥不做权限决定**：`tools/list` 是宿主 `Main` 会话的注册表（`getAllToolInfos()`），原样透传、不过滤，外加桥自己服务的三个 `xfer_*`。因此它包含 `hidden` 工具、也包含宿主当前对自己模型禁用的工具——**omp 是什么权限，桥就是什么权限**。桥没有 `deny` 这类第二套名单：两份名单可以互相矛盾，而代码里没有定义谁优先。要收紧就配宿主自己的工具权限，桥不参与。
+- **执行走宿主原生工具**：`tools/call` 固定路由到宿主 `Main` 会话的 `getToolByName().execute()`，注入真实的 `session.settings` 与 `ExtensionContext ui`，所以宿主的审批门（`ExtensionToolWrapper`）照常生效，桥自己一套审批逻辑都没有。三个 `xfer_*` 工具是例外：桥自己分派它们（见「传文件」），不进 `getToolByName()`，也不过那道门——持 token 的人能把桥能读到的任意路径发布到公网，中间没有审批；拿到那个 URL 的人还能改写它。
 - **远程调用可能唤醒宿主自己的 agent**。桥自己一次模型请求都不发，但执行归宿主管：一条远程 `bash` 超过宿主的命令超时（实测默认 300 秒），宿主把它转成后台任务，任务完成时往会话里注入一条完成通知（"Background job … has completed. Resume your work…"），宿主会话自己的 agent loop 就从这条通知醒过来，开始推理、跑它自己的本地工具。Windows 宿主上实测的链条：调用超时转后台（04:35:23）→ 完成通知进会话（04:36:27）→ 宿主第一批带 usage 的 assistant 消息（04:36:31，模型 stack/medium，单轮输入从 8,309 token 起），此后几十轮。这不是桥在推理，是工具执行在宿主会话里留下的后果，花的是宿主的 token。宿主这一半是开关，不是既成事实：接管在位时（`host_llm: "deny"` 或 `POST /host-llm`），被唤醒的会话发不出任何模型请求——见「宿主推理接管」。
 - **调用与列表同源**：`tools/call` 只接受出现在 `tools/list` 里的名字，别名（如 `xd://bash`）和未注册的名字一律拒绝，且不区分「被过滤」与「不存在」（不泄露名字是否存在）。
-- **`POST /blob` 是例外，它不经宿主审批门。** 它收原始字节（省掉 base64），直接落盘，桥自己解释路径——**能写宿主能写的任何路径，无根目录、无白名单**。这是刻意的取舍：扩展无法主动发起审批（`ExtensionAPI` 只有 `on("tool_approval_requested", …)`，那是宿主问、扩展答的方向），而唯一能过审批门的写入方式是发一次 `tools/call`，那正是 `/blob` 要避免的编码。审计照旧记 `tool: "blob:write"`，args 只有 `path`/`offset`/`bytes`，文件内容不进日志。在这里解释路径还有一层后果：桥自己的两个文件就落在它解析相对路径的那个根里——`a2a-bridge.json` 与 `a2a-bridge.log` 都在宿主 agent 目录，每一个相对 `path` 也是。两者都改写不了（写入一律追加，显式 `offset` 必须等于当前大小），但往配置里追加垃圾会让下一次 `loadConfig` 抛错、桥拒绝启动，往日志里灌量则驱动轮转、把保留的那一代冲出去。冲的是启动与证据，不是新增的可达范围：能这么干的人本来就握着 token。详见 [协议参考](docs/protocol.md)。
-- **`POST /host-llm` 是桥第二条不属于工具的路。** 它直接伸手进宿主会话——换注册表行、override 设置、替换进程的 `fetch`——和 `/blob` 同一类例外：桥在这里有了自己的意见，绕开了宿主的工具分发，代价是审计（`tool: "host_llm"`，每次切换一条）和文档。它限制的是宿主自己的推理，且只听从握着 token 的人的指令。见「宿主推理接管」。
+- **`POST /host-llm` 是桥不属于工具的那条路。** 它直接伸手进宿主会话——换注册表行、override 设置、替换进程的 `fetch`——桥在这里有了自己的意见，绕开了宿主的工具分发，代价是审计（`tool: "host_llm"`，每次切换一条）和文档。它限制的是宿主自己的推理，且只听从握着 token 的人的指令。见「宿主推理接管」。
 - 默认仅回环监听；真要对外暴露，防火墙自己负责。
 - **会话强制**：除 `initialize` 外所有消息必须携带 `Mcp-Session-Id`（缺失 → 400，未知/空闲超 24h → 404）。会话上限 64 个，超出淘汰最久未用；每次命中刷新空闲计时。
-- **审计日志**：每次远程 `tools/call` 写两条 JSONL——发起时 `{ts,id,sid,phase:"start",tool,args}`，完成时 `{ts,id,sid,phase:"done",tool,isError,args}`（同 `id` 配对；`sid` 为该调用的 `Mcp-Session-Id`，共享 token 下可把调用归因到客户端会话；参数摘要截断 1KB）到 `~/.omp/agent/a2a-bridge.log`，权限 0600，超过 512KB 轮转为 `.1`。这里的 `id` 是本桥为配对生成的 UUID，调用方的 JSON-RPC id 不落日志，所以按 JSON-RPC id 查不到。参数里超过 120 字符的字符串只记 `<len:N,sha256:前8位>`，日志不落载荷，且**不分嵌套层数**：宿主 `edit` 的文件正文就落在 `args.edits[0].oldText`（第三层），只走两层的脱敏会把它原样写出去。嵌套超过 32 层整个子树换成 `<max-depth>`，不再往下走。这里说的是桥自己这份日志；宿主会话照常收到那些参数，宿主自己的记录归宿主管。记录按进程内一条队列落盘，因为「查大小 → 轮转 → 写行」是三步而不是一个整体：两个并发写都读到越过上限的尺寸就会都去轮转，第二次 `rename` 覆盖掉的正是第一次刚放好的那个 `.1`。不串行时同一份代码重跑六轮，最坏的一次两个文件各剩 1 条记录——测试摆到磁盘上的 572 条里有 570 条在两个文件都找不到；最轻的一次是并发那 60 条只剩 1 条。日志写失败不影响调用，但也不无声吞掉：每个日志路径的头一次写失败会往宿主 stderr 打一行 `[a2a-bridge] audit record not written to <路径>（<原因>）`，此后每满一百次再打一行——写不成的日志与从没被调用过的桥看起来一模一样。`start` 排在工具执行之前、`done` 排在响应发出之前，两者都要落盘了请求才走：拿到 200 就意味着那一行已经在盘上，接着读日志不必轮询。这一条以前是反的（落盘走进程内队列、调用方不等它），而且只在磁盘慢到队列排得上时才显形，实测代价是每条记录约 99 µs（`stat` + `appendFile` + `chmod`，串行），对着一次 bash 调用可以忽略。`blob:write` 记录先于响应读回文件大小落盘，所以写完之后再读尺寸失败，代价只是响应里少一个 `size` 字段，不是整条痕迹。`POST /blob` 的 `sid` 只认本桥签发过的会话：外面来的头记成 `null`，因为让调用方自选的值等于任何握 token 的人都能把写入挂到别人的会话名下。未鉴权的尝试在这份日志里一条不写——走宿主 stderr，第一次与其后每五十次各一行——写审计就要驱动轮转，这个杠杆不该交到还在猜 token 的人手里，少记那几行的损失没有它大。
+- **审计日志**：每次远程 `tools/call` 写两条 JSONL——发起时 `{ts,id,sid,phase:"start",tool,args}`，完成时 `{ts,id,sid,phase:"done",tool,isError,args}`（同 `id` 配对；`sid` 为该调用的 `Mcp-Session-Id`，共享 token 下可把调用归因到客户端会话；参数摘要截断 1KB）到 `~/.omp/agent/a2a-bridge.log`，权限 0600，超过 512KB 轮转为 `.1`。这里的 `id` 是本桥为配对生成的 UUID，调用方的 JSON-RPC id 不落日志，所以按 JSON-RPC id 查不到。参数里超过 120 字符的字符串只记 `<len:N,sha256:前8位>`，日志不落载荷，且**不分嵌套层数**：宿主 `edit` 的文件正文就落在 `args.edits[0].oldText`（第三层），只走两层的脱敏会把它原样写出去。嵌套超过 32 层整个子树换成 `<max-depth>`，不再往下走。这里说的是桥自己这份日志；宿主会话照常收到那些参数，宿主自己的记录归宿主管。记录按进程内一条队列落盘，因为「查大小 → 轮转 → 写行」是三步而不是一个整体：两个并发写都读到越过上限的尺寸就会都去轮转，第二次 `rename` 覆盖掉的正是第一次刚放好的那个 `.1`。不串行时同一份代码重跑六轮，最坏的一次两个文件各剩 1 条记录——测试摆到磁盘上的 572 条里有 570 条在两个文件都找不到；最轻的一次是并发那 60 条只剩 1 条。日志写失败不影响调用，但也不无声吞掉：每个日志路径的头一次写失败会往宿主 stderr 打一行 `[a2a-bridge] audit record not written to <路径>（<原因>）`，此后每满一百次再打一行——写不成的日志与从没被调用过的桥看起来一模一样。`start` 排在工具执行之前、`done` 排在响应发出之前，两者都要落盘了请求才走：拿到 200 就意味着那一行已经在盘上，接着读日志不必轮询。这一条以前是反的（落盘走进程内队列、调用方不等它），而且只在磁盘慢到队列排得上时才显形，实测代价是每条记录约 99 µs（`stat` + `appendFile` + `chmod`，串行），对着一次 bash 调用可以忽略。未鉴权的尝试在这份日志里一条不写——走宿主 stderr，第一次与其后每五十次各一行——写审计就要驱动轮转，这个杠杆不该交到还在猜 token 的人手里，少记那几行的损失没有它大。
 - **只有 `start` 没有 `done` = 调用已发起但未完成**（典型：无 UI 下挂起的审批）。读这个信号有两处坑，都实测过：轮转可能把一次调用的两条分处 `.1` 与当前文件，所以要在两个文件里按 `id` 配对；而且只保留一代——下一次轮转会覆盖 `.1`，挂起调用的证据会被后续流量冲出日志。要在它还在的时候读。
 - 端口被占用时回退到随机端口并告警（远程 `mcp.json` 需同步改端口）。
 
@@ -320,14 +307,13 @@ bun install
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
-bun test              # 单测：test/*.test.ts（161 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/blob 分派/takeover 形状/装配事务/host-llm 路由）
+bun test              # 单测：test/*.test.ts（160 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由）
 bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，34 项（需本机 omp）
-bun run test:blob      # POST /blob 原始字节上传，35 项（需本机 omp）
 bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp）
 bun run test:takeover  # 宿主推理 deny/restore 对一个计数 sink 实测，约 60 秒（需本机 omp）
-bun run test:scenario  # 端到端场景，10 个叙事 / 54 步，约 45 秒（需本机 omp）
+bun run test:scenario  # 端到端场景，8 个叙事 / 41 步，约 45 秒（需本机 omp）
 bun run test:install   # 发布包自包含 + 真实宿主走 MCP，33 项（需本机 omp）
 bun run website        # 文档站（VitePress）本地预览，端口见输出（5173 起，被占则顺延）；首次先 cd website && bun install
 ```

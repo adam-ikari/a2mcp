@@ -53,9 +53,9 @@ graph TB
 ```
 
 - The extension starts `Bun.serve` on `session_start` and implements MCP `2025-11-25`'s `initialize` / `tools/list` / `tools/call`, answering with plain JSON (no SSE).
-- The endpoint is one per **process**; the host's `session_start` / `session_shutdown` are one per **session** (a task subagent's runner, an ACP session, a persisted revive each get their own). A later `session_start` reuses the running server (two in flight at once bind only one endpoint), and a `session_shutdown` only releases the port once the host registry holds no live `Main` session (`AgentRef.session` is null exactly when it is parked or aborted, and `tools/call` already refuses that state) — otherwise any subagent finishing would take the endpoint down with it. A shutdown that lands mid-bind has no port to stop yet, so the start re-reads the registry when the bind finishes and gives up what it just bound if `Main` is gone. Releasing uses a non-forced `stop()`: the listener closes at once and new connections are refused, while a request already in flight finishes and gets its audit pair — a forced close would leave a `tools/call` with half its record and a `POST /blob` with none.
+- The endpoint is one per **process**; the host's `session_start` / `session_shutdown` are one per **session** (a task subagent's runner, an ACP session, a persisted revive each get their own). A later `session_start` reuses the running server (two in flight at once bind only one endpoint), and a `session_shutdown` only releases the port once the host registry holds no live `Main` session (`AgentRef.session` is null exactly when it is parked or aborted, and `tools/call` already refuses that state) — otherwise any subagent finishing would take the endpoint down with it. A shutdown that lands mid-bind has no port to stop yet, so the start re-reads the registry when the bind finishes and gives up what it just bound if `Main` is gone. Releasing uses a non-forced `stop()`: the listener closes at once and new connections are refused, while a request already in flight finishes and gets its audit pair — a forced close would leave a `tools/call` with half its record.
 - The catalog, the exposure gate and execution read one registry: the host's `Main` session (`getAllToolInfos()`, which is exactly what the host wires `pi.getAllTools()` to). Execution then resolves the name through that same session's `getToolByName`. With no live `Main` (parked or aborted, before the port is released) the catalog falls back to the runner the entry is pinned to instead of reporting an empty registry.
-- The catalog is the host registry as-is; the bridge does not filter it (see [Security and boundaries](#security-and-boundaries)).
+- The catalog is the host registry as-is, plus the bridge's own three `xfer_*` tools; nothing else is filtered or added (see [Security and boundaries](#security-and-boundaries)).
 - The bridge itself issues no model requests: one remote call is "receive request, run tool, answer". But execution lands in the host's real session, and the session-level side effects a tool leaves behind can wake the host's own agent — and that inference spends the host's tokens (see [Security and boundaries](#security-and-boundaries)). Whether the host may reason at all is itself controllable from the remote side: [Host inference takeover](#host-inference-takeover).
 
 ## Install
@@ -109,7 +109,7 @@ A2A bridge listening on http://127.0.0.1:<port> (token <first 6 chars>…)
 The config file is `~/.omp/agent/a2a-bridge.json`, generated on first start with mode `0600` (created at that mode, so there is no permission window):
 
 ```json
-{ "port": 0, "token": "<base64url 32B>", "host": "127.0.0.1", "host_llm": "allow" }
+{ "port": 0, "token": "<base64url 32B>", "host": "127.0.0.1", "host_llm": "allow", "xfer": { "dufs": "dufs", "cloudflared": "cloudflared" } }
 ```
 
 | Field | Meaning |
@@ -118,10 +118,12 @@ The config file is `~/.omp/agent/a2a-bridge.json`, generated on first start with
 | `token` | Bearer token, generated on first start (43 characters); a hand-written one under 32 characters is refused |
 | `host` | Listen address, default `127.0.0.1` (a warning is added if you change it to `0.0.0.0`) |
 | `host_llm` | `"deny"` \| `"allow"` (default): whether the host's own session may make model requests when it boots — see [Host inference takeover](#host-inference-takeover). It decides the **startup state only**; a running bridge can be toggled over HTTP regardless of what is written here |
+| `xfer.dufs` | the HTTP file server that serves the shared path, default `dufs`: `PATH` first, else a pinned build fetched into `~/.local/bin`. A value containing `/` is used as given and never downloaded — see [Moving files](#moving-files) |
+| `xfer.cloudflared` | the tunnel binary that publishes the share, default `cloudflared`: the same search, the same kind of pin (`2026.10.1` as of this writing) |
 
-Only those four. **There is no tool allow/deny list and no file sandbox** — the bridge makes no permission decision of its own, so adding such fields to the config has no effect (unknown fields are ignored). `host_llm` is not a tool permission either: it gates the host's *own inference*, not what the caller may execute — the caller holds the token and runs whatever the host exposes.
+Only those fields: the four top-level ones above, plus an optional `xfer` block. **There is no tool allow/deny list and no file sandbox** — the bridge makes no permission decision of its own, so adding such fields to the config has no effect (unknown fields are ignored). `host_llm` is not a tool permission either: it gates the host's *own inference*, not what the caller may execute — the caller holds the token and runs whatever the host exposes.
 
-`A2A_BRIDGE_CONFIG` overrides the config path; `A2A_BRIDGE_AUDIT` overrides the audit log path.
+`A2A_BRIDGE_CONFIG` overrides the config path; `A2A_BRIDGE_AUDIT` overrides the audit log path; `A2A_BRIDGE_INSTALLS` overrides where the bridge keeps its record of binaries it fetched.
 
 Validation is **fail-closed**: a present-but-malformed field (`port` not an integer or out of range, `host` not a non-empty string, `token` shorter than 32 characters or containing whitespace) makes the extension refuse to start and report an error. The one exception is a `token` that is **absent** (or not a string at all): it is regenerated and **written back to the config**, so it stays stable across restarts. A token somebody typed is never replaced by one the bridge chose — that would break the remote `mcp.json` with no explanation anywhere. The floor sits below what `generateToken` emits (43 characters), so it catches a placeholder, not a secret copied from elsewhere.
 
@@ -216,52 +218,19 @@ A noise layer mutes the settings that would otherwise keep the host busy and cha
 
 ## Moving files
 
-To put a firmware image or another binary on the host, use `POST /blob`. **It takes
-raw bytes, and what that buys is not the size — it is that it does not hang.**
+Files move over plain HTTP: `xfer_share` hands a host path to `dufs` ([sigoden/dufs](https://github.com/sigoden/dufs), a single static binary) and a cloudflared quick tunnel publishes it under a public hostname. The bridge ships no byte protocol of its own — the bytes never travel over JSON-RPC.
 
-The host's writing tools (`write`, `edit`) and its `bash` all pass the approval
-gate. When the host has `prompt` configured for them and the caller has no
-interactive UI, that gate **never gets an answer** — measured hanging ≥90s without
-returning (see [Approval](#approval); the approval probe runs this every round and
-expects `VERDICT: B`). For a headless remote caller in that configuration, `/blob`
-is the only write path that does not hang. Bypassing the gate is therefore the
-reason it exists there, not a side effect.
+`xfer_share` takes `{ path, ttlSeconds? }` — the file or directory to serve — and returns a URL with HTTP basic auth credentials embedded (`https://omp:<secret>@<random>.trycloudflare.com/`), plus the local port and the expiry. Download with `curl -u omp:<secret> -O <host>/<name>`, upload with `curl -u omp:<secret> -T <local> <host>/<name>`; Range requests resume, WebDAV clients work. The share closes at the TTL (default 3600s), on `xfer_stop`, or when the bridge stops; a second `xfer_share` replaces the first.
 
-Saving the base64 step is the smaller part of it (`base64 -d >` inside `bash`
-works too, at 33% more bytes and one encode). What only `/blob` does is a 100 MB
-image in a single request:
+`xfer_status` and `xfer_stop` take no arguments.
 
-```sh
-curl -X POST --data-binary @firmware.bin \
-  -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:<port>/blob?path=/tmp/firmware.bin"
-```
+**The URL is a capability**: whoever holds it can read and write that path until the share closes.
 
-One request carries up to 128 MB — measured every probe round: a 100 MB image goes
-through in a single call, byte-identical. No `offset` means append; with `offset` it must equal
-the file's current size, or 409. Larger files chunk, still as raw bytes. The full
-contract is in [docs/protocol.md](docs/protocol.md).
+Prerequisites: `dufs` and `cloudflared`. The bridge finds both itself — `PATH` first, and when nothing answers there it fetches a pinned build into `~/.local/bin` and uses that. Both are pinned by version and sha256 in `src/obtain.ts`: `dufs` 0.46.0 and `cloudflared` 2026.10.1, four platform rows each, every hash re-checked against the bytes GitHub actually serves by `bun run test:obtain`. It never asks for `latest`, and it never takes a checksum from the same server that gave it the bytes.
 
-Mind the memory: Bun buffers the body before the handler sees it, so the cost is
-**per in-flight request** — ten concurrent 100 MB uploads are ten 100 MB buffers, and
-that arithmetic needs no measurement. Host RSS around uploads is measured each probe
-round and the current table lives in [docs/protocol.md](docs/protocol.md); the numbers
-move with Bun's allocator, so treat them as scale, not as a budget. Keep concurrency
-down.
+The fetch is one more opinion from a bridge that otherwise forwards: it had already picked `dufs` as the file server, so what it decides here is only where the bytes come from. A path is the exit — write `xfer.dufs` as `"/srv/bin/dufs"` and the bridge uses that file as given and downloads nothing. A bare name is the request to look, and to fetch if looking finds nothing. It will not overwrite a binary it did not install: an existing `~/.local/bin/dufs` that is not the build this bridge wrote is refused, with its own sha256 printed, and the account of what was installed sits in `<agentDir>/a2a-bridge.installs.json`.
 
-**Download does not work.** Three host-side limits stack, and any one alone is enough:
-
-- `read` refuses a single line over 150 KB (`exceeds 150.0KB limit`); a 1 MB
-  multi-line file comes back as roughly 16 KB
-- `bash` output past 768 bytes is truncated, with a pointer to `artifact://N`
-- `read artifact://N` is itself truncated at about 150 KB
-
-So a remote agent cannot pull a large file off the host, only read small slices
-(measured: 20 `dd` slices recovered about 3.2 MB of a 4 MB file). `/blob` covers
-upload only.
-
-For plain text or small files the `write` tool is simpler — about 900 KB per call —
-though it does not use `/blob`'s path.
+A share that has to fetch waits for the fetch, and says so: the reply carries `installed` with the version pulled (`null` for anything that was already there). Every call is audited as `tool: "xfer"`, one record per call, with `action: install` on the fetches.
 
 ## Devices
 
@@ -291,15 +260,14 @@ The listing is decided by the host at runtime — it depends on which extensions
 ## Security and boundaries
 
 - **The token is full tool-execution authority (under the default config)**: the host's default `approvalMode: yolo` means anyone holding the token can execute any exposed tool (including `bash`) directly in the host session with no approval step; only tools the host configures as `prompt` have a gate that can stop them (see [Approval](#approval) for the no-UI case). Keep the config file at `0600` and out of version control.
-- **The bridge makes no permission decision**: `tools/list` is the host's `Main` session registry (`getAllToolInfos()`), passed through verbatim with no filtering. It therefore includes `hidden` tools and tools the host currently has disabled for its own model — **whatever permissions omp has are the permissions the bridge has**. There is no second list such as `deny`: two lists can disagree, and no code defines which wins. To tighten anything, configure the host's own tool permissions; the bridge stays out of it.
-- **Execution goes through the host's native tools**: `tools/call` routes to `getToolByName().execute()` on the host's `Main` session with the real `session.settings` and `ExtensionContext ui` injected, so the host's approval gate (`ExtensionToolWrapper`) applies as usual. The bridge implements no approval logic of its own.
+- **The bridge makes no permission decision**: `tools/list` is the host's `Main` session registry (`getAllToolInfos()`), passed through verbatim with no filtering, plus the three `xfer_*` tools the bridge serves itself. It therefore includes `hidden` tools and tools the host currently has disabled for its own model — **whatever permissions omp has are the permissions the bridge has**. There is no second list such as `deny`: two lists can disagree, and no code defines which wins. To tighten anything, configure the host's own tool permissions; the bridge stays out of it.
+- **Execution goes through the host's native tools**: `tools/call` routes to `getToolByName().execute()` on the host's `Main` session with the real `session.settings` and `ExtensionContext ui` injected, so the host's approval gate (`ExtensionToolWrapper`) applies as usual. The bridge implements no approval logic of its own. The three `xfer_*` tools are the exception: the bridge dispatches them itself (see [Moving files](#moving-files)), so they never reach `getToolByName()` and never pass that gate — a token holder can publish any path the bridge can read to a public URL with no approval step in between, and whoever holds that URL can write to it as well.
 - **A remote call can wake the host's own agent.** The bridge never issues a model request, but the host owns execution: a remote `bash` that exceeds the host's command timeout (measured default: 300 seconds) is converted by the host into a background job, and when the job finishes the host injects a completion notice into the session ("Background job … has completed. Resume your work…"). The host session's own agent loop wakes on that notice, starts inferring and running its own local tools. Measured chain on a Windows host: call timed out and became a background job (04:35:23) → completion notice entered the session (04:36:27) → the host's first assistant messages with real usage (04:36:31, model stack/medium, first turn at 8,309 input tokens), dozens of turns after that. This is not the bridge reasoning — it is a consequence of the tool landing in the host session, and the tokens spent are the host's. The host's side of this is a switch, not a fate: with the takeover armed (`host_llm: "deny"` or `POST /host-llm`), the woken session makes zero model requests — see [Host inference takeover](#host-inference-takeover).
 - **Calls and the list share one source**: `tools/call` only accepts names that appear in `tools/list`; aliases (such as `xd://bash`) and unregistered names are refused, and a refusal does not distinguish "filtered" from "nonexistent" (so it does not leak whether a name exists).
-- **`POST /blob` is an exception, and it does not pass the host approval gate.** It takes raw bytes (skipping base64) and writes them directly, resolving the path itself — so it can write **anywhere the host process can write, with no root and no allowlist**. That is deliberate: an extension cannot raise an approval request of its own (`ExtensionAPI` only offers `on("tool_approval_requested", …)`, which is the host asking and the extension answering), and the one way to write through the gate is a `tools/call` — the very encoding `/blob` exists to avoid. Auditing still happens, tagged `tool: "blob:write"` with `path`/`offset`/`bytes` in args and never the file contents. One consequence of resolving paths here is that the bridge's own two files sit under the root it resolves against — `a2a-bridge.json` and `a2a-bridge.log` are both in the agent directory, and so is every relative `path`. Neither can be rewritten (writes append, and an explicit `offset` has to equal the current size), but appending junk to the config makes the next `loadConfig` throw and the bridge refuse to start, and pumping volume into the log drives the rotations that drop a retained generation. Startup and evidence, not new reach: whoever can do this already holds the token. See [docs/protocol.md](docs/protocol.md).
-- **`POST /host-llm` is the bridge's second path that is not a tool.** It reaches into the host session directly — swapping registry rows, overriding settings, replacing the process `fetch` — the same category of exception as `/blob`: the bridge holds an opinion, bypasses the host's tool dispatch, and pays for it with auditing (`tool: "host_llm"`, one record per toggle) and documentation. What it limits is the host's own inference, and it acts only on the word of whoever holds the token. See [Host inference takeover](#host-inference-takeover).
+- **`POST /host-llm` is the bridge's path that is not a tool.** It reaches into the host session directly — swapping registry rows, overriding settings, replacing the process `fetch` — so the bridge holds an opinion, bypasses the host's tool dispatch, and pays for it with auditing (`tool: "host_llm"`, one record per toggle) and documentation. What it limits is the host's own inference, and it acts only on the word of whoever holds the token. See [Host inference takeover](#host-inference-takeover).
 - Loopback-only by default; if you really do expose it, the firewall is your responsibility.
 - **Sessions are mandatory**: every message except `initialize` must carry `Mcp-Session-Id` (missing → 400, unknown or idle past 24h → 404). At most 64 sessions are tracked, with the least-recently-seen evicted beyond that; every hit refreshes the idle timer.
-- **Audit log**: every remote `tools/call` writes two JSONL records — `{ts,id,sid,phase:"start",tool,args}` at dispatch and `{ts,id,sid,phase:"done",tool,isError,args}` on completion (paired by the same `id`; `sid` is that call's `Mcp-Session-Id`, so under a shared token each call is attributable to a client session; the args summary is truncated to 1KB) — to `~/.omp/agent/a2a-bridge.log`, mode 0600, rotating to `.1` past 512KB. The `id` is a UUID the bridge generates for pairing; the caller's JSON-RPC id is not written, so the log cannot be searched by it. Strings longer than 120 characters in the args are recorded as `<len:N,sha256:first 8>` so the log never holds payloads — at any nesting depth, not just the top levels: the host's `edit` args put the file body at `args.edits[0].oldText`, and a redactor that stops two levels deep writes it out. Nesting past 32 levels is replaced by `<max-depth>` rather than walked. This is the bridge's own log: the host session still sees the args it was handed, and its transcript is the host's to keep. Records reach the disk through one queue per process, because `stat`-then-rotate-then-append is three steps: two calls in flight together both read a size past the cap and both rotate, and the second `rename` overwrites the `.1` the first one just filled. Measured on the unqueued version over six runs: the worst left one record in each of the two files, 570 of the 572 records the test had put on disk being in neither. Audit write failures never affect the call, and they do not pass unnoticed either: the first failure for a log path prints `[a2a-bridge] audit record not written to <path> (<cause>)` to the host's stderr, then every hundredth failure, because a log that cannot be written looks exactly like a bridge that was never called. `start` reaches the disk before the tool runs and `done` before the response goes out, so a 200 means the line is already there and a caller can read the log without polling for it. That was the other way round before — records rode one process-wide queue the caller never waited on — and it showed up only when the disk was slow enough for the queue to matter; measured cost of waiting is ~99 µs per record (`stat` + `appendFile` + `chmod`, serialized), which is nothing against a call that runs a bash command. A `blob:write` record reaches the disk before the response reads the file's size back, so a failed read after a landed write costs a field in the response rather than the trace. `POST /blob` fills `sid` from sessions this bridge issued only; a header from outside is recorded as `null`, because a caller-chosen value lets any token holder file a write under somebody else's session. Unauthorized attempts write nothing here at all — they go to the host's stderr, first one and then every 50th — since handing pre-auth traffic the one lever that ages real records out of a rolling window costs more than the missing line is worth.
+- **Audit log**: every remote `tools/call` writes two JSONL records — `{ts,id,sid,phase:"start",tool,args}` at dispatch and `{ts,id,sid,phase:"done",tool,isError,args}` on completion (paired by the same `id`; `sid` is that call's `Mcp-Session-Id`, so under a shared token each call is attributable to a client session; the args summary is truncated to 1KB) — to `~/.omp/agent/a2a-bridge.log`, mode 0600, rotating to `.1` past 512KB. The `id` is a UUID the bridge generates for pairing; the caller's JSON-RPC id is not written, so the log cannot be searched by it. Strings longer than 120 characters in the args are recorded as `<len:N,sha256:first 8>` so the log never holds payloads — at any nesting depth, not just the top levels: the host's `edit` args put the file body at `args.edits[0].oldText`, and a redactor that stops two levels deep writes it out. Nesting past 32 levels is replaced by `<max-depth>` rather than walked. This is the bridge's own log: the host session still sees the args it was handed, and its transcript is the host's to keep. Records reach the disk through one queue per process, because `stat`-then-rotate-then-append is three steps: two calls in flight together both read a size past the cap and both rotate, and the second `rename` overwrites the `.1` the first one just filled. Measured on the unqueued version over six runs: the worst left one record in each of the two files, 570 of the 572 records the test had put on disk being in neither. Audit write failures never affect the call, and they do not pass unnoticed either: the first failure for a log path prints `[a2a-bridge] audit record not written to <path> (<cause>)` to the host's stderr, then every hundredth failure, because a log that cannot be written looks exactly like a bridge that was never called. `start` reaches the disk before the tool runs and `done` before the response goes out, so a 200 means the line is already there and a caller can read the log without polling for it. That was the other way round before — records rode one process-wide queue the caller never waited on — and it showed up only when the disk was slow enough for the queue to matter; measured cost of waiting is ~99 µs per record (`stat` + `appendFile` + `chmod`, serialized), which is nothing against a call that runs a bash command. Unauthorized attempts write nothing here at all — they go to the host's stderr, first one and then every 50th — since handing pre-auth traffic the one lever that ages real records out of a rolling window costs more than the missing line is worth.
 - **A `start` with no `done` means the call was dispatched but never completed** (typically: an approval hung for want of a UI). Two catches on reading that signal, both measured: rotation can split one call's pair across `.1` and the current file, so pair by `id` in both files; and only ONE generation is retained, because the next rotation overwrites `.1` — the evidence of a hung call ages out of the log after enough later traffic. Read it while it is still there.
 - If the configured port is busy, the bridge falls back to an ephemeral port and warns (update the port in the remote `mcp.json`).
 
@@ -346,14 +314,13 @@ bun install
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
 bun run test:tree     # repo shape: no symlink points off this machine, 3 checks, no deps, no local omp (runs before bun test on purpose)
-bun test              # unit tests: test/*.test.ts (161: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/blob dispatch/takeover shapes/arming transaction/host-llm route)
+bun test              # unit tests: test/*.test.ts (160: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route)
 bun run test:registry # drive the takeover against the host's real model registry, 28 checks, seconds (needs no local omp, no credentials)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 34 items (needs a local omp)
-bun run test:blob      # POST /blob raw-byte upload, 35 items (needs a local omp)
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
 bun run test:takeover  # host inference deny/restore against a counting sink, ~60s (needs a local omp)
-bun run test:scenario  # end-to-end scenarios, 10 narratives / 54 steps, ~45s (needs a local omp)
+bun run test:scenario  # end-to-end scenarios, 8 narratives / 41 steps, ~45s (needs a local omp)
 bun run test:install   # published-package self-containment + a real host over MCP, 33 items (needs a local omp)
 bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`
 ```

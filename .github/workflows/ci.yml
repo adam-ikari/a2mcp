@@ -95,11 +95,13 @@ jobs:
       # ~/.omp/plugins independently of HOME and no env var redirects it, so
       # that half of the probe runs against the real plugin directory — which is
       # why it works here at all.
-      # POST /blob writes bytes without passing the host approval gate, so it is
-      # worth its own probe: the byte-identity assertions and the refusals are what
-      # keep that door honest.
-      - name: test:blob — raw-byte upload over POST /blob
-        run: bun run test:blob
+      # The bridge fetches a missing dufs or cloudflared by itself, pinned by version
+      # and sha256. Those pins are only worth what the build has been measured to do,
+      # so this probe downloads for real, HEADs every pinned asset for a target it
+      # cannot run, and drives the fetched binaries: GET bytes, Range, PUT landing on
+      # disk, a wrong password refused, the port released after stop, a real tunnel.
+      - name: test:obtain — pinned downloads and a real share on them
+        run: bun run test:obtain
       # The narrative suite: every scenario ends with its consequence checked
       # through a channel other than the one that produced it (filesystem, audit
       # log, port state). Each scenario has been shown to fail against a

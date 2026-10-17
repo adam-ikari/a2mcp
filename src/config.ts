@@ -17,11 +17,27 @@ import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
  * (src/takeover.ts) — whether the host may issue model requests at all — which
  * is a statement about the host's own inference, not about tool permissions.
  */
+
+/**
+ * Which binaries the transfer tools drive (src/xfer.ts).
+ *
+ * Names rather than paths by default, so a plain `PATH` lookup decides — and a
+ * machine that has them elsewhere says so here instead of the bridge guessing.
+ * Both are optional in the file: absent means the names below.
+ */
+export interface XferConfig {
+	/** HTTP file server that serves the shared path. */
+	dufs: string;
+	/** Tunnel binary that publishes it. */
+	cloudflared: string;
+}
+
 export interface BridgeConfig {
 	port: number; // 0 = random
 	token: string; // base64url 32B; loadConfig rejects anything shorter than MIN_TOKEN_CHARS
 	host: string; // default "127.0.0.1"
 	host_llm: "deny" | "allow"; // startup state of the takeover switch (src/takeover.ts); runtime toggles never persist
+	xfer: XferConfig; // binaries behind the xfer_* tools (src/xfer.ts)
 }
 
 /**
@@ -43,6 +59,7 @@ const DEFAULTS: Omit<BridgeConfig, "token"> = {
 	port: 0,
 	host: "127.0.0.1",
 	host_llm: "allow",
+	xfer: { dufs: "dufs", cloudflared: "cloudflared" },
 };
 
 function fieldError(file: string, field: string, expect: string): Error {
@@ -102,6 +119,27 @@ export async function loadConfig(env?: NodeJS.ProcessEnv): Promise<BridgeConfig>
 			throw fieldError(file, "host_llm", "'deny' or 'allow'");
 		}
 		cfg.host_llm = p.host_llm;
+	}
+
+	if ("xfer" in p) {
+		const x = p.xfer;
+		// Own copy: `{ ...DEFAULTS }` is shallow, so writing into the shared object
+		// would leak one call's config into the next load.
+		cfg.xfer = { ...DEFAULTS.xfer };
+		if (typeof x !== "object" || x === null || Array.isArray(x)) {
+			throw fieldError(file, "xfer", "an object with 'dufs' and/or 'cloudflared'");
+		}
+		for (const key of ["dufs", "cloudflared"] as const) {
+			const v = (x as Record<string, unknown>)[key];
+			if (v === undefined) continue;
+			// A present-but-unusable value is refused rather than defaulted: this names
+			// a binary the transfer tools will spawn, and silently keeping the name
+			// that is not on PATH is the failure mode that costs an hour.
+			if (typeof v !== "string" || v.length === 0) {
+				throw fieldError(file, `xfer.${key}`, "a non-empty string");
+			}
+			cfg.xfer[key] = v;
+		}
 	}
 
 	if (typeof p.token === "string" && p.token.length > 0) {

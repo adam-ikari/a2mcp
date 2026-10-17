@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { auditHostLlm } from "./audit.ts";
 import { authorize } from "./auth.ts";
-import { type BlobDeps, handleBlob } from "./blob.ts";
 import type { BridgeConfig } from "./config.ts";
 import type { HostLlmState } from "./takeover.ts";
 
@@ -36,20 +35,32 @@ export interface BridgeDeps {
 }
 
 /**
- * Ceiling on one request body, both for JSON-RPC and for `POST /blob`.
+ * Ceiling on one request body, for every request on this port.
  *
- * It was 1 MB, which is fine for MCP messages but not for `POST /blob`: a
- * firmware image is tens of megabytes, and at 1 MB a 100 MB upload is ~105
- * round-trips. Bun buffers a body up to this limit before the handler sees it,
- * so the cost is memory *per in-flight request*, not a preallocation — 128 MB is
- * the ceiling for the largest image this is meant to carry, not a target. A
- * caller wanting more should chunk; `/blob` appends at EOF, so chunking is one
- * loop.
+ * It was 1 MB while the port carried only JSON-RPC messages. The raw-byte
+ * endpoint that pushed it to 128 MB is gone (2026-10-16), so this value is now
+ * headroom nothing asks for rather than a size the bridge is built around: Bun
+ * buffers a body up to this limit before the handler sees it, so the cost is
+ * memory *per in-flight request*. Lower it back if that memory is worth more than
+ * a large MCP message would be.
  *
  * Measured: Bun accepts `maxRequestBodySize` well past 1 MB (checked at 16, 128
  * and 256 MB — bodies just under each cap arrived intact).
  */
 const MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
+
+/**
+ * How long a connection may carry no traffic before Bun closes it, in seconds.
+ *
+ * Bun's default is 10, and inside a request that clock measures *silence*, not
+ * the request's total: a body that stops arriving for 10 s is torn down by the
+ * server itself. Measured on Bun 1.3.14 — a POST whose body paused 15 s
+ * mid-flight: `[Bun.serve]: request timed out after 10 seconds`, then the
+ * handler's `req.arrayBuffer()` throws `AbortError: The connection was closed.`
+ * and the caller's socket is already gone. 255 is Bun's maximum, and long enough
+ * that only a genuinely dead connection reaches it.
+ */
+const REQUEST_IDLE_TIMEOUT_SECONDS = 255;
 
 /**
  * Unauthorized attempts since the process started. Module-level rather than
@@ -97,14 +108,14 @@ export async function startServer(
 	 * name one that is still live. A hit refreshes the timestamp, so the TTL tracks
 	 * idle time exactly as the MCP path below does.
 	 *
-	 * `POST /blob` needs the lookup for a different reason than the MCP path. There a
-	 * stale id is an error; here it must stay a `null`, because the value is the
-	 * audit record's `sid` — and `sid` is what makes a shared token's writes
-	 * attributable to a client (src/audit.ts). Handed through on trust it is the
-	 * caller's own claim, so any token holder could file a write under someone else's
-	 * session. Rejecting instead would make the bridge decide who may upload, which is
-	 * a position the protocol never gave it: a token-only request is already accepted
-	 * and records `sid: null`.
+	 * The raw routes (`/host-llm`) need the lookup differently than the MCP path.
+	 * There a stale id is an error; here it has to stay a `null`, because the value
+	 * goes into the audit record's `sid` — and `sid` is what attributes a shared
+	 * token's calls to a client (src/audit.ts). Handed through on trust it would be
+	 * the caller's own claim, so any token holder could file a call under someone
+	 * else's session. Rejecting instead would make the bridge decide who may act,
+	 * which is a position the protocol never gave it: a token-only request is
+	 * already accepted and records `sid: null`.
 	 */
 	function issuedSession(raw: string | null): string | null {
 		if (raw === null || raw === "") return null;
@@ -138,11 +149,11 @@ export async function startServer(
 			// Auth precedes every state-touching branch: an unauthenticated
 			// DELETE must not be able to terminate another client's session.
 			if (!authorize({ token: cfg.token }, req.headers)) {
-				// Unauthorised attempts stay out of the audit file on purpose. That log is
-				// the only trace `POST /blob` leaves and it holds one rotated generation, so
-				// a pre-auth writer would only have to pump volume past the cap to drop real
-				// records with it. The operator still needs to know someone is knocking: this
-				// goes to the host's log, once and then every 50th.
+				// Unauthorised attempts stay out of the audit file on purpose. That log
+				// holds one rotated generation, so a pre-auth writer would only have to
+				// pump volume past the cap to drop real records with it. The operator
+				// still needs to know someone is knocking: this goes to the host's log,
+				// once and then every 50th.
 				deniedAttempts++;
 				if (deniedAttempts === 1 || deniedAttempts % 50 === 0) {
 					console.warn(
@@ -152,23 +163,8 @@ export async function startServer(
 				return json(401, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "unauthorized" } });
 			}
 
-			// Raw-byte upload. Same token, same port, its own route — checked after
-			// auth and before the JSON-RPC body is read, since the payload here is
-			// bytes rather than a message. See src/blob.ts for what this path gives
-			// up (the host approval gate) and why there is no alternative.
-			// POST only. Without the method check, `DELETE /blob` fell through to
-			// the handler and answered 400 "empty body" — a status that reads like a
-			// malformed upload rather than a method that does not exist here. The
-			// endpoint is upload-only by design, so say so with 405 like every other
-			// unsupported verb.
-			if (new URL(req.url).pathname === "/blob" && req.method === "POST") {
-				const blobDeps: BlobDeps = { sid: issuedSession(req.headers.get("mcp-session-id")) };
-				const r = await handleBlob(req, new URL(req.url), blobDeps);
-				return r.body === undefined ? new Response(null, { status: r.status }) : json(r.status, r.body);
-			}
-
-			// The takeover switch. Same shape as `/blob` in every respect that
-			// matters: one token, one raw path outside JSON-RPC, audited, POST only.
+			// The takeover switch: one token, one raw path outside JSON-RPC, audited,
+			// POST only.
 			// It lives at a raw path rather than as a `tools/list` entry because the
 			// catalog is the host registry verbatim, and this is not a host tool —
 			// it is the bridge acting on the host, and the bridge does not get to
@@ -205,11 +201,11 @@ export async function startServer(
 			}
 
 			if (req.method === "DELETE") {
-				// `/blob` and `/host-llm` never accept DELETE — a write endpoint has
-				// no business ending an MCP session, and answering 204 here would
-				// report a session teardown the caller never asked for.
+				// `/host-llm` never accepts DELETE — it has no business ending an MCP
+				// session, and answering 204 here would report a session teardown the
+				// caller never asked for.
 				const p = new URL(req.url).pathname;
-				if (p === "/blob" || p === "/host-llm") {
+				if (p === "/host-llm") {
 					return json(405, { error: `${p} accepts POST only` });
 				}
 				const sid = req.headers.get("mcp-session-id");
@@ -325,6 +321,8 @@ export async function startServer(
 			hostname: cfg.host,
 			port,
 			maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
+			// Above: Bun's 10 s default severs a tunnel upload mid-body.
+			idleTimeout: REQUEST_IDLE_TIMEOUT_SECONDS,
 			fetch: handler,
 		});
 	}

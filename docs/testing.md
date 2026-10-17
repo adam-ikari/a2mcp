@@ -5,22 +5,22 @@
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
 | `bun run test:tree` | 仓库形状核验，3 项，无依赖 | 否 | `tree-probe: repo shape OK` |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 161 pass / 0 fail（12 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 186 pass / 0 fail（14 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
+| `bun run test:obtain` | 外部二进制获取核验，31 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，34 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，56 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:takeover` | 宿主推理 deny/restore 核验，34 项，约 65 秒 | 是 | `takeover probe: all assertions met` |
-| `bun run test:blob` | 原始字节上传（`POST /blob`），35 项 | 是 | `BLOB OK` |
-| `bun run test:install` | 发布包自包含 + 端到端，33 项 | 是 | `PACKAGE OK` |
-| `bun run test:scenario` | 端到端场景，10 个叙事 / 54 步，约 45 秒 | 是 | `SCENARIOS: 54 steps, 0 failed` |
+| `bun run test:install` | 发布包自包含 + 端到端，35 项 | 是 | `PACKAGE OK` |
+| `bun run test:scenario` | 端到端场景，8 个叙事 / 41 步，约 45 秒 | 是 | `SCENARIOS: 41 steps, 0 failed` |
 
-统一前置（七个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主 18.11.0 按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:blob` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，blob 核验失败时还要多留 100 MB 级别的上传，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主 18.11.0 按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2a-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
-七个宿主核验与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
+六个宿主核验、`test:obtain` 与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
-## `test:install` — 发布包自包含核验 + 端到端（28 项）
+## `test:install` — 发布包自包含核验 + 端到端（35 项）
 
 **核验发布的 tarball 装得上去、装完就能加载、起宿主能通。** 四组：
 
@@ -28,8 +28,8 @@
 | --- | --- | --- |
 | manifest | 6 | 有 `name`；有 `version`（否则 omp 显示 `@undefined`）；声明 `pi.extensions`（加载开关）；**无 runtime 依赖**（`@oh-my-pi/*` 由宿主 shim 提供）；`files[]` 同时含 `extensions/` 与 `src/` |
 | 打包 | 3 | `npm pack` 出 tarball；体积 < 500KB（不含 `node_modules`）；解开是 `package/` 根 |
-| 内容 | 8 | 入口 `extensions/a2a-bridge.ts` 与 5 个 `src/*.ts` 都在 tarball 里；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块） |
-| 端到端 | 11 | 每次先卸载再 `omp install .`——装的是链接，所以宿主加载的就是工作区；断言该路径不是实体拷贝；桥被发现并广播监听地址；首次启动只写 `host`/`host_llm`/`port`/`token`；`initialize` 返回协议版本；`tools/list` 非空且无 `a2a_*`（不断言具体数量——宿主装几个扩展就变几个，写死会静默过期）；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
+| 内容 | 15 | 入口 `extensions/a2a-bridge.ts` 与 `src/` 下每一个 `*.ts` 都在 tarball 里（清单由 `readdirSync(src)` 现读，新增模块不需要改探针，`src/obtain.ts`、`src/tunnel.ts`、`src/xfer.ts` 就是这样自己进的名）；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块，当前 10）；整包除 `@oh-my-pi/pi-coding-agent` 之外不引任何宿主包，而这一项确实读到了 import（不是空过） |
+| 端到端 | 11 | 每次先卸载再 `omp install .`——装的是链接，所以宿主加载的就是工作区；断言该路径不是实体拷贝；桥被发现并广播监听地址；首次启动只写 `host`/`host_llm`/`port`/`token` 加一个 `xfer`（里面是两个二进制名，没有路径也没有沙箱字段）；`initialize` 返回协议版本；`tools/list` 非空且无 `a2a_*`（不断言具体数量——宿主装几个扩展就变几个，写死会静默过期）；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
 
 第三组是关键：入口 import 的是 `../src/*.ts`，`files[]` 漏掉任何一个都会**装得上、加载时才炸**。逐个断言文件名会被新增的模块绕过，走 import 图才抓得到。
 
@@ -63,38 +63,25 @@
 
 全过 → `PACKAGE OK`；任何一项不过 → `FAIL: <label>` + exit 1。
 
-## `test:blob` — 原始字节上传核验（35 项）
+## `test:obtain` — 外部二进制获取核验（31 项）
 
-**核验 `POST /blob` 能把字节原样放到宿主机上，且每种拒绝都成立。**
+**要回答的问题**：桥自己拉下来的那两个二进制，是不是真能用。`--auth user:pass@/:rw` 这组参数最后一次实测是在 0.43.0 上，而 `src/obtain.ts` 钉的是 0.46.0——没跑过就把版本号写进 README，那是猜。cloudflared 那一侧同样的规矩：钉表的哈希是从 release 元数据读的，读回来还得对着真下的字节复算一次。这条探针因此是钉值的门：它不绿，文档里那些版本就留空。
 
-字节比对是重点，不是状态码。`200` 不证明字节到了，`size` 对也不证明内容对——第一版探针只断言 `size === 1_500_000`，内容错了照样绿。现在每处写入都用 `Buffer.equals` 比对。写入内容是 0x00–0xff 全覆盖，任何一次意外的字符串往返（UTF-8 编解码）都会立刻现形。
-
-| 组 | 项数 | 断言 |
+| 组 | 项 | 断言 |
 | --- | --- | --- |
-| 字节一致 | 4 | 768 KB 无编码字节一致；**100 MB 一次请求字节一致**；3 块 500 KB 追加字节一致；129 MB → 413 |
-| 拒绝 | 5 | 无 token → 401；缺 `path` → 400；空 body → 400；`offset` 与现大小不符 → 409；`offset` 非整数 → 400 |
-| 仅 POST | 7 | `GET`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS /blob` 各 → 405；文件既没被读回也没被删掉 |
-| 其他 | 3 | 父目录不存在时自动创建；审计写入 `blob:write`；审计不含文件内容 |
-| 失败与边界 | 14 | 操作系统层写失败不报成功（写 `/dev/full`）；失败也进审计并记为 error；只有 token 没有会话头仍能写，审计里 `sid` 为 `null`；桥没签发过的会话头同样写得成，审计里也是 `null`，不记成那个自称的 id；桥签发过的会话头原样进审计；413 不碰已存在的文件；目标是目录时整条拒绝；`~` 展到宿主 HOME、不是调用方的；相对路径落在 agent 目录；同一文件两路并发追加各自完整不互相插字节；413 不进审计 |
-| 内存实测 | 2 | 测量期间的两次并发上传都被接受；这一轮的 100 MB 单请求仍返回 200 |
+| 真下载（两个二进制各五项） | 10 | 本机平台在钉表里；`resolveBinary` 把文件装进它说的那个临时目录；`--version` 自己报出钉的那个版本；账本记下这次安装的哈希；第二次调用不重下 |
+| 由 `xfer_share` 驱动 | 2 | 空 PATH + 空安装目录，让工具自己完成获取，回包的 `installed.dufs` 点名它拉的那个版本；`installed.cloudflared` 是 `null`（cloudflared 在这里是写明路径的那一侧，按规则不下载） |
+| 拉来的二进制起真共享 | 8 | GET 字节一致（200）、Range（206）、PUT（201）且落盘、错密码 401、目录列表 200、`xfer_stop` 后端口释放、下一次共享复用安装而 `installed` 回到 `null` |
+| 钉表每一行的 URL | 8 | 两个二进制 × 四个平台，每个 asset 的 URL `HEAD` 一次要回 200。本机跑不了的那三个平台的行，单测只核对 URL 拼法，是否存在只有这里能说 |
+| 审计 | 3 | 日志里两个版本各一条 `install`，`share` 记录在 |
 
-「仅 POST」那组是补的。接 `/blob` 进 handler 时只测了 POST，其他动词落到哪个分支没人验——于是 `DELETE /blob` 落进了 blob 的处理流程，因为 body 为空返回 400，那个状态码在说谎（读起来像「上传格式不对」，实际是「这个端点没这个方法」）。**接一个新路由时，「哪些方法会落到这里」和「这个路由做什么」是同一个问题的两面。**
+真隧道单列，只 `info:` 报告不断言：拿第一节下载并验过哈希的那份 cloudflared 起一次真 quick tunnel，主机名确实 announce 出来了，但从发布它的那台机器 curl 回去报证书错误——本机网络对代理域名重签 TLS。于是断言那一路用注入的开洞器，硬检查一律打在 `127.0.0.1:<port>` 上。还有一处现象记在 `test/obtain-probe.ts` 的文件头而没有归因：探针自己同时握住真 cloudflared 与那次公网取回时，两次都是本地各项全过、然后不再返回。它留在文件头，是因为没归因的事既不能写成结论，也不能写成断言。
 
-100 MB 那条是会抓到旧的 1 MB `maxRequestBodySize` 的那条——它红了才算数。
+## 隧道那条读循环（`test/tunnel.test.ts`，4 项）
 
-「失败与边界」那组补出三个真缺陷。前两条各有先红后绿的断言，第三条没有：它落在写完与读回尺寸之间那个窗口里，摆不出来（原因见下）：
+`src/tunnel.ts` 读子进程的输出，从里面找主机名。那条循环开着多久等于共享开着多久，所以它手里那个缓冲区两个方向都会坏：收得太早就把主机名丢了，症状是隧道从来不 announce；完全不收，一个小时的共享就变成宿主进程里一个小时的内存增长。代码的写法是先搜，搜不到才把缓冲区收成尾部的一半。
 
-- 两个调用方同时开一个**新**文件时字节会丢。旧实现在 body 读进来之前取文件大小，两边都看到 0，都选 `w` 打开，而 `w` 在 open 时截断，第二次 open 抹掉了第一次已写入的内容。两条请求都回 200，文件只有一半。现在一律 `"a"` 打开，拿到句柄再读一次 EOF。
-- 写失败既不报错也不留审计。`handle.write` 会短写（磁盘满、配额到顶），旧实现不看 `bytesWritten`，回 200 且不写审计记录，等于「一次没人知道的失败」。现在短写与抛错都记 `bytes: 0` 加错误文本，状态 500。
-- 成功那条路径上的审计排在一次可抛错的读之后。写完关闭句柄，实现再从文件上读一次尺寸用于响应，读失败（文件在这两步之间被删、父目录不再可查、网络盘给 EIO）就一路冒到 handler 的兜底 catch：客户端拿 500，而这一次真实落盘的写入在日志里没有记录。三条失败路径都是先落审计再返回，唯独成功那条把它排在后面。现在审计先走，读不回尺寸就少一个字段，响应仍是 200——写成 500 会让分块上传的客户端重发同一块，而 `/blob` 只追加。
-
-同一组里还有两条关于「谁调用」的。审计的 `sid` 是共享 token 下唯一的归因字段，而 `/blob` 过去直接照抄请求头：任何持 token 的人都能把自己的写入登记到别人的会话名下，或者编一个。MCP 那条路径在 `server.ts` 里逐条验这个头（缺失 400、未知 404），`/blob` 却不碰会话表，同一个字段在两条路径上不是一个意思。现在两条都只认桥自己签发过、还在空闲窗口内的 id；`/blob` 拿到别的值不拒，只记 `null`——拒绝会是这个端点自己在决定谁能上传。
-
-变异验证按实现还原做（把修复前那份 `src/blob.ts` 整体放回原位，不是随手改一行）：红的正好是这两项。中途一次不忠实的变异（把 `"w"` 分支插在 `at` 赋值之前）触发 TDZ，所有请求 500，红了两条与目标无关的项。那种红不说明任何事，它只证明变异把整条路径打断了。
-
-写失败用 `/dev/full` 来触发：open 成功，写时 ENOSPC，这是无 root 权限下唯一干净的路子。把 `/dev/shm` 填满也能达到目的，但那是全机范围的破坏，不做。
-
-内存那组只断言「上传确实成了」，不断言 RSS 阈值，原因写在探针文件头，这里记结论：同一个 8 MB 请求的宿主 RSS 安顿增量二十五轮里从 −157 MB 跨到 +171 MB，其中三轮是负的（上传完宿主 RSS 比上传前还低）；两个并发那一项落在 −141 到 +168 MB，峰值最高 +264 MB。逐轮的数与近六轮基线不抄在这里——抄过的那份停在第十六轮就再没人更新，序列只在协议页那张内存表里维护。负值来自测量本身的位置：`空闲`基线在探针末尾取样，此刻前一步那次 100 MB 上传仍有内存没还给操作系统，基线自己一路往下衰减，每个增量量到的都是衰减的进度，量不到那一次上传。分布的宽度由 Bun 分配器决定（arena 增长加延迟归还），跟本桥有没有把 body 留在内存里无关。拿它们设阈值，测的是分配器，且会在忙碌的 CI runner 上因与桥无关的原因变红。探针每轮把实测覆盖写进 `test/rss-<宿主版本>.json`，`docs/protocol.md` 的内存表从它刷新——那页的数此前只在 18.6.1 上量过一次，没人复核就会烂在文档里。没有 `/proc` 时这组打印 SKIP 并保留旧文件，不会把上一台机器的数当本轮的。
+钉住它的是「主机名埋在比转录更多的输出后面」那一条，而这一条的难点在夹具，不在实现。子进程不加节奏地写（每行一次 `writeSync`，或者一整块写下去），到父进程这边是十来个体积不等的读事件，实测有一次把 200 KB 全塞进第一个事件——那样的流里压根没有几次能撞到上限，把实现写成「满了就不再追加」也不会红。每行之间加一个 `await Bun.sleep(5)`，流才真是一行一个事件。另一个坑更安静：`process.stdout.write` 的循环后面接一句 `console.log`，Bun 让那句同步写越过排队的异步写，主机名直接跑到第一个 chunk 里。夹具的注释写着这两条，因为下一个改这个文件的人会重新发明它们。
 
 ## `test:hardening` — 加固核验（34 项）
 
@@ -115,7 +102,7 @@
 
 全过 → `HARDEN OK`；任何一项不过 → `FAIL: <label>` + exit 1（并打印宿主日志尾部）。
 
-暴露门那组原本有第四项，断言目录里没有任何 `a2a_file_*` 开头的工具——那是文件传输面还在时的真检查，而 `POST /blob` 取代它之后就再没有代码注册这种工具了，那一条永远不会红，却读起来完全像在保护「桥不自带工具」。删掉它不是丢覆盖：这个性质现在钉在 `test/bridge.test.ts`，那里拿**相等**断言（目录列表与宿主注册表逐项相等，多一个少一个都红），而宿主探针这一层看不到宿主自己的注册表可比。
+暴露门那组原本有第四项，断言目录里没有任何 `a2a_file_*` 开头的工具——没有任何代码注册这种名字的工具，那一条永远不会红，却读起来完全像在保护「桥不自带工具」。删掉它不是丢覆盖：这个性质现在钉在 `test/bridge.test.ts`，那里拿**相等**断言（目录列表与宿主注册表逐项相等，多一个少一个都红），而宿主探针这一层看不到宿主自己的注册表可比。
 
 审计轮转那组此前一项都没有，写它的时候踩到自己一条：原先按「本轮发出的 JSON-RPC id 应能在日志里找到」断言，永远红不了也永远绿不了，因为日志里的 `id` 是本桥为配对生成的 UUID（`src/bridge.ts`），调用方的 JSON-RPC id 从不落盘。改成数量守恒：一次 `tools/call` 写 `start` 与 `done` 两条，N 次调用就要在两个文件里多出 2N 条。让记录变胖也不能靠一个 1000 字符的路径，`redact()` 会把超过 120 字符的字符串折成 `<len:N,sha256:...>`（约 30 字节），那样一条记录才 210 字节，越过 512 KB 需要 1241 次调用；换成 10 个 110 字符的参数之后每条约 1.1 KB，213 次调用就够，这一组从几分钟降到几十秒。
 
@@ -157,21 +144,11 @@
 
 参数在 1024 字符截断这条是变异测出来的：把截断去掉，原先所有测试全绿。补了一项 40 个 110 字符的值（每个都低于 120 字符的叶子闸，全靠上限压住），断言记录里的 `args` 收在 1025 字符以内且以省略号结尾。记录大小近似固定，512 KB 的轮转窗口才谈得上「多少条」。
 
-### 分派层与 `auditBlob` 的最后三处（10 项）
-
-上一轮剩下的 `issuedSession`、`/blob` 分派与 `auditBlob`，2026-10-11 各给了断言。新的 `test/blob-route.test.ts` 起 stub 服务器、注入时钟，8 项覆盖：鉴权先于 payload 读取的 401、`DELETE /blob` 答 405 且不杀会话、三种拒绝形状既不落盘也不进日志、签发过的会话原样入录、伪造与缺头的记 `null`、`/blob` 命中刷新空闲窗口（去掉刷新行，同一条里的后一个 ping 就是 404）、open 失败带 error 入录、409 不产生第二条记录。`test/audit.test.ts` 补 2 项钉住 `auditBlob` 的记录形状：一条 `done` 不配对，失败一条带截到 200 字符的 message 与 `bytes: 0`。
-
-变异四项：`issuedSession` 换回照抄，红的正是归因与过期那两条；抽掉刷新行，只红 TTL 那条；拆掉 DELETE 守卫，只红 405 那条；去掉 200 字符截断，只红失败形状那条。还原后 117/117。
-
-「不存在」那几条先排空再断言：appends 排在同一条进程链上，用 `auditStart` 投一条哨兵等它落盘，它前面的行都已定局，直接 sleep 只是在猜。这是 host-call 那条 afterAll 教训的第二次 usage。
-
-按行算，这一轮把 `src/server.ts` 从 93% 带到 100%、`src/audit.ts` 从 76% 到 100%、`src/blob.ts` 从 5% 到 79%，`src/bridge.ts` 停在 99% 没动。此前这三处写着「刻意不补单测」，理由是它们要真字节进文件系统、宿主探针已经在跑；补的时候发现那个理由站不住——临时目录里写几字节的真实文件不是假磁盘，探针验的是字节保真与竞态，这里验的是本桥的接线：拒绝形状、`sid` 归因、TTL 刷新，后两条靠注入时钟，真宿主上根本移不动。剩下未覆盖的 `162-165`（在途改 409）、`173-182`（短写）与 `184` 的写失败兜底需要满盘与真机条件，那本来就是 `test:blob` 35 项的领地。
-
 ## 释放端口的那一刻，在途那一次算什么
 
 `src/server.ts` 的 `stop()` 原先是 `server.stop(true)`。这条在单测里从来没有对照面：入口那几条按「去连它」判释放，新建连接被拒就通过，至于断开的那一刻有没有一个请求正在处理，没人问。它现在有了自己的一条（`test/server.test.ts` 末尾，「releasing the port」）：起一个 `tools/call`，等 stub 的 `callTool` 确实在跑（一个 `entered` 标志），然后 `stop()`，断言这一次照样拿到 200 和结果文本。
 
-强制切断的代价分两种。`tools/call` 少一行 `done`，客户端拿到 `ECONNRESET`；`POST /blob` 是整个消失——body 还没收完就断，`Buffer.from(await req.arrayBuffer())` 抛在写之前，于是文件没动、`auditBlob` 也没跑到，而那个端点是宿主审批门的例外，审计是它唯一的痕迹。非强制那一半把这两样都保住了：监听立刻关，后来的人一律被拒；已经进来的那一次处理完、返回、落审计。
+强制切断的代价：`tools/call` 少一行 `done`，客户端拿到 `ECONNRESET`。非强制那一半把它保住了：监听立刻关，后来的人一律被拒；已经进来的那一次处理完、返回、落审计。
 
 同一批实测里还有一条 Bun 的缺口，记在这里是为了别把它当成已解决：非强制 `stop()` 不关释放时已经空闲的 keep-alive 套接字，`closeIdleConnections()` 在 1.3.14 只有函数名（返回 `undefined`，socket 照旧服务），`bun-types` 1.4.2 描述的「空闲连接立刻关」是更新版本的行为。所以断言「释放后不接受连接」不能走 HTTP 客户端——它会复用那根老 socket，量到的是这一半而不是监听的状态；这里用 `node:net` 裸连，并在同一条测试里先断它在释放前为 true，免得这个读数只会恒假。
 
@@ -189,7 +166,7 @@
 
 ## 两条并发写日志，谁吃掉谁
 
-`src/audit.ts` 的 `appendLine` 是 `stat` 查大小、`rename` 轮转、`appendFile` 落行三步，而这三步不是一个整体。两个调用同时在飞时可以都读到越过 512 KB 的数字、都去轮转，第二次 `rename` 覆盖的正是第一次刚放好上一代的那个 `.1`。被吃掉的是轮转那一刻恰好留在当前文件里的记录——也就是几毫秒前刚写下的那些——外加被换出去的一整代。这件事单独看已经够糟，配上 `/blob` 就更糟：那个端点不走宿主的审批门，审计行是它唯一的痕迹。
+`src/audit.ts` 的 `appendLine` 是 `stat` 查大小、`rename` 轮转、`appendFile` 落行三步，而这三步不是一个整体。两个调用同时在飞时可以都读到越过 512 KB 的数字、都去轮转，第二次 `rename` 覆盖的正是第一次刚放好上一代的那个 `.1`。被吃掉的是轮转那一刻恰好留在当前文件里的记录——也就是几毫秒前刚写下的那些——外加被换出去的一整代。
 
 原有的那条轮转保留测试（`test/audit.test.ts` 第一组）看着的只是「记录会不会冲出窗口」，它每 20 对让一次路，注释里给的理由是有链子会冲过上限、把尺寸的读数弄浑——那说的是多写几行，丢数据这一半从来没有断言。
 
@@ -277,7 +254,7 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 ## `test:registry` — 真实模型注册表核验（28 项，秒级）
 
-**要回答的问题**：接管在**宿主的数据结构**上做了什么。上面七个探针问的都是一段时间里的行为——一轮对话、一个审批弹窗、一个后台任务把 agent 叫醒。这个探针问的是宿主的 `ModelRegistry` 本身，而它问得动，因为那个注册表可以在进程内直接造：`AuthStorage.create` 加一个 `new ModelRegistry(...)`，对着 `/tmp` 下的临时 agent 目录，就能拿到真实的内置目录（18.8.7 上 5457 行、七十多个 provider），不起宿主、不开 TUI、不连网。
+**要回答的问题**：接管在**宿主的数据结构**上做了什么。上面六个探针问的都是一段时间里的行为——一轮对话、一个审批弹窗、一个后台任务把 agent 叫醒。这个探针问的是宿主的 `ModelRegistry` 本身，而它问得动，因为那个注册表可以在进程内直接造：`AuthStorage.create` 加一个 `new ModelRegistry(...)`，对着 `/tmp` 下的临时 agent 目录，就能拿到真实的内置目录（18.8.7 上 5457 行、七十多个 provider），不起宿主、不开 TUI、不连网。
 
 这一档是 2026-10-13 那轮评审缺的。读 `src/takeover.ts` 只会得到「它把每个 provider 重新注册一遍，恢复时清掉这些注册」；拿真实注册表一跑才知道那两次调用对**别的扩展注册过的** provider 做了什么——名字被抢走，而且不还：`clearSourceRegistrations` 是宿主的「这个扩展卸载了」，不是「撤销那一次调用」。当时 138 个单测全绿，代码也全绿。
 
@@ -304,13 +281,12 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 失败语义与其他探针一致：任何一项 FAIL → exit 1，临时目录保留并打印路径；全过 → `registry probe: all assertions met`。CI 的 `check` job 跑它（不需要 omp，秒级），`host-probes` 不收。
 
-## `test:scenario` — 端到端场景核验（10 个叙事 / 54 步）
+## `test:scenario` — 端到端场景核验（8 个叙事 / 41 步）
 
 其余五个探针是**平铺的断言**：每项一个观察，彼此独立。这个探针反过来——每个场景是一条有头有尾的叙事，而**结尾状态要从产生它的那条通道之外去验**：
 
 | 场景 | 结尾从哪条通道验 |
 | --- | --- |
-| `/blob` 写进去的东西，宿主 `read` 读得回来 | 宿主自己的 `read` 工具（桥的路径解析是它自己的事，只比字节会漏） |
 | 远程 `bash` 的副作用 | 文件系统 + 审计日志（记录里的参数必须点名那个文件） |
 | 两个客户端共用一个 token | A 的 `DELETE` 之后 B 仍可用；审计里两个 sid 都在 |
 | 外部改配置 | 运行中的服务器只认启动时的 token；重启后新 token 生效 |
@@ -325,7 +301,6 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 | 注入的缺陷 | 变红的那一步 |
 | --- | --- |
-| `/blob` 一律覆盖写，不追加 | 「文件现在包含两段且有序」「第一段没被第二段截断」 |
 | 非法 `port` 不再 fail-closed | 「不广播」「报错点名文件与字段」 |
 | 审计不记 `sid` | 「记录带调用方会话 id」「审计归属到两个客户端」 |
 | `DELETE` 清空整张会话表 | 「B 不受 A 终止影响」 |
@@ -334,7 +309,7 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 第一轮反证时场景套件对「一律覆盖写」是绿的：对一个还不存在的文件，追加与截断是同一个操作。补了一段显式 offset 的追加才咬得住。同一轮反证还揪出探针自身的两个毛病——`rpc()` 没有默认超时，桥没起来时会挂在占用端口上（现在恒有 20s 上限）；以及 `test:install` 那项「设备名被拒」只断言 `isError`，暴露门一去掉就会因为**设备自己**拒了而绿——理由错了也绿。
 
-这套场景**不覆盖**什么，各由谁管，写在 `test/scenario.ts` 的文件头：暴露面与协议层拒绝归 `test:hardening`，单次 `/blob` 的字节一致性与 offset 冲突归 `test:blob`，prompt 档挂起归 `test:approval`，发布包自包含归 `test:install`。
+这套场景**不覆盖**什么，各由谁管，写在 `test/scenario.ts` 的文件头：暴露面与协议层拒绝归 `test:hardening`，prompt 档挂起归 `test:approval`，发布包自包含归 `test:install`。
 
 ## 版本守卫（`test/versions.test.ts`，`bun test` 的一部分）
 
@@ -353,6 +328,6 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 ## 约定
 
-- `test/*.test.ts` 被 `bun test` 自动发现；核验脚本（`smoke.ts` / `hardening.ts` / `approval-probe.ts`）故意不带 `.test` 后缀，只能手动跑，避免 CI/本地把真实宿主进程拉起来。
-- 环境变量：`OMP_BIN`（宿主二进制）、`REPO`（仓库根，脚本默认自推导）、`A2A_BRIDGE_AUDIT`（审计日志路径，默认 `<agentDir>/a2a-bridge.log`）、`A2A_SKIP_HOST_VERSION_CHECK`（设 `1` 跳过版本守卫的宿主比较，见上一节）。
+- `test/*.test.ts` 被 `bun test` 自动发现；核验脚本（`smoke.ts` / `hardening.ts` / `approval-probe.ts` / `obtain-probe.ts`）故意不带 `.test` 后缀，只能手动跑，避免 CI/本地把真实宿主进程拉起来。
+- 环境变量：`OMP_BIN`（宿主二进制）、`REPO`（仓库根，脚本默认自推导）、`A2A_BRIDGE_AUDIT`（审计日志路径，默认 `<agentDir>/a2a-bridge.log`）、`A2A_BRIDGE_INSTALLS`（安装账本路径，默认 `<agentDir>/a2a-bridge.installs.json`，见 `src/obtain.ts`）、`A2A_OBTAIN_TARGET`（`test:obtain` 的安装目录覆盖，默认临时目录，所以它不会写真的 `~/.local/bin`）、`A2A_SKIP_HOST_VERSION_CHECK`（设 `1` 跳过版本守卫的宿主比较，见上一节）。
 - 判定性结论（如审批挂起语义）必须由核验复核，不以源码阅读或推理代替——这是本仓库评审沉淀的规矩。

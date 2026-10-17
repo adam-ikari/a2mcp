@@ -7,6 +7,7 @@ import type { BridgeConfig } from "../src/config.ts";
 import { configPath, generateToken, loadConfig, saveConfig } from "../src/config.ts";
 import { startServer } from "../src/server.ts";
 import { hostLlmState, rearmMainSession, setEnabled } from "../src/takeover.ts";
+import { createXfer, XFER_TOOLS, type Xfer } from "../src/xfer.ts";
 
 /**
  * The bridge's own version, from `package.json`.
@@ -59,6 +60,13 @@ let bringingUp: Promise<void> | null = null;
  * arrival. Rebuilding the executor per start costs one closure.
  */
 let liveCallTool: ReturnType<typeof buildCallTool> | null = null;
+
+/**
+ * The bridge's own transfer tools (src/xfer.ts), or `null` before the first start.
+ * Module-level for the same reason `server` is: one endpoint per process, and the
+ * shutdown path has to close it without a session in hand.
+ */
+let xfer: Xfer | null = null;
 
 /** Report a takeover that could not be armed, in the three places an operator looks. */
 function reportArmFailure(ctx: ExtensionContext, e: unknown): void {
@@ -118,11 +126,20 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 						reportArmFailure(ctx, e);
 					}
 				}
+				// Before the port opens: `getTools` and `callTool` below close over it.
+				xfer = createXfer(cfg.xfer);
 				server = await startServer(cfg, {
-					getTools: buildToolCatalog(pi),
+					// The host's registry verbatim, plus the bridge's own transfer tools:
+					// `xfer_*` is served by this process (src/xfer.ts), not forwarded to the
+					// host, which is why it is appended here at the composition point rather
+					// than inside the catalog builder.
+					getTools: async () => [...(await buildToolCatalog(pi)()), ...XFER_TOOLS],
 					// Read through the live executor: the one captured here would keep
 					// answering out of the first session's context after a rebuild.
 					callTool: async (name, args, sid) => {
+						// Bridge-owned first: `xfer_*` is not in the host registry, so the
+						// host executor would only refuse it.
+						if (xfer?.handles(name)) return xfer.call(name, args, sid);
 						if (!liveCallTool)
 							return { content: [{ type: "text", text: "main session not available" }], isError: true };
 						return liveCallTool(name, args, sid);
@@ -178,6 +195,10 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 		// subagent emits it while the Main session is alive. Stopping here would take the
 		// endpoint down with a session that was never ours to serve.
 		if (hasMainSession()) return;
+		// The share holds a public URL and a spawned server; the endpoint going away
+		// has to take both with it, or the hostname outlives the bridge that opened it.
+		await xfer?.stop();
+		xfer = null;
 		server?.stop();
 		server = null;
 		cfg = null;

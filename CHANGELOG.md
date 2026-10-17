@@ -4,6 +4,48 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## 2026-10-17 — 缺的外部二进制桥自己按钉值拉：`src/obtain.ts`，dufs 钉 0.46.0、cloudflared 钉 2026.10.1
+
+`xfer_*` 在这台机器上其实不可用：`dufs` 不在 PATH 上，而契约写的是「二进制只命名、不内置、不下载」，报的错误要求人手去 GitHub 拖包。这条契约今天翻面——缺的自己拉，版本与哈希钉死，唯一的出口是配置里写路径。诚实的说法不是「图方便」：桥已经替宿主决定了用 dufs，这次只多一个意见（字节从哪来），不是多一个权威。
+
+- feat: `src/obtain.ts` 的 `resolveBinary(name, configured, sid, deps)`，四步：配置里的值含 `/` 就原样用（`access(X_OK)` 检查，**绝不下载**）→ 在 `PATH` 上逐段找可执行文件（不起 shell、不 `which`，机器有就别抢）→ `~/.local/bin/<name>` 已存在且哈希等于钉值就复用 → 下载
+- feat: 钉表是模块里的字面量，键 `${platform}-${arch}`，两个二进制各四行（linux-x64 / linux-arm64 / darwin-x64 / darwin-arm64）：dufs 0.46.0 的哈希取自 GitHub release 资产的 `digest`，cloudflared 2026.10.1 那天出网通了才读回来。哈希一律不向发字节的那一步要：cloudflared 四行、dufs 的 linux-x64 一行是手动下载复算的，其余由 `bun run test:obtain` 每轮把八个 URL 全 `HEAD` 一遍、本机那一行真下真跑。形状差别记在 `kind` 里：dufs 四行都是归档，cloudflared 的 Linux 是裸 ELF、macOS 是里面只有一个 `cloudflared` 的 `.tgz`；取的是普通构建不是 `-fips`，没有宿主要过 FIPS
+- fix: 下载有界——64 MB 上限、120 秒墙上时钟、边流式边哈希；上限按钉表里最大的那个 asset（cloudflared 的 Linux 构建 40 MB）留了升级的余量。不请求 `latest`，也不向发字节的同一台服务器要校验和
+- fix: 解包只进新建的 `mkdtemp`，`tar -tzf` 先点名条目，解完 `realpath` 断言还在那个目录里；落盘是同目录 `.part` + `rename`，`0o755`；同一个 name 的并发调用单飞，第二个人等同一条 promise；平台不在表里就报错点名 `platform/arch`
+- fix: 目标位置已有文件时，先哈希再决定——等于钉值才复用，不等就拒绝并打印那个文件自己的 sha256。桥不覆盖别人的文件，也不留 marker
+- fix: 安装记录在 `spawn` 之前落审计（`tool: "xfer"`，`action: "install"`），每次安装另记一行到 `<agentDir>/a2a-bridge.installs.json`（`A2A_BRIDGE_INSTALLS` 可指走），复用看的是它
+- fix: `xfer_share` 的回包多一个 `installed: {dufs, cloudflared}`，让调用方知道自己为什么多等了几秒；下载就地等完，没有「正在装，稍后再来」的中间态
+- fix: `xfer_stop` 对着真隧道不返回——端到端跑出来的，25 秒客户端超时。关闭那条路径先给 dufs 发 `SIGTERM`，等隧道拆完，然后才 `once("exit")` 去听那个子进程；dufs 回 `SIGTERM` 只用几毫秒，事件在订阅之前就发过了，那个 await 永远等不到，第二次 `xfer_share` 顶替旧共享时卡的是同一处。等待现在在发信号之前登记，并且先读 `exitCode`：孩子已经不在了就当场过。共享实际早就关干净了，卡的只是答复
+- fix: `test:install` 那条「首次启动只写哪些键」的形状断言按 `xfer` 块补齐——昨天加默认块时没动它，`bun run test:install` 一直红着这一项（`PACKAGE` 1 check failed），今天全量回归才撞上。测试页的项数跟着按实测改：探针 35 项（总览表原写 33、节标题原写 28，两处都过期），内容那组 8 → 15 并把「只依赖一个宿主包」那两条补进断言清单
+- test: 新增 `test/obtain.test.ts`（19 项，本地 `Bun.serve` 扮 GitHub，不靠外网）：哈希不符、哈希长度不对、tar slip、解出多余条目、目标是别人那份文件时拒绝、单飞只下载一次、超上限截断、超时、不支持的平台、PATH 命中不下载、显式路径不下载，以及 `spawn` 收到的是解析器给的绝对路径；钉表本身在两项里被检查——每一行的哈希是 64 位小写十六进制、URL 拼出来是 `<tag>/<asset>` 且不带 `latest`，两个二进制各自四行的形状
+- test: 新增 `bun run test:obtain`（`test/obtain-probe.ts`，31 项，进 CI 的 `host-probes`）：两个二进制都真下载、真跑 `--version`、真复用 → 用拉来的 dufs 起真共享 → GET 字节一致、Range 206、PUT 落盘、错密码 401、目录列表 200、关闭后端口释放 → 钉表八行 URL 全 `HEAD`。**`--auth user:pass@/:rw` 在 0.46.0 上重测过**，这条门过了版本号才进 README；真隧道那半程用第一节拉下来的那份 cloudflared 起，仍然只 `info:` 报告
+- test: 新增 `test/tunnel.test.ts`（4 项）钉住隧道输出读取的转录上限；`test/xfer.test.ts` 那条「dufs 缺失」改用路径形状（裸名现在是下载分支），另加一项断言裸名走解析器，以及上面那条关闭挂死的回归——它的隧道 stub 必须真花掉几十毫秒的事件循环时间，杀信号与订阅挨在一起就量不出这个洞
+- fix: `src/tunnel.ts` 的子进程转录有上限（64 KB），主机名到手就不再追加，没到手时收的是尾部——共享开一个小时，那条读循环就陪它一个小时，内存不该跟着长
+- docs: AGENTS.md 的例外清单从两条变三条（多了这个获取，连带它的代价：审计、文档，以及只有显式路径这一个出口）；README / README_ZN 里「桥不下载任何东西」重写，两个二进制的钉值各写一处；`docs/protocol.md` 的审计动作加 `install`、钉表段落改两个二进制；`docs/testing.md` 加 `test:obtain` 一节与隧道那条读循环一节
+- ci: `ci.yml` 里指向已删除的 `test:blob` 的那一步换成 `test:obtain`，步骤名与它上面那段注释跟着改成两个二进制（原来只写 dufs）
+- 回归：`lint` / `tsc` 干净，`bun test` 186/186（14 文件）。`bun run test:obtain` 31 项全过，含两个二进制真下载与真共享；公网那半程还是量不了——本机网络对代理域名重签 TLS，`*.trycloudflare.com` 从发布它的机器 curl 不回来，主机名 announce 与桥侧的关闭是真测到的。端到端一遍：真宿主 + 隔离 HOME + PATH 上没有 dufs，远程 `xfer_share` 自己拉出 0.46.0、回包点名版本、loopback GET 字节一致、错密码 401、`xfer_stop` 返回且端口释放，审计里 `install` 一条（dufs；cloudflared 在继承来的 PATH 上命中，按规矩不下载）、`share` 与 `stop` 各一条，真的 `~/.local/bin` 一个字节没动。宿主核验全量重跑：`smoke`、`hardening` 34 项、`install` 35 项 `PACKAGE OK`、`scenario` 41 步 0 失败、`registry` 5490 行、`tree` 形状 OK、`takeover` 67.2 秒（推理 POST 1、元数据 1）、审批 `VERDICT: B`；站点 sync 后 render-check 56 项全过
+
+## 2026-10-16 — 传文件由桥自己的三个工具驱动：`dufs` + cloudflared quick tunnel，字节不进 JSON-RPC
+
+`/blob` 撤掉之后，那件活（把宿主机上的文件交给调用方，或反过来）改由三个桥自己实现的工具承担：工具只交出一条路径，字节走普通 HTTP。
+
+- feat: `xfer_share` / `xfer_status` / `xfer_stop`（`src/xfer.ts`；在 `extensions/a2a-bridge.ts` 里追加进 `tools/list`，并在分派时先于宿主执行器）。`xfer_share {path, ttlSeconds?}` 让 `dufs` 在本机 `127.0.0.1` 上以随机端口与随机 basic auth 起一个 HTTP 服务，再由 cloudflared quick tunnel 给它一个公网主机名，返回带凭据的 URL、本地端口与到期时间；默认 TTL 3600 秒，第二次 `xfer_share` 替换第一个，桥停止时带走共享
+- feat: `src/tunnel.ts`：quick tunnel 由进程自己起（`cloudflared tunnel --no-autoupdate --url http://127.0.0.1:<port>`），主机名从子进程输出里解析出来，`stop()` 先 SIGTERM、两秒后 SIGKILL
+- fix: 配置新增 `xfer.dufs` 与 `xfer.cloudflared`（缺省就是这两个名字，按 PATH 找）；给了值却不可用的（空串、非字符串）启动即报错，不静默回退到默认名
+- fix: 每次 `xfer_*` 调用在审计里留一条 `tool: "xfer"`，args 只有 action/path/port/ttl，文件内容不进日志
+- test: 新增 `test/xfer.test.ts`（11 项）：工具面、路径解析（`~` / 相对 / 绝对）、四种拒绝（无 `path`、路径不存在、`dufs` 缺失、到期后端口释放）、共享生命周期（服务端校验的凭据就是桥生成的那一份、`stop()` 释放端口、第二个共享替换第一个）。核验用一个运行时写出的可执行 stub 顶替 dufs，隧道用注入的开洞器
+- 回归：`lint` / `tsc` 干净，`bun test` 160/160（新增 11 项）。真机核验：dufs 0.43.0 的二进制直接驱动本模块，GET 字节一致、Range 206、PUT 落盘、错密码 401、目录列表 200、共享关闭后端口释放，8 项全过；cloudflared 侧起得到 `https://<random>.trycloudflare.com` 主机名，但那台机器所在网络对代理域名重签 TLS，`curl` 走公网 URL 报 `unexpected eof`，所以「经隧道端到端」这一条没有从那台机器上测成
+
+## 2026-10-16 — 原始字节端点撤掉：传文件改成桥外的普通 HTTP，桥的原始面只剩 `POST /host-llm`
+
+`POST /blob` 与后来补上的 `GET /blob` 那一半整条从桥里撤掉——`src/blob.ts`、两条路由、审计记录与核验一起走。它原先顶的那件事（宿主审批门配成 `prompt` 而调用方无交互 UI 时写挂起 ≥90s）现在归桥外的 HTTP。
+
+- fix: 传文件走三个桥自己的工具（`xfer_share` / `xfer_status` / `xfer_stop`）：工具只交出一条宿主路径，`dufs` 在那条路径上起 HTTP 服务、cloudflared quick tunnel 给它一个公网主机名，调用方用 `curl` 之类直接搬字节——字节不进 JSON-RPC，也不落在桥的任何一条路由上
+- fix: `src/server.ts` 不再分派 `/blob`，桥不属于工具的路径只剩 `POST /host-llm`；MCP 路径 128 MB 的请求体上限（`maxRequestBodySize`）不变
+- fix: 审计里的 `blob:write` / `blob:read` 两类记录消失，传文件改记 `tool: "xfer"`，args 只有路径、本地端口与 TTL，内容不进日志
+- test: `test/blob-probe.ts` 与 `test/blob-route.test.ts` 删除，`package.json` 的 `test:blob` 脚本一并去掉；`test/scenario.ts` 里两段借 `/blob` 的叙事跟着撤（10 个叙事 → 8 个）；`test/rss-<宿主版本>.json` 四份采样删掉
+- docs: 协议页删掉「原始字节传输」一节（含其下的「下载」「内存」「它放弃了什么」），传输表、`stop()` 那两处与鉴权、审计处的 `/blob` 一并去掉；两份 README 删「传文件」/「Moving files」一节与 `test:blob` 那条命令；`AGENTS.md` 的「The exceptions on record」从两条变一条；测试页删 `test:blob` 一节与跟着它的计数
+
 ## 2026-10-16 — 宿主自己升到 18.11.0：插件目录改跟随 `HOME`，install 探针那半程改成自包含
 
 宿主自己升到了 18.11.0，版本守卫如实红了（它存在就是为了这个）。同步 pin 与 `bun.lock`、重跑宿主核验之后，`test:install` 红了一项——**原因不在桥**。

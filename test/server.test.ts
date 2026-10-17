@@ -76,6 +76,7 @@ async function withServer(fn: (base: string) => Promise<void>): Promise<void> {
 			host: "127.0.0.1",
 			token: TOKEN,
 			host_llm: "allow",
+			xfer: { dufs: "dufs", cloudflared: "cloudflared" },
 		},
 		makeDeps(),
 	);
@@ -350,7 +351,13 @@ describe("server internal errors", () => {
 			logged.push(a);
 		});
 		const s = await startServer(
-			{ port: 0, host: "127.0.0.1", token: TOKEN, host_llm: "allow" as const },
+			{
+				port: 0,
+				host: "127.0.0.1",
+				token: TOKEN,
+				host_llm: "allow" as const,
+				xfer: { dufs: "dufs", cloudflared: "cloudflared" },
+			},
 			{
 				...makeDeps(),
 				async getTools() {
@@ -382,7 +389,13 @@ describe("server internal errors", () => {
 		const squatter = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("taken") });
 		const wanted = squatter.port as number;
 		const s = await startServer(
-			{ port: wanted, host: "127.0.0.1", token: TOKEN, host_llm: "allow" as const },
+			{
+				port: wanted,
+				host: "127.0.0.1",
+				token: TOKEN,
+				host_llm: "allow" as const,
+				xfer: { dufs: "dufs", cloudflared: "cloudflared" },
+			},
 			makeDeps(),
 		);
 		try {
@@ -413,7 +426,16 @@ describe("server internal errors", () => {
 		}
 		if (!privileged) return; // this user may bind low ports, so there is nothing to check
 		await expect(
-			startServer({ port: 1, host: "127.0.0.1", token: TOKEN, host_llm: "allow" as const }, makeDeps()),
+			startServer(
+				{
+					port: 1,
+					host: "127.0.0.1",
+					token: TOKEN,
+					host_llm: "allow" as const,
+					xfer: { dufs: "dufs", cloudflared: "cloudflared" },
+				},
+				makeDeps(),
+			),
 		).rejects.toThrow(/permission denied/);
 	});
 });
@@ -428,7 +450,13 @@ describe("releasing the port", () => {
 		const deps = makeDeps();
 		let entered = false;
 		const s = await startServer(
-			{ port: 0, host: "127.0.0.1", token: TOKEN, host_llm: "allow" as const },
+			{
+				port: 0,
+				host: "127.0.0.1",
+				token: TOKEN,
+				host_llm: "allow" as const,
+				xfer: { dufs: "dufs", cloudflared: "cloudflared" },
+			},
 			{
 				...deps,
 				async callTool(name, args, sid) {

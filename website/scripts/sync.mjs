@@ -57,9 +57,9 @@ cpSync(join(REPO, "docs"), CONTENT, { recursive: true });
 // from what that page actually says.
 const PAGE_DESCRIPTIONS = {
 	"protocol.md":
-		"桥实现的 MCP 2025-11-25 Streamable HTTP 子集：处理顺序、会话生命周期、错误码总表、POST /blob 的原始字节上传、POST /host-llm 的宿主推理切换，以及它们各自放弃的东西。",
+		"桥实现的 MCP 2025-11-25 Streamable HTTP 子集：处理顺序、会话生命周期、错误码总表、POST /host-llm 的宿主推理切换，以及它放弃的东西。",
 	"testing.md":
-		"核验矩阵：3 项仓库形状（无依赖，排在 bun test 之前）、161 单测、28 项真实模型注册表（不起宿主）、35 项原始字节上传、34 项加固、33 项发布包与端到端、34 项宿主推理 deny/restore、10 个端到端场景，另有审批边界判别。顺手量的还有宿主 RSS、审计轮转与逐层脱敏；插件发现与 HOME 的实测结论在正文。",
+		"核验矩阵：3 项仓库形状（无依赖，排在 bun test 之前）、160 单测、28 项真实模型注册表（不起宿主）、34 项加固、33 项发布包与端到端、34 项宿主推理 deny/restore、8 个端到端场景，另有审批边界判别。顺手量的还有审计轮转与逐层脱敏；插件发现与 HOME 的实测结论在正文。",
 	"computer-use.md":
 		"computer use 让模型看屏幕猜坐标去点按，本桥让调用方按名字调工具。执行走的是本机工具自己的实现，目录由 tools/list 一条条给出名字和参数。",
 };
@@ -113,7 +113,7 @@ const changelog = readFileSync(join(REPO, "CHANGELOG.md"), "utf8")
 	.replaceAll("](docs/testing.md)", "](./testing.md)");
 writeFileSync(
 	join(CONTENT, "changelog.md"),
-	`---\ntitle: 变更日志\ndescription: 从 v0.1.0 起的改动记录：POST /blob 为什么收原始字节、宿主推理为什么靠 POST /host-llm 整体关掉、哪些端到端核验被推倒重测、安装方式怎么收到一条，每条都写明实测数字与代价。\n---\n\n# 变更日志\n\n${changelog}`,
+	`---\ntitle: 变更日志\ndescription: 从 v0.1.0 起的改动记录：宿主推理为什么靠 POST /host-llm 整体关掉、哪些端到端核验被推倒重测、安装方式怎么收到一条，每条都写明实测数字与代价。\n---\n\n# 变更日志\n\n${changelog}`,
 );
 
 // protocol.md: repo-relative links -> site form
@@ -151,9 +151,6 @@ features:
   - title: 驱动接在本机上的设备
     details: DAP 调试器（xd://debug）、LSP（xd://lsp）这类设备不进工具目录，远程 agent 用 read/write 的 path 参数就能读写和执行。有什么设备，跟着本机 omp 装了哪些扩展走。
     link: /intro#设备
-  - title: 把固件传上这台机器
-    details: POST /blob 收原始字节，而它的价值是「不会挂」——宿主把审批配成 prompt 而调用方无 UI 时，走 write/bash 会一直等不到应答（实测挂起 ≥90s），这条是唯一不挂的写入路径。实测 100 MB 的镜像一个请求传完，落盘字节一致。这个端点只做上传，GET 一律 405，理由写在协议页。
-    link: /intro#传文件
   - title: 宿主推理可以整体关掉
     details: 远程调用可能唤醒宿主自己的 agent，花宿主的 token。host_llm 配置与 POST /host-llm 把这件事变成开关：deny 在位时宿主的会话发不出任何模型请求，核验探针对着一个真在听的计数 sink 数过——零是数出来的。
     link: /intro#宿主推理接管
@@ -167,7 +164,7 @@ features:
     details: 客户端要实现的全部约定：处理顺序、会话生命周期、错误码总表。
     link: /protocol
   - title: 测试与核验
-    details: 161 项单测之外，七个核验全都拉起真实的 omp 跑完整流程；宿主推理那一个让宿主真连进计数 sink，发布包那一个装回去跑通才算过，第八个把接管架在宿主真实的模型注册表上跑、连宿主都不用起。各项覆盖什么、怎么判读，测试页写着。
+    details: 160 项单测之外，六个核验全都拉起真实的 omp 跑完整流程；宿主推理那一个让宿主真连进计数 sink，发布包那一个装回去跑通才算过，第七个把接管架在宿主真实的模型注册表上跑、连宿主都不用起。各项覆盖什么、怎么判读，测试页写着。
     link: /testing
 ---
 `;

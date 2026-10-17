@@ -53,7 +53,7 @@ export function seedModels(agentDir: string): string {
  * Link the extension into `<agentDir>/extensions/` so a throwaway HOME's host
  * actually loads it.
  *
- * This was open-coded in every probe, and `test:blob` shipped without it: it
+ * This was open-coded in every probe, and one probe shipped without it: it
  * passed locally because `omp install .` had left a copy in the real plugin
  * directory, and failed in CI, where nothing installs the extension. The symptom
  * was "the host came up but the bridge never announced itself" — which reads like

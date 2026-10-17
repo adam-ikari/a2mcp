@@ -61,7 +61,7 @@ let failures = 0;
  * `detail` is printed on **both** paths, so it has to read true on both: a
  * passing line that says "no announcement" next to a label saying the host
  * announced the bridge is worse than no line at all. A caller that only has
- * failure-shaped text to offer should follow `blob-probe.ts` instead and print
+ * failure-shaped text to offer should follow `smoke.ts` instead and print
  * it only when the check fails.
  */
 function check(cond: unknown, label: string, detail = ""): void {
@@ -136,13 +136,13 @@ const pkgRoot = join(stage, "package");
 check(existsSync(join(pkgRoot, "package.json")), "tarball unpacks to a package/ root");
 
 // Derived from the working tree rather than written out here. This used to be a
-// hand-typed list of five `src/*.ts` files and it had already gone stale: blob.ts
-// and takeover.ts were missing from it, and takeover.ts is the module the whole
-// host-inference mechanism lives in. They were not uncovered — the import-graph
-// walk below reaches both, transitively — so nothing failed, which is exactly the
-// shape of a list that rots quietly: it looks like coverage and is a snapshot.
-// Read the directory instead, and the check becomes "every module in src/ ships",
-// which cannot fall behind the code.
+// hand-typed list of five `src/*.ts` files and it had already gone stale:
+// `takeover.ts`, the module the whole host-inference mechanism lives in, was
+// missing from it. It was not uncovered — the import-graph walk below reaches it,
+// transitively — so nothing failed, which is exactly the shape of a list that
+// rots quietly: it looks like coverage and is a snapshot. Read the directory
+// instead, and the check becomes "every module in src/ ships", which cannot fall
+// behind the code.
 const shipped = [
 	"extensions/a2a-bridge.ts",
 	...readdirSync(join(REPO, "src"))
@@ -359,8 +359,8 @@ try {
 	const cfg = JSON.parse(readFileSync(join(e2eAgent, "a2a-bridge.json"), "utf8"));
 	e2eToken = cfg.token as string;
 	check(
-		Object.keys(cfg).sort().join(",") === "host,host_llm,port,token",
-		"first start writes only host/host_llm/port/token — no path sandbox fields",
+		Object.keys(cfg).sort().join(",") === "host,host_llm,port,token,xfer",
+		"first start writes only host/host_llm/port/token/xfer — no path sandbox fields",
 		JSON.stringify(cfg),
 	);
 
