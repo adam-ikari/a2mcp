@@ -342,7 +342,22 @@ for (const file of ["index.html", "testing.html"]) {
 		return path.replace(/^\/|\/$/g, "");
 	};
 
-	const today = new Date().toISOString().slice(0, 10);
+	// The bound must be expressed in git's convention, not this process's wall
+	// clock: `%cs` is the committer's local date, and the two disagree here (node
+	// runs in UTC, the commits are +0800), so a commit made after 16:00Z looks
+	// future-dated and the check fails with both printed dates identical. The
+	// newest commit in the tree is the latest date a lastmod can legitimately claim.
+	const headDate = (() => {
+		try {
+			return execFileSync("git", ["log", "-1", "--format=%cs", "HEAD"], {
+				cwd: repo,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+			}).trim();
+		} catch {
+			return "";
+		}
+	})();
 	const gitWorks = lastCommit("README_ZN.md") !== "";
 	let verified = 0;
 	for (const { url, lastmod } of entries) {
@@ -353,7 +368,7 @@ for (const file of ["index.html", "testing.html"]) {
 			srcExists,
 			`sitemap ${page || "index"}: maps to an existing source file (${src ?? "no mapping"})`,
 		]);
-		const plausible = /^\d{4}-\d{2}-\d{2}$/.test(lastmod) && lastmod <= today;
+		const plausible = /^\d{4}-\d{2}-\d{2}$/.test(lastmod) && (headDate === "" || lastmod <= headDate);
 		const claimed = srcExists ? lastCommit(src) : "";
 		if (claimed) verified++;
 		headChecks.push([

@@ -25,6 +25,7 @@
 - fix: `src/tunnel.ts` 的子进程转录有上限（64 KB），主机名到手就不再追加，没到手时收的是尾部——共享开一个小时，那条读循环就陪它一个小时，内存不该跟着长
 - docs: AGENTS.md 的例外清单从两条变三条（多了这个获取，连带它的代价：审计、文档，以及只有显式路径这一个出口）；README / README_ZN 里「桥不下载任何东西」重写，两个二进制的钉值各写一处；`docs/protocol.md` 的审计动作加 `install`、钉表段落改两个二进制；`docs/testing.md` 加 `test:obtain` 一节与隧道那条读循环一节
 - ci: `ci.yml` 里指向已删除的 `test:blob` 的那一步换成 `test:obtain`，步骤名与它上面那段注释跟着改成两个二进制（原来只写 dufs）
+- fix: 站点守卫里「lastmod 不能是未来」那一条拿进程的 wall clock 跟 git 的 `%cs` 比，两个时钟不同源——node 跑在 UTC，提交是 +0800——于是 16:00Z 之后落的那次提交被判成未来日期，报错里两个日期字符串一模一样（`lastmod 2026-10-18 vs CHANGELOG.md 2026-10-18`），看着像比较本身坏了。上界改成仓库里最新那次提交的 `%cs`，与被判的量同一 convention；反证跑过：把 dist 那份 sitemap 里 changelog 与 testing 两行改成 2027-01-01，两项如实红
 - 回归：`lint` / `tsc` 干净，`bun test` 186/186（14 文件）。`bun run test:obtain` 31 项全过，含两个二进制真下载与真共享；公网那半程还是量不了——本机网络对代理域名重签 TLS，`*.trycloudflare.com` 从发布它的机器 curl 不回来，主机名 announce 与桥侧的关闭是真测到的。端到端一遍：真宿主 + 隔离 HOME + PATH 上没有 dufs，远程 `xfer_share` 自己拉出 0.46.0、回包点名版本、loopback GET 字节一致、错密码 401、`xfer_stop` 返回且端口释放，审计里 `install` 一条（dufs；cloudflared 在继承来的 PATH 上命中，按规矩不下载）、`share` 与 `stop` 各一条，真的 `~/.local/bin` 一个字节没动。宿主核验全量重跑：`smoke`、`hardening` 34 项、`install` 35 项 `PACKAGE OK`、`scenario` 41 步 0 失败、`registry` 5490 行、`tree` 形状 OK、`takeover` 67.2 秒（推理 POST 1、元数据 1）、审批 `VERDICT: B`；站点 sync 后 render-check 56 项全过
 
 ## 2026-10-16 — 传文件由桥自己的三个工具驱动：`dufs` + cloudflared quick tunnel，字节不进 JSON-RPC
