@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-18T08:19:54"
+updated: "2026-10-18T09:02:11"
 ---
 
 <!-- compiled_truth -->
@@ -869,4 +869,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "宿主 omp 18.12.1（2026-10-18，宿主自己从 18.11.0 升上来的，pin 与 bun.lock 跟着同步；版本守卫按设计红两条之后修对）。中间跨四个版本，两处 breaking 实测与本仓库无关：18.11.3 改的是 ui.approve() 宿主收到可选 session 标签并回 once/session/deny 而不是布尔，桥从不自己调 approve，审批探针仍是 VERDICT: B（挂起 >=90031ms、不是 isError）；18.12.1 去掉的是 eval 的 display()。~/.omp/plugins 跟随 HOME 这件事在 18.12.1 上重测仍是同一种行为——test:install 48 项与 test:bootstrap 第五组都在临时 HOME 里真装真登记跑绿。真实注册表行数 5490 -> 5497（registry 探针 28 项全过，装配 15.4ms），这是这台机器配置的数，不是产品的数。takeover 34 项 64.0 秒（推理 POST 1、元数据 1）、smoke 22 tools、hardening 34 项、scenario 41 步 0 失败、obtain 31 项 PASS（公网那半程仍是本机网络对代理域名重签 TLS，量不了）。"
   source: "18.12.1 上全量重跑（bun test 186/186 + 九个宿主侧核验），日志 /tmp/18121-*.log"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-18T09:02:11
+  kind: decision
+  summary: "发布位的判据定下来：进 minor 位的是「远程调用方拿到的东西变了」，不是「提交数多了」或「行数大了」。v0.3.0 覆盖的 19 个提交里三件都满足这条——/blob 撤掉换成 xfer_* 三个工具（调用方看到的工具名与传字节的方式都变了）、缺的 dufs/cloudflared 由桥按钉值自装（同一句 xfer_share 在两台机器上的行为不再取决于有没有人手动拖过包）、bootstrap.sh 补上「机器上没有 omp」这一档。保守发 0.2.2 的话，Release 与 CHANGELOG 就得解释为什么加了三个工具却只进 patch 位，那个解释本身是噪音。另一条同时定下：v0.2.1 的 GitHub Release 保留不撤——2026-10-16 那条发布卫生判据针对的是装不上的版本，撤掉一个仍然装得上的入口不在它里面，四个 tag 全留、可安装入口指向 v0.3.0。附带一条实测：initialize 回的 serverInfo.version 是发布包自证的唯一途径（读自 package.json，test:install 端到端那一行回包打印的就是它），所以版本号进 package.json 之后必须重跑一遍 install 探针，光看字段改了不够。"
+  source: "v0.3.0 发布这轮（gh release list 现为 v0.3.0 Latest + v0.2.1 保留；tag annotated 全留四个）"
   affects: [a2a-mcp-bridge]
