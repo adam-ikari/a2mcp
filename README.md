@@ -81,12 +81,38 @@ The URL has to be the full `https://….git` — a GitHub `owner/repo` shorthand
 rejected as an invalid package name, and pointing it at a `.tgz` fails with
 `ENOTDIR`.
 
+**No omp on the machine yet?** The repo ships a bootstrap script, and the host
+layer is all it manages:
+
+```sh
+sh scripts/bootstrap.sh --dry-run   # print the plan, write nothing
+sh scripts/bootstrap.sh
+```
+
+It does three things: with no `omp` on PATH it runs the official installer
+(`curl -fsSL https://omp.sh/install | sh`, or `--binary --ref v<version>` when it can
+read a pin from the `package.json` next to it); then it runs the one `omp install
+<git-url>` above; then it checks itself with the host's own `omp plugin doctor` and
+compares the version the host reports against that pin. A host already on PATH is
+left alone (`--upgrade` to re-run the installer), an existing registration is skipped
+(`--reinstall` to force it), and `--uninstall` removes only the registration, leaving
+the token and the audit log.
+
+**Installing the extension still has one path**, and the last thing the script does is
+run it. It symlinks nothing, offers no local install, validates no module graph and
+generates no token. The host checks for its own updates at startup by default, so
+"installed at the pinned version" is not "stays at the pinned version". The coverage is
+the `test:bootstrap` section of [docs/testing.md](docs/testing.md) (28 checks); the
+host-install half is never executed on a development machine, which is why what that
+probe tests is the script's decisions.
+
 All of the above was measured, and `bun run test:install` checks the package,
 installs it into a temporary `HOME`, starts a host there, and drives the bridge
-over MCP as a remote client. Host 18.11.0 resolves `~/.omp/plugins` by `HOME`, and
-what loads is the registration in `omp-plugins.lock.json` — a bare symlink loads
-nothing. So that half is self-contained, and it leaves no registration on your
-real machine. See [docs/testing.md](docs/testing.md).
+over MCP as a remote client. Since host 18.11.0 — re-checked on 18.12.1 —
+`~/.omp/plugins` resolves by `HOME`, and what loads is the registration in
+`omp-plugins.lock.json` — a bare symlink loads nothing. So that half is
+self-contained, and it leaves no registration on your real machine. See
+[docs/testing.md](docs/testing.md).
 
 Nor hand-symlink into `~/.omp/agent/extensions/`:
 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` only works when `$PWD` happens to be
@@ -314,7 +340,7 @@ bun install
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
 bun run test:tree     # repo shape: no symlink points off this machine, 3 checks, no deps, no local omp (runs before bun test on purpose)
-bun test              # unit tests: test/*.test.ts (160: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route)
+bun test              # unit tests: test/*.test.ts (186: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer)
 bun run test:registry # drive the takeover against the host's real model registry, 28 checks, seconds (needs no local omp, no credentials)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 34 items (needs a local omp)
@@ -322,6 +348,7 @@ bun run test:approval  # approval-boundary discriminating check, ~95s (needs a l
 bun run test:takeover  # host inference deny/restore against a counting sink, ~60s (needs a local omp)
 bun run test:scenario  # end-to-end scenarios, 8 narratives / 41 steps, ~45s (needs a local omp)
 bun run test:install   # published-package self-containment + a real host over MCP, 48 items (needs a local omp; fetches ~46 MB from GitHub)
+bun run test:bootstrap # the one-shot installer's decisions, 28 items, ~9s (groups 1-4 run against a recording stub omp; the last group needs a local omp)
 bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`
 ```
 

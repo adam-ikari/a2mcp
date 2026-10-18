@@ -21,14 +21,14 @@
  *
  * ## On plugin discovery and HOME
  *
- * Measured twice on two host versions, and the answer moved, so the version is
+ * Measured on three host versions, and the answer moved once, so the version is
  * part of the note:
  *
  *   ~/.omp/agent/extensions/   follows HOME             (a marker extension
  *                                        planted in a temp HOME does load)
- *   ~/.omp/plugins/            follows HOME as of 18.11.0  (on 18.10.4 it did
- *                                        not; a temp HOME's registry is what
- *                                        the host reads now)
+ *   ~/.omp/plugins/            follows HOME as of 18.11.0, re-checked on 18.12.1
+ *                                        (on 18.10.4 it did not; a temp HOME's
+ *                                        registry is what the host reads now)
  *
  * What loads is the *registration*, not the directory: `omp install` writes the
  * plugin into `<plugins>/omp-plugins.lock.json` and the host loads from that
@@ -272,11 +272,10 @@ console.log(`  ${e2eNote}`);
 // it links the working tree, so the host loads whatever is there right now. The
 // README's git URL installs a copy of master, which cannot test uncommitted work.
 // A local install is a test fixture here, not a supported install method.
-// A local install is a test fixture here, not a supported install method.
 //
-// Install under `e2eHome`, the HOME the host below boots with: as of host
-// 18.11.0 the plugin registry is HOME-scoped, so an install under the real HOME
-// is invisible to that host (see the header).
+// Install under `e2eHome`, the HOME the host below boots with: since host
+// 18.11.0, and still on 18.12.1, the plugin registry is HOME-scoped, so an
+// install under the real HOME is invisible to that host (see the header).
 const e2eEnv = { ...process.env, HOME: e2eHome };
 const installedPlugin = join(e2eHome, ".omp", "plugins", "node_modules", "pi-a2a-ext");
 const lockPath = join(e2eHome, ".omp", "plugins", "omp-plugins.lock.json");

@@ -4,6 +4,21 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## 2026-10-18 — 一键装宿主与扩展：`scripts/bootstrap.sh`；宿主 pin 先升到 18.12.1
+
+README 教的安装方式只有一条：`omp install <git-url>`。那句话假设机器上已经有 `omp`，而宿主这一层怎么来，仓库一个字没写——新机器上手的人第一步就卡在这儿。卡的这一步恰好不是本仓库该重新发明的：上游有官方安装器（`omp.sh/install`，12 KB POSIX sh，取预编译二进制并自己核 sha256，`--binary --ref v<版本>` 是它唯一的钉版本写法）。所以这个脚本的定位是**引导**：把宿主编上，最后执行那条已有的扩展安装路径。它不是第二条安装路径，2026-10-02 删掉 `scripts/install.sh` 那条决定也不翻面——那次的错是自己维护一份模块图校验，这次连插件登记好不好都问宿主的 `omp plugin doctor`。
+
+pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.json` 还钉 18.11.0，`bun test` 因此红两项。版本守卫存在就是为了这一刻。脚本的默认版本要读这个 pin，所以它先修对——不然脚本的第一个决定就是错的。
+
+- chore: `@oh-my-pi/pi-coding-agent` 与 `@oh-my-pi/pi-ai` 的 pin `18.11.0` → `18.12.1`，`bun.lock` 跟着重写。中间跨四个版本，两处对本仓库有直接影响：18.11.3 的 breaking 是 `ui.approve()` 的宿主收到可选的 `session` 标签并回 `"once" | "session" | "deny"` 而不是布尔；18.12.1 的 breaking 是 `eval` 去掉 `display()`。实测两者都到不了桥：桥从不自己调 `approve`，审批探针在 18.12.1 上仍是 `VERDICT: B`（挂起 ≥90031ms、不是 `isError`），`test:takeover` 34 项 64.0 秒、推理 POST 1
+- feat: `scripts/bootstrap.sh`，POSIX sh、`set -eu`、不要 bash。四步：前置（`curl`/`git` 缺了致命，`tar` 缺了只告警——它是桥自己解包用的，不影响安装；`$HOME` 不可写致命）→ 宿主（`command -v omp` 命中就报告版本**不动它**，与 `src/obtain.ts` 对目标文件「不等于登记那一行就拒绝」是同一条规矩；`--upgrade` 才重跑官方安装器；没命中就按 `package.json` 的 pin 装 `--binary --ref v<pin>`，读不到 pin 就装 latest 并说明为什么没钉）→ 扩展（`omp plugin list` 已登记就跳过，`--reinstall` 先卸载；否则执行且只执行那条 git URL）→ 自检（`omp plugin doctor` 的 `pi-a2a-ext` 那一行要见 ✔，再报一次宿主版本与 pin 是否一致，只报告不替你改）。参数 `--dry-run` / `--uninstall` / `--reinstall` / `--upgrade` / `--host-version` / `--spec`。不软链、不 `omp install .`、不自建模块图校验、不生成 token、不写 `models.yml`、不 `sudo`、不加跳过 TLS 校验的开关、不改任何 rc 文件（`~/.local/bin` 不在 PATH 上时只打印该加的那一行）
+- test: 新增 `test/bootstrap-probe.ts` → `bun run test:bootstrap`（28 项，五组 6/5/5/7/5，约 9 秒）。`PATH` 是探针自己造的软链目录，只放点名的真二进制，所以「没有 curl」是真没有；`omp` 换成一个只往文件追加 argv 的记账 stub。两道变异写在组里：把 `package.json` 的钉值换成 9.9.9，stub 收到的 `--ref` 跟着变；把 doctor 那行改成 ✗，脚本如实红。第五组用 PATH 上那份真 omp 在临时 `HOME` 里跑真一遍，登记落 `omp-plugins.lock.json`、`--uninstall` 收干净
+- 回归: 反证之外探针自己也修了三处。拿掉 `curl` 那个场景原本留着 stub 宿主，脚本走「已有宿主」那一支，`curl` 检查根本没跑到，还顺手把扩展「装」进了 stub 的登记，于是下一个场景读到已登记、跳过安装、两条都绿；`badHome` 的 `spawnSync` cwd 就是那个不存在的 `HOME`，退出码是 -1；`farm()` 从没把 stub `omp` 链进去。都记在 `docs/testing.md` 那一节里
+- docs: README 中英 Install 段前各加「机器上还没有 omp？」一小段（脚本一行命令、它做哪三步、一句限定「**扩展的安装仍然只有原来那一条**」，另加一句宿主默认开机自更新，脚本给的是装上时与钉值一致、不是一直停在钉值）；`docs/testing.md` 总览表加一行、新增 `test:bootstrap` 一节、统一前置那段说明它前四组不起真宿主；插件目录跟随 `HOME` 那张表补 18.12.1（`test:install` 48 项与 `test:bootstrap` 第五组都是在临时 `HOME` 里真装真登记跑绿的）；`test/harness.ts` 与 `test/install-probe.ts` 的版本注释跟着重测；README 开发命令列表补 `test:bootstrap`，单测项数 160 → 186（这个数字在 HEAD 就已经过期）
+- ci: `host-probes` 加一步 `bun run test:bootstrap`（不出网、不起宿主，秒级）；顺手把 `test:install` 那步上方一段写于 18.10.4 时代的过期注释换成现状
+
+- 回归：`lint` / `tsc` 干净，`bun test` 186/186（14 文件）。18.12.1 上全量重跑：`tree` 形状 OK、`registry` 5497 行（18.11.0 是 5490）、`SMOKE OK`（22 tools）、`HARDEN OK` 34 项、`obtain` 31 项 PASS（公网那半程仍是证书报错，本机网络对代理域名重签 TLS）、`install` 48 项 `PACKAGE OK`、`SCENARIOS: 41 steps, 0 failed`、`takeover` 64.0 秒全过、审批 `VERDICT: B`、`bootstrap` 28 项 `BOOTSTRAP OK`
+
 ## 2026-10-18 — 「两个二进制都缺」那一遍端到端升格成提交里的核验：`test:install` 第五组，35 项 → 48 项
 
 `xfer_share` 在 PATH 上什么都没有的那条路径，昨天是靠一个用完即删的脚本证明的：`test:obtain` 里 cloudflared 是写明路径那一侧，`bun test` 把获取整个 stub 掉，两边都碰不到这条形状。今天把它放进 `test:install`，代价是每轮 CI 多约 46 MB 出网。

@@ -76,11 +76,29 @@ omp plugin uninstall pi-a2a-ext
 URL 必须是完整的 `https://….git`——GitHub 的 `owner/repo` 简写会被当作非法包名
 拒绝；指向 `.tgz` 会报 `ENOTDIR`。
 
+**机器上还没有 omp？** 仓库带一个引导脚本，它管的是宿主那一层：
+
+```sh
+sh scripts/bootstrap.sh --dry-run   # 只看计划，一个字都不写
+sh scripts/bootstrap.sh
+```
+
+它做三件事：PATH 上没有 `omp` 就跑官方安装器（`curl -fsSL https://omp.sh/install | sh`，
+能从旁边的 `package.json` 读到钉值时改成 `--binary --ref v<版本>`）；然后执行上面
+那一条 `omp install <git-url>`；最后用宿主自己的 `omp plugin doctor` 自检，并把
+宿主报的版本与钉值对一遍。已有宿主它不动（`--upgrade` 才重装），已登记就跳过
+（`--reinstall` 强制），`--uninstall` 只收登记、留着 token 与审计日志。
+
+**扩展的安装仍然只有原来那一条**，脚本最后执行的就是它。它不软链、不做本地安装、
+不自己校验模块图，也不生成 token。宿主默认在启动时自查更新，所以「按钉值装上」不是
+「一直停在钉值」。核验见 [docs/testing.md](docs/testing.md) 的 `test:bootstrap` 一节
+（28 项）；宿主那一支在开发机上永远走不到，那里测的是脚本的判断。
+
 上面这些是实测过的，`bun run test:install` 也覆盖：核验发布包、把插件装进一个临时
-`HOME`、在那里起宿主，以远程客户端身份把桥的 MCP 面走完。宿主 18.11.0 起按 `HOME`
-解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记——光有软链不加载，
-已实测。所以那半程是自包含的，也不会在你的真实机器上留下登记。见
-[docs/testing.md](docs/testing.md)。
+`HOME`、在那里起宿主，以远程客户端身份把桥的 MCP 面走完。宿主自 18.11.0（18.12.1
+上重测仍如此）按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的
+登记——光有软链不加载，已实测。所以那半程是自包含的，也不会在你的真实机器上留下
+登记。见 [docs/testing.md](docs/testing.md)。
 
 也别手工软链到 `~/.omp/agent/extensions/`：`ln -s "$PWD/extensions/a2a-bridge.ts" ...`
 只在 `$PWD` 恰好是仓库根目录时有效，换个目录执行就链到一个不存在的路径，桥静默地
@@ -307,7 +325,7 @@ bun install
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
-bun test              # 单测：test/*.test.ts（160 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由）
+bun test              # 单测：test/*.test.ts（186 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer）
 bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，34 项（需本机 omp）
@@ -315,6 +333,7 @@ bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp�
 bun run test:takeover  # 宿主推理 deny/restore 对一个计数 sink 实测，约 60 秒（需本机 omp）
 bun run test:scenario  # 端到端场景，8 个叙事 / 41 步，约 45 秒（需本机 omp）
 bun run test:install   # 发布包自包含 + 真实宿主走 MCP，48 项（需本机 omp；会向 GitHub 拉约 46 MB）
+bun run test:bootstrap # 一键脚本的判断核验，28 项，约 9 秒（前四组用自制的记账 stub omp；第五组需本机 omp）
 bun run website        # 文档站（VitePress）本地预览，端口见输出（5173 起，被占则顺延）；首次先 cd website && bun install
 ```
 

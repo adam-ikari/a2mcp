@@ -14,11 +14,12 @@
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:takeover` | 宿主推理 deny/restore 核验，34 项，约 65 秒 | 是 | `takeover probe: all assertions met` |
 | `bun run test:install` | 发布包自包含 + 端到端，48 项 | 是 | `PACKAGE OK` |
+| `bun run test:bootstrap` | 一键脚本的判断核验，28 项，约 9 秒 | 第五组要 | `BOOTSTRAP OK` |
 | `bun run test:scenario` | 端到端场景，8 个叙事 / 41 步，约 45 秒 | 是 | `SCENARIOS: 41 steps, 0 failed` |
 
-统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主 18.11.0 按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的第五组是这趟里唯一真出网的一支：`PATH` 上什么都不留，让桥自己把两个二进制拉下来，约 46 MB，落点仍是它自己那个临时 `HOME`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2a-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。`test:bootstrap` 前四组连真宿主都不起：它用脚本自己造在临时目录里的记账 `omp` stub，PATH 上没有真宿主也照样跑，只有第五组用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主自 18.11.0（18.12.1 上重测仍如此）按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的第五组是这趟里唯一真出网的一支：`PATH` 上什么都不留，让桥自己把两个二进制拉下来，约 46 MB，落点仍是它自己那个临时 `HOME`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2a-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
-六个宿主核验、`test:obtain` 与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
+六个宿主核验、`test:obtain`、`test:bootstrap` 与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
 ## `test:install` — 发布包自包含核验 + 端到端（48 项）
 
@@ -46,12 +47,12 @@
 
 ## 插件发现与 HOME：实测结论
 
-这个核验在插件目录上翻过一次，宿主换版本时又翻了第二次，所以这里带上版本。18.10.4 上实测 `~/.omp/plugins` 不跟随 `HOME`——**那次结论本身是对一次坏探针的更正**；18.11.0 上它跟随。实测：
+这个核验在插件目录上翻过一次，宿主换版本时又翻了第二次，所以这里带上版本。18.10.4 上实测 `~/.omp/plugins` 不跟随 `HOME`——**那次结论本身是对一次坏探针的更正**；18.11.0 上它跟随，18.12.1 上是同一种行为（那遍全量回归里 `test:install` 48 项与 `test:bootstrap` 第五组都是在临时 `HOME` 里真装真登记跑绿的）。实测：
 
 | 目录 | 是否跟随 `HOME` | 证据 |
 | --- | --- | --- |
 | `~/.omp/agent/extensions/` | **跟随** | 往临时 HOME 放一个只打印标记的扩展，标记出现了 |
-| `~/.omp/plugins/` | **18.10.4 不跟随，18.11.0 跟随** | 18.11.0 上，临时 HOME 里 `omp install` 的插件会加载、真实 HOME 那份不会；加载读的是 `omp-plugins.lock.json` 里的登记，只放软链不加载（实测） |
+| `~/.omp/plugins/` | **18.10.4 不跟随；18.11.0 跟随，18.12.1 仍跟随** | 18.11.0 上，临时 HOME 里 `omp install` 的插件会加载、真实 HOME 那份不会；加载读的是 `omp-plugins.lock.json` 里的登记，只放软链不加载（实测） |
 
 第一次的坏探针错在哪：它只往临时 HOME 的 agent 目录放标记，没往 plugins 目录放；而且**没给临时 HOME 写 `models.yml`**。
 
@@ -69,6 +70,28 @@
 安装由 omp 保证，不在这个核验的范围内。
 
 全过 → `PACKAGE OK`；任何一项不过 → `FAIL: <label>` + exit 1。
+
+## `test:bootstrap` — 一键装宿主与扩展的脚本核验（28 项，约 9 秒）
+
+**核验 `scripts/bootstrap.sh` 的判断，不核验 omp 会不会装东西。** 五组：
+
+| 组 | 项数 | 断言 |
+| --- | --- | --- |
+| 钉值从哪来 | 6 | PATH 上没有宿主时，计划里的安装器调用带着从 `package.json` 读出的钉值，并说明读自哪个文件；把 `package.json` 换成另一份、钉值写 9.9.9，`--ref` 跟着变；钉值写成 range（`^18.0.0`）不当钉值用，如实告警后装 latest；`--host-version 7.7.7` 压过文件；`--host-version latest` 计划里没有 `--ref` |
+| `--dry-run` 的计划 | 5 | 退出 0；PATH 上已有宿主就不装（计划里一行 `curl` 都没有）；扩展那一步是 README 那条 git URL 原文；自检交给宿主自己的 `omp plugin doctor`；跑完那个临时 `HOME` 里一个条目也没有 |
+| 前置 | 5 | 没有 `curl` 且必须装宿主 → 红，且 `wanted` 那行写的就是 curl；没有 `git` → 红并点名 git；没有 `tar` → 只告警（那是桥自己解包用的），照样绿；`HOME` 不可用 → 红并说 HOME；不认识的参数 → 红而不是被忽略 |
+| 登记的取舍 | 7 | 已登记就不再装（stub 的 argv 里没有一个 `install`）；真装时跑的是 spec 不是本地路径；`--reinstall` 的卸载排在安装之前；`--uninstall` 只调卸载、一个安装都没有；doctor 那行是 ✔ 就过并回声出来；改成 ✗ 就红（这道门不是摆设）；宿主版本与钉值不一致只告警、不中止 |
+| 真宿主 | 5 | 用 PATH 上那份真 omp 在临时 `HOME` 里跑真一遍：脚本退出 0、登记落进 `omp-plugins.lock.json`、`node_modules/<插件>` 目录在、第二次跑如实说 already registered、`--uninstall` 把登记从 lock 里拿掉 |
+
+它为什么存在：README 教的安装方式是 `omp install <git-url>` 那一条，而那句话假设机器上已经有 `omp`。脚本补的是宿主那一层，扩展那一半执行的还是原句——**它不是第二条安装路径**。2026-10-02 删掉 `scripts/install.sh` 那条决定也没被翻面：那次错在自己维护一份模块图校验，这次连插件登记好不好都问宿主的 `omp plugin doctor`，脚本不重新发明判据。
+
+`PATH` 是探针自己造的目录，只软链点名的那几个真二进制，所以「没有 curl」是真没有，不是脚本自己说的。`omp` 换成一个只往文件里追加 argv 的 stub，于是安装、卸载、`plugin list`、`plugin doctor` 全都看得见，而机器上什么都没被改动。
+
+一个洞是写的过程中自己踩到的：前置那组第一个场景拿掉了 `curl`，可 PATH 上还留着 stub 宿主，脚本走的是「已有宿主」那一支，`curl` 那条检查根本没跑到；它顺手把扩展「装」进了 stub 的登记文件，于是下一个场景（拿掉 `git`）读到已登记、跳过安装，两条都绿。修法是该场景把 `omp` 也从 PATH 上拿掉，并且每个场景重铺 stub 的状态。这类「上一个场景改了夹具」的污染，只有把每条的期望退出码打出来才看得见。
+
+边界写在探针文件头，不藏着：**宿主那一支在本仓库永远走不到**——探针要么 PATH 上有宿主（脚本就不装），要么在 `--dry-run` 里（只打印计划）。那半程的第一次真执行发生在别人的新机器上，本仓库能给它的只有 stub 覆盖加一行诚实的说明。
+
+第五组用 `omp install .`（本地安装在这里同样是测试夹具，不是受支持的安装方式），它验的是脚本能不能驱动真宿主走完登记、自检、卸载这一串；`A2A_BOOTSTRAP_SPEC` 指成 git URL 就改成验 omp 自己的 git 抓取，那条路 `test:install` 前三组已经覆盖。
 
 ## `test:obtain` — 外部二进制获取核验（31 项）
 
