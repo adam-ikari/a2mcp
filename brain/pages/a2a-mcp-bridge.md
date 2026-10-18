@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-18T09:02:11"
+updated: "2026-10-18T15:30:49"
 ---
 
 <!-- compiled_truth -->
@@ -875,4 +875,16 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "发布位的判据定下来：进 minor 位的是「远程调用方拿到的东西变了」，不是「提交数多了」或「行数大了」。v0.3.0 覆盖的 19 个提交里三件都满足这条——/blob 撤掉换成 xfer_* 三个工具（调用方看到的工具名与传字节的方式都变了）、缺的 dufs/cloudflared 由桥按钉值自装（同一句 xfer_share 在两台机器上的行为不再取决于有没有人手动拖过包）、bootstrap.sh 补上「机器上没有 omp」这一档。保守发 0.2.2 的话，Release 与 CHANGELOG 就得解释为什么加了三个工具却只进 patch 位，那个解释本身是噪音。另一条同时定下：v0.2.1 的 GitHub Release 保留不撤——2026-10-16 那条发布卫生判据针对的是装不上的版本，撤掉一个仍然装得上的入口不在它里面，四个 tag 全留、可安装入口指向 v0.3.0。附带一条实测：initialize 回的 serverInfo.version 是发布包自证的唯一途径（读自 package.json，test:install 端到端那一行回包打印的就是它），所以版本号进 package.json 之后必须重跑一遍 install 探针，光看字段改了不够。"
   source: "v0.3.0 发布这轮（gh release list 现为 v0.3.0 Latest + v0.2.1 保留；tag annotated 全留四个）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-18T15:30:38
+  kind: reversal
+  summary: "名字要说机制，不说隔壁协议：a2a-bridge / pi-a2a-ext 这一套自指名字全部撤掉，改成 a2mcp（Agent2MCP）。触发事实是 A2A 与 Agent2MCP 不等价——A2A 的调用单位是 intent 加 task，对端有 agent card、任务有自己的状态机、contextId 与 taskId 跟着走、结果可流式回推可挂 webhook；本仓库一个都没实现，传输是 MCP Streamable HTTP 2025-11-25，语义是调用方点名工具、宿主在活的 Main 会话里执行，初始设计稿的非目标第一条就写着「不是 A2A/Agent2Agent 协议实现」。旧结论「名字里的 A2A 是对外品牌，可以留着」就此作废：品牌要讲的是机制，挂协议名会让调用方按 A2A 的形状来要这条桥没有的东西。改的是全表面且不留兼容——包名与入口文件名（宿主的加载开关 pi.extensions 同一提交跟上）、三个磁盘文件名（a2mcp.json / a2mcp.log / a2mcp.installs.json）、九个环境变量前缀、命令 /a2a → /a2mcp、日志前缀、serverInfo.name、takeover 的三个内部标识、临时目录前缀。"
+  source: "2026-10-18 改名三个提交 + test/naming.test.ts 6 项（按形态匹配，不 blanket ban 字符串 a2a）；v0.4.0 发布"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-18T15:30:49
+  kind: decision
+  summary: "无兼容的代价是 token 直接换代，接受它：配置本来就要人手工抄一次 announce，改名同时换 token 多出来的成本接近零。装着 v0.3.0 的机器上，旧 a2a-bridge.json 里那个 token 不再被读，桥在 a2mcp.json 里生成一份新的，远程侧要重看 announce 或在宿主里跑 /a2mcp；旧 a2a-bridge.log 与旧 a2a-bridge.installs.json 留在原地不动、桥不读它们，新审计与新账本另起一代；还留在 shell 里的 A2A_BRIDGE_* 变成没人读取的普通变量。双登记那条边界定在文档层：插件 lock 按 package.json:name 记账，只装新 URL 而没卸载旧的，机器上会同时挂着 pi-a2a-ext 与 a2mcp 两份登记——两个端口、两个 token、两条命令、两次 takeover 装载而 TAKEOVER_SOURCE 不同，第二次的快照盖掉第一个的影子，restoreTakeover 拿不回它认领的那个 provider 名。处理是 README 与 Release 正文把 omp plugin uninstall pi-a2a-ext 写成前置命令，不加检测代码。「发现兄弟插件就往 stderr 打一行警告」要读宿主的 lock，是新行为，按 AGENTS.md「Don't grow a second system」需要 maintainer 点头，这轮不做。"
+  source: "2026-10-18 改名这轮 maintainer 选的「全改、无需兼容」；v0.4.0 的 Release 正文就是那条迁移指令"
   affects: [a2a-mcp-bridge]
