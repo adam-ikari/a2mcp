@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-17T17:36:13"
+updated: "2026-10-18T01:05:30"
 ---
 
 <!-- compiled_truth -->
@@ -851,4 +851,10 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: evidence
   summary: "两个二进制都由一次 xfer_share 拉，实测 14.0 秒返回：installed 同时点名 dufs 0.46.0 与 cloudflared 2026.10.1，两份都落进桥自己的 HOME（6.4 MB / 38.4 MB，0755），登记各一行，审计 install 两条加 share/stop；loopback GET 字节一致、PUT 201 落盘、错密码 401、停止后端口释放，操作者真正的 ~/.local/bin 依然没有 dufs。出网差时的另一遍留下对照：dufs 装成功、cloudflared 的 40 MB 卡在流里、120 秒到点回 isError 带失败原文，共享没开成、dufs 服务被收走、无孤儿进程，整趟 229 秒。冷装的最坏值与正常值就此各有一个实测数，不需要再猜。"
   source: "2026-10-17 端到端跑绿那一遍（真宿主、隔离 HOME、PATH 削到只剩宿主）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-18T01:05:30
+  kind: decision
+  summary: "两个二进制都缺那条端到端从一次性脚本升格为提交里的核验：test/install-probe.ts 第五组（13 项，整个探针 35 → 48）。维护者批准的成本是每轮 CI 约 46 MB 出网。形状是硬证据的边界所在——test:obtain 里 cloudflared 走写明路径那一侧，bun test 把获取整个 stub 掉，「一次 xfer_share 拉两个」谁都没管。硬的是文件/登记/审计三样（dufs 先解析再起服务，cloudflared 先解析再开洞，隧道成不成都该在），共享本身与 GET 只报告，与 quick tunnel 那条既有定性一致。反证两遍：下载上限 64MB → 1024B 红五项其余全绿；往削过的 PATH 塞 stub dufs 整组跳过。顺带修探针两处「把红报成炸」（登记缺席 readFileSync 抛异常；失败回包是 JSON 字符串，parse 得动而 port 是 undefined）。"
+  source: "bun run test:install 48/48 2026-10-18；变异两遍见 CHANGELOG 2026-10-18"
   affects: [a2a-mcp-bridge]
