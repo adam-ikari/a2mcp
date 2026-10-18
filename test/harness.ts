@@ -15,7 +15,7 @@
  * reach the network.
  *
  * If you have a real models.yml and prefer it (e.g. to exercise against a real
- * host config), set A2A_PROBE_REAL_MODELS=1.
+ * host config), set A2MCP_PROBE_REAL_MODELS=1.
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -23,12 +23,12 @@ import { basename, join, resolve } from "node:path";
 
 /** Unreachable on purpose — see the note above. */
 const FAKE_MODELS_YML = `providers:
-  a2a-probe-placeholder:
+  a2mcp-probe-placeholder:
     baseUrl: http://127.0.0.1:1/v1
     api: anthropic-messages
     apiKey: not-a-real-key
     models:
-      - id: a2a-probe/small
+      - id: a2mcp-probe/small
         contextWindow: 100000
 `;
 
@@ -41,9 +41,9 @@ export function seedModels(agentDir: string): string {
 	const target = join(agentDir, "models.yml");
 	const real = join(homedir(), ".omp", "agent", "models.yml");
 
-	if (process.env.A2A_PROBE_REAL_MODELS === "1" && existsSync(real)) {
+	if (process.env.A2MCP_PROBE_REAL_MODELS === "1" && existsSync(real)) {
 		copyFileSync(real, target);
-		return "models.yml: copied from the real HOME (A2A_PROBE_REAL_MODELS=1)";
+		return "models.yml: copied from the real HOME (A2MCP_PROBE_REAL_MODELS=1)";
 	}
 	writeFileSync(target, FAKE_MODELS_YML);
 	return "models.yml: placeholder provider (unreachable on purpose; the probes never call a model)";

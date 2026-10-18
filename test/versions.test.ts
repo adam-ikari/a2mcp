@@ -14,8 +14,8 @@ import { join } from "node:path";
 //
 // No host on PATH (CI's `check` job) is not a mismatch — there is nothing to
 // compare against, so the check skips. Deliberately testing against a different
-// host version is A2A_SKIP_HOST_VERSION_CHECK=1, which logs loudly.
-const SKIP_ENV = "A2A_SKIP_HOST_VERSION_CHECK";
+// host version is A2MCP_SKIP_HOST_VERSION_CHECK=1, which logs loudly.
+const SKIP_ENV = "A2MCP_SKIP_HOST_VERSION_CHECK";
 const root = join(import.meta.dir, "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
 	devDependencies: Record<string, string>;

@@ -1,5 +1,5 @@
 /**
- * Real E2E smoke: boots a real omp process loading the a2a extension,
+ * Real E2E smoke: boots a real omp process loading the a2mcp extension,
  * then drives the MCP protocol with bare fetch. tools/call read lands in
  * the real Main session. Prints "SMOKE OK" on success.
  */
@@ -10,7 +10,7 @@ import { join, resolve } from "node:path";
 import { linkExtension, seedModels } from "./harness.ts";
 
 const _REPO = resolve(import.meta.dir, "..");
-const tmp = mkdtempSync(join(tmpdir(), "a2a-smoke-"));
+const tmp = mkdtempSync(join(tmpdir(), "a2mcp-smoke-"));
 const agentDir = join(tmp, ".omp", "agent");
 const _extDir = join(agentDir, "extensions");
 const cfgPath = join(agentDir, "a2mcp.json");
@@ -43,7 +43,7 @@ console.log(seedModels(agentDir));
 
 const OMP_BIN = process.env.OMP_BIN ?? "omp";
 const child = spawn(OMP_BIN, ["--mode", "rpc"], {
-	env: { ...process.env, HOME: tmp, A2A_BRIDGE_CONFIG: cfgPath },
+	env: { ...process.env, HOME: tmp, A2MCP_CONFIG: cfgPath },
 	stdio: ["pipe", openSync(outLog, "w"), openSync(errLog, "w")],
 });
 // Keep stdin open: rpc mode stays alive on the pipe.

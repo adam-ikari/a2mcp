@@ -17,7 +17,7 @@
  * real, the registration checked in `omp-plugins.lock.json`, then `--uninstall`
  * to clean up. Its default spec is this checkout as `.` (run with the repo as
  * cwd), because what that group tests is the script's plumbing; omp's own git
- * fetch is what test:install groups 1-3 cover, and `A2A_BOOTSTRAP_SPEC` with a
+ * fetch is what test:install groups 1-3 cover, and `A2MCP_BOOTSTRAP_SPEC` with a
  * git URL is how you point this group at it instead.
  *
  * ## The boundary of this coverage
@@ -30,8 +30,8 @@
  * prerequisite is missing.
  *
  * Env:
- *   A2A_BOOTSTRAP_SPEC     the spec for the real-host group (default: `.` = this checkout)
- *   A2A_BOOTSTRAP_OMP_BIN  the host used for the real-host group's cleanup (default: omp on PATH)
+ *   A2MCP_BOOTSTRAP_SPEC     the spec for the real-host group (default: `.` = this checkout)
+ *   A2MCP_BOOTSTRAP_OMP_BIN  the host used for the real-host group's cleanup (default: omp on PATH)
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -56,7 +56,7 @@ const manifest = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as
 	devDependencies?: Record<string, string>;
 };
 const PIN = manifest.devDependencies?.["@oh-my-pi/pi-coding-agent"] ?? "";
-const SPEC = process.env.A2A_BOOTSTRAP_SPEC ?? ".";
+const SPEC = process.env.A2MCP_BOOTSTRAP_SPEC ?? ".";
 
 let failures = 0;
 /**
@@ -392,7 +392,7 @@ console.log("\n--- the decisions it takes about the registration ---");
 
 console.log("\n--- the real host, in a throwaway HOME ---");
 {
-	const omp = process.env.A2A_BOOTSTRAP_OMP_BIN ?? Bun.which("omp");
+	const omp = process.env.A2MCP_BOOTSTRAP_OMP_BIN ?? Bun.which("omp");
 	if (!omp) {
 		console.log("info: skipped — no omp on PATH for the real-host group");
 	} else {

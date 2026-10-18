@@ -46,7 +46,7 @@ import { join } from "node:path";
 import { linkExtension } from "./harness.ts";
 
 const TOKEN = "takeover-probe-token-0123456789abcdef";
-const tmp = mkdtempSync("/tmp/a2a-takeover-XXXXXX");
+const tmp = mkdtempSync("/tmp/a2mcp-takeover-XXXXXX");
 const agentDir = join(tmp, ".omp", "agent");
 const cfgPath = join(agentDir, "a2mcp.json");
 const auditPath = join(agentDir, "a2mcp.log");
@@ -112,7 +112,7 @@ const PORT = 39_417;
  * refusal check accepts "boot failed" as the fail-closed shape and says which
  * one happened.
  */
-const NATIVE_ROW = `  a2a-takeover-native:
+const NATIVE_ROW = `  a2mcp-takeover-native:
     baseUrl: ${SINK}/native
     api: anthropic-messages
     apiKey: not-a-real-key
@@ -173,7 +173,7 @@ function startHost(): Host {
 	const h: Host = { child: null as unknown as ChildProcess, out: "", err: "" };
 	h.child = spawn(process.env.OMP_BIN ?? "omp", ["--mode", "rpc"], {
 		cwd: tmp,
-		env: { ...process.env, HOME: tmp, A2A_BRIDGE_CONFIG: cfgPath, A2A_BRIDGE_AUDIT: auditPath },
+		env: { ...process.env, HOME: tmp, A2MCP_CONFIG: cfgPath, A2MCP_AUDIT: auditPath },
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 	h.child.stdout?.on("data", (d) => (h.out += d));

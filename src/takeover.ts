@@ -21,7 +21,7 @@
  *   : globalThis.fetch);     // read at call time, so a wrapper on the global sees it
  * ```
  *
- * 1. **The deny api, plus the agent's own model row.** `a2a-deny` is registered
+ * 1. **The deny api, plus the agent's own model row.** `a2mcp-deny` is registered
  *    as a custom api whose `streamSimple` only counts and fails, and the row the
  *    agent holds is swapped for a copy of the live one carrying that api
  *    (`agent.setModel`, because the agent holds the `Model` object it captured,
@@ -147,9 +147,9 @@ import {
 } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-ai-shim";
 
 /** Source id handed to the deny api registration and to any shadowed provider. */
-export const TAKEOVER_SOURCE = "a2a-bridge";
+export const TAKEOVER_SOURCE = "a2mcp";
 /** The fake api name the deny row carries; dispatch enters `denyStreamSimple` through it. */
-export const DENY_API = "a2a-deny";
+export const DENY_API = "a2mcp-deny";
 /** Port 9 (discard): if a shadowed baseUrl were ever dialed, nothing answers. */
 const DENY_BASE_URL = "http://127.0.0.1:9";
 
@@ -160,7 +160,7 @@ const DENY_BASE_URL = "http://127.0.0.1:9";
  * turn instead of feeding a retry loop — verified against the classifiers and
  * on a live host (exactly one attempt, `retryable: false`).
  */
-export const SENTINEL = "a2a-bridge takeover: host inference is disabled in this mode";
+export const SENTINEL = "a2mcp takeover: host inference is disabled in this mode";
 
 /**
  * Sources known to wake the host's own loop without a caller asking. Booleans
@@ -366,7 +366,7 @@ function denyStreamSimple(model: unknown): AssistantMessageEventStream {
 	denies++;
 	const stream = createAssistantMessageEventStream();
 	const m = model as { provider?: string; id?: string } | undefined;
-	console.error(`[a2a-bridge] takeover denied a model request (${m?.provider}/${m?.id}); denied=${denies}`);
+	console.error(`[a2mcp] takeover denied a model request (${m?.provider}/${m?.id}); denied=${denies}`);
 	// Fail on a microtask, not synchronously: callers set up their stream
 	// listeners after the call returns, and a same-tick failure would be missed.
 	queueMicrotask(() => stream.fail(new Error(SENTINEL)));
@@ -389,7 +389,7 @@ function makeTripwire(prev: Fetch, keys: ReadonlySet<string>): Fetch {
 		}
 		if (keys.has(host) || keys.has(hostname)) {
 			denies++;
-			console.error(`[a2a-bridge] takeover denied an outbound request to ${host}; denied=${denies}`);
+			console.error(`[a2mcp] takeover denied an outbound request to ${host}; denied=${denies}`);
 			return Promise.reject(new Error(SENTINEL));
 		}
 		return prev(input as never, init as never);
@@ -529,7 +529,7 @@ export function applyTakeover(session: AgentSession): void {
 	// is the same line, since the count alone cannot say which two they were.
 	const names = [...claimed.keys()].sort().join(", ");
 	console.error(
-		`[a2a-bridge] takeover armed: ${claimed.size} provider(s) shadowed${names ? ` (${names})` : ""}, ${keys.size} tripwire key(s), model pushed: ${pushed}`,
+		`[a2mcp] takeover armed: ${claimed.size} provider(s) shadowed${names ? ` (${names})` : ""}, ${keys.size} tripwire key(s), model pushed: ${pushed}`,
 	);
 }
 
@@ -564,20 +564,20 @@ export function restoreTakeover(): void {
 	} catch (e) {
 		// The session may have been torn down between arming and restoring; the
 		// fetch reference is already back, which is the half that is process-global.
-		console.error(`[a2a-bridge] takeover restore hit a dead session: ${(e as Error)?.message ?? String(e)}`);
+		console.error(`[a2mcp] takeover restore hit a dead session: ${(e as Error)?.message ?? String(e)}`);
 		return;
 	}
 
 	const lost = unshadowedProviders(session, claimed);
 	if (lost.length > 0) {
 		console.error(
-			`[a2a-bridge] takeover restore left ${lost.length} provider(s) not serving their pre-arm rows (${lost.join(", ")}) — either their runtime registration belonged to another source, which the registry cannot replay, or the undo did not take; restart the host to recover`,
+			`[a2mcp] takeover restore left ${lost.length} provider(s) not serving their pre-arm rows (${lost.join(", ")}) — either their runtime registration belonged to another source, which the registry cannot replay, or the undo did not take; restart the host to recover`,
 		);
 	}
 	if (wasDegraded) {
-		console.error("[a2a-bridge] takeover restored from a degraded state (the tripwire was the only layer in place)");
+		console.error("[a2mcp] takeover restored from a degraded state (the tripwire was the only layer in place)");
 	}
-	console.error("[a2a-bridge] takeover restored: the host may issue model requests again");
+	console.error("[a2mcp] takeover restored: the host may issue model requests again");
 }
 
 /**
@@ -586,7 +586,7 @@ export function restoreTakeover(): void {
  * Identity is not enough to call a row back: a row can return under the same
  * `provider/id` and still carry the deny api, which reads as restored while the
  * host stays unable to reason through that provider. So each row is matched on
- * the pair (id, api) — a row that came back on `a2a-deny` counts as lost.
+ * the pair (id, api) — a row that came back on `a2mcp-deny` counts as lost.
  *
  * The read goes through `getProviderModels`, not `getAll`, and that is what makes
  * the check able to fail at all: `getAll` answers from whatever catalog snapshot

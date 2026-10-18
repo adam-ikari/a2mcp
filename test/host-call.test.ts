@@ -20,8 +20,8 @@ const savedEnv = { ...process.env };
 let auditDir: string;
 
 beforeAll(async () => {
-	auditDir = await mkdtemp(join(tmpdir(), "a2a-hostcall-"));
-	process.env.A2A_BRIDGE_AUDIT = join(auditDir, "audit.log");
+	auditDir = await mkdtemp(join(tmpdir(), "a2mcp-hostcall-"));
+	process.env.A2MCP_AUDIT = join(auditDir, "audit.log");
 });
 
 afterAll(async () => {
@@ -34,8 +34,8 @@ afterAll(async () => {
 	// prints a warning that reads like an audit failure when it is only teardown.
 	const drain = `host-call-drain-${process.pid}`;
 	await auditStart(drain, null, "drain", {});
-	if (savedEnv.A2A_BRIDGE_AUDIT === undefined) delete process.env.A2A_BRIDGE_AUDIT;
-	else process.env.A2A_BRIDGE_AUDIT = savedEnv.A2A_BRIDGE_AUDIT;
+	if (savedEnv.A2MCP_AUDIT === undefined) delete process.env.A2MCP_AUDIT;
+	else process.env.A2MCP_AUDIT = savedEnv.A2MCP_AUDIT;
 	await rm(auditDir, { recursive: true, force: true });
 	AgentRegistry.resetGlobalForTests();
 });

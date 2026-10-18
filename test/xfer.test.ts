@@ -28,10 +28,10 @@ import {
 	type XferToolResult,
 } from "../src/xfer.ts";
 
-const dir = mkdtempSync(join(tmpdir(), "a2a-xfer-"));
-const stubDir = mkdtempSync(join(tmpdir(), "a2a-stub-"));
+const dir = mkdtempSync(join(tmpdir(), "a2mcp-xfer-"));
+const stubDir = mkdtempSync(join(tmpdir(), "a2mcp-stub-"));
 const auditFile = join(dir, "audit.log");
-process.env.A2A_BRIDGE_AUDIT = auditFile;
+process.env.A2MCP_AUDIT = auditFile;
 
 /** The text half of a tool result; these tools never answer with anything else. */
 const textOf = (r: XferToolResult) => r.content.flatMap((c) => (c.type === "text" ? [c.text] : [])).join("");
@@ -132,7 +132,7 @@ afterEach(async () => {
 });
 
 afterAll(() => {
-	delete process.env.A2A_BRIDGE_AUDIT;
+	delete process.env.A2MCP_AUDIT;
 	rmSync(dir, { recursive: true, force: true });
 	rmSync(stubDir, { recursive: true, force: true });
 });

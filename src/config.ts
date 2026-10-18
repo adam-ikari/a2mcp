@@ -52,7 +52,7 @@ export function generateToken(): string {
 }
 
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
-	return env.A2A_BRIDGE_CONFIG || join(getAgentDir(), "a2mcp.json");
+	return env.A2MCP_CONFIG || join(getAgentDir(), "a2mcp.json");
 }
 
 const DEFAULTS: Omit<BridgeConfig, "token"> = {
@@ -67,7 +67,7 @@ function fieldError(file: string, field: string, expect: string): Error {
 }
 
 /**
- * Load ~/.omp/agent/a2mcp.json (or $A2A_BRIDGE_CONFIG).
+ * Load ~/.omp/agent/a2mcp.json (or $A2MCP_CONFIG).
  *
  * Fail-closed: a present-but-malformed field throws, so the extension refuses
  * to start rather than coming up on an unexpected endpoint. `token` is

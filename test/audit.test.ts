@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { auditDone, auditHostLlm, auditStart, auditWriteFailures } from "../src/audit.ts";
+import { auditDone, auditHostLlm, auditLogPath, auditStart, auditWriteFailures } from "../src/audit.ts";
 
 /**
  * Rotation retention.
@@ -17,10 +17,10 @@ import { auditDone, auditHostLlm, auditStart, auditWriteFailures } from "../src/
  * Here the log is the only thing under test.
  */
 describe("audit rotation retention", () => {
-	const dir = `/tmp/a2a-audit-retention-${process.pid}`;
+	const dir = `/tmp/a2mcp-audit-retention-${process.pid}`;
 	const file = join(dir, "audit.log");
 	const rolled = `${file}.1`;
-	const env = { A2A_BRIDGE_AUDIT: file } as NodeJS.ProcessEnv;
+	const env = { A2MCP_AUDIT: file } as NodeJS.ProcessEnv;
 
 	// Values under the 120-char leaf cap survive redaction, and serializeArgs then
 	// truncates the whole args string at 1024 chars, so each record is ~1.1 KB and
@@ -78,11 +78,11 @@ describe("audit rotation retention", () => {
  * cannot serialize, and a path it cannot write to.
  */
 describe("audit never loses a call", () => {
-	const dir = `/tmp/a2a-audit-invariant-${process.pid}`;
-	const env = { A2A_BRIDGE_AUDIT: join(dir, "audit.log") } as NodeJS.ProcessEnv;
+	const dir = `/tmp/a2mcp-audit-invariant-${process.pid}`;
+	const env = { A2MCP_AUDIT: join(dir, "audit.log") } as NodeJS.ProcessEnv;
 
 	const readRecords = () => {
-		const file = env.A2A_BRIDGE_AUDIT as string;
+		const file = env.A2MCP_AUDIT as string;
 		if (!existsSync(file)) return [];
 		return readFileSync(file, "utf8")
 			.trim()
@@ -129,7 +129,7 @@ describe("audit never loses a call", () => {
 			expect(returned, `${name} returns the queue tail`).toBeInstanceOf(Promise);
 			await returned;
 		}
-		const logFile = env.A2A_BRIDGE_AUDIT as string;
+		const logFile = env.A2MCP_AUDIT as string;
 		const raw = existsSync(logFile) ? readFileSync(logFile, "utf8") : "";
 		const onDisk = readRecords().map((r) => String(r.id));
 		expect(onDisk).toContain("shape-start");
@@ -172,7 +172,7 @@ describe("audit never loses a call", () => {
 		// error log, which is a worse outcome than a missing line. Swallowed is not
 		// silent, though — the log is the only trace of a call, so a bridge that
 		// cannot write it has to say so once and keep a count.
-		const dead = { A2A_BRIDGE_AUDIT: join(dir, "no-such-dir", "audit.log") } as NodeJS.ProcessEnv;
+		const dead = { A2MCP_AUDIT: join(dir, "no-such-dir", "audit.log") } as NodeJS.ProcessEnv;
 		const unhandled: unknown[] = [];
 		const collect = (reason: unknown) => unhandled.push(reason);
 		process.on("unhandledRejection", collect);
@@ -195,9 +195,9 @@ describe("audit never loses a call", () => {
 		}
 		expect(unhandled).toEqual([]);
 		expect(auditWriteFailures()).toBeGreaterThanOrEqual(before + 2);
-		expect(
-			printed.some((l) => l.includes("audit record not written") && l.includes(dead.A2A_BRIDGE_AUDIT as string)),
-		).toBe(true);
+		expect(printed.some((l) => l.includes("audit record not written") && l.includes(dead.A2MCP_AUDIT as string))).toBe(
+			true,
+		);
 	});
 });
 
@@ -224,10 +224,10 @@ describe("audit never loses a call", () => {
  * whatever file it fired on, records written milliseconds earlier included.
  */
 describe("concurrent writes across the rotation boundary", () => {
-	const dir = `/tmp/a2a-audit-race-${process.pid}`;
+	const dir = `/tmp/a2mcp-audit-race-${process.pid}`;
 	const file = join(dir, "audit.log");
 	const rolled = `${file}.1`;
-	const env = { A2A_BRIDGE_AUDIT: file } as NodeJS.ProcessEnv;
+	const env = { A2MCP_AUDIT: file } as NodeJS.ProcessEnv;
 
 	// The cap in src/audit.ts, and the padding to sit just under it.
 	const MAX_LOG_BYTES = 512 * 1024;
@@ -291,4 +291,14 @@ describe("concurrent writes across the rotation boundary", () => {
 
 		rmSync(dir, { recursive: true, force: true });
 	}, 120_000);
+});
+
+describe("auditLogPath", () => {
+	test("the default is the filename the docs promise", () => {
+		// Every test above passes $A2MCP_AUDIT, so the default name is asserted nowhere
+		// but here — and a probe seeding the wrong file would still be green, because the
+		// env var is what it reads. Same reason test/obtain.test.ts pins the ledger name.
+		expect(auditLogPath({})).toMatch(/(^|\/)a2mcp\.log$/);
+		expect(auditLogPath({ A2MCP_AUDIT: "/elsewhere/a.log" })).toBe("/elsewhere/a.log");
+	});
 });

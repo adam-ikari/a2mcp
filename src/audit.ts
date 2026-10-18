@@ -8,9 +8,9 @@ const MAX_ARGS_CHARS = 1024;
 /** Args values longer than this are payloads (base64 file bytes), not intent. */
 const MAX_VALUE_CHARS = 120;
 
-/** Audit log path: `$A2A_BRIDGE_AUDIT` or `<agentDir>/a2mcp.log`. */
+/** Audit log path: `$A2MCP_AUDIT` or `<agentDir>/a2mcp.log`. */
 export function auditLogPath(env: NodeJS.ProcessEnv = process.env): string {
-	return env.A2A_BRIDGE_AUDIT || join(getAgentDir(), "a2mcp.log");
+	return env.A2MCP_AUDIT || join(getAgentDir(), "a2mcp.log");
 }
 
 function digest(value: string): string {
@@ -97,7 +97,7 @@ let failedWrites = 0;
 
 /**
  * Log paths whose failure has already been announced. The line is per path,
- * because a path is the thing the operator can act on, and `$A2A_BRIDGE_AUDIT`
+ * because a path is the thing the operator can act on, and `$A2MCP_AUDIT`
  * means one process can be pointed at more than one: a global "only the first
  * failure ever" would let the second path fail in silence.
  */
@@ -141,7 +141,7 @@ function appendLine(line: string, env?: NodeJS.ProcessEnv): Promise<void> {
 			if (!warnedPaths.has(file) || failedWrites % 100 === 0) {
 				warnedPaths.add(file);
 				const why = (e as Error)?.message ?? String(e);
-				console.error(`[a2a-bridge] audit record not written to ${file} (${why})`);
+				console.error(`[a2mcp] audit record not written to ${file} (${why})`);
 			}
 		});
 	// The tail of the chain, which the `.catch` above guarantees never rejects.

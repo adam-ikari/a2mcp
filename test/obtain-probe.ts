@@ -42,7 +42,7 @@
  * here runs against `127.0.0.1:<port>`.
  *
  * Env:
- *   A2A_OBTAIN_TARGET   install destination override; default a temp dir, so this
+ *   A2MCP_OBTAIN_TARGET   install destination override; default a temp dir, so this
  *                       never writes into the operator's ~/.local/bin
  */
 import { execFileSync } from "node:child_process";
@@ -69,11 +69,11 @@ function fail(msg: string): never {
 	process.exit(1);
 }
 
-const work = await mkdtemp(join(tmpdir(), "a2a-obtain-probe-"));
-const binDir = process.env.A2A_OBTAIN_TARGET ?? join(work, "bin");
+const work = await mkdtemp(join(tmpdir(), "a2mcp-obtain-probe-"));
+const binDir = process.env.A2MCP_OBTAIN_TARGET ?? join(work, "bin");
 const ledger = join(work, "installs.json");
 const auditFile = join(work, "audit.log");
-process.env.A2A_BRIDGE_AUDIT = auditFile;
+process.env.A2MCP_AUDIT = auditFile;
 
 // An empty PATH is the point: nothing on this machine may satisfy the lookup, or the
 // probe reports the pinned download works while it never ran.
@@ -307,7 +307,7 @@ try {
 info(`real tunnel: ${tunnelAnswer}`);
 
 await rm(work, { recursive: true, force: true });
-delete process.env.A2A_BRIDGE_AUDIT;
+delete process.env.A2MCP_AUDIT;
 console.log(
 	`\n${failures === 0 ? "PASS" : `${failures} FAILURES`} — target ${target}, dufs ${dufsPin.version}, cloudflared ${cfPin.version}`,
 );

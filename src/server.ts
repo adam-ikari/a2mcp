@@ -156,9 +156,7 @@ export async function startServer(
 				// once and then every 50th.
 				deniedAttempts++;
 				if (deniedAttempts === 1 || deniedAttempts % 50 === 0) {
-					console.warn(
-						`[a2a-bridge] ${deniedAttempts} unauthorized attempt(s) — check the token in the remote mcp.json`,
-					);
+					console.warn(`[a2mcp] ${deniedAttempts} unauthorized attempt(s) — check the token in the remote mcp.json`);
 				}
 				return json(401, { jsonrpc: "2.0", id: null, error: { code: -32000, message: "unauthorized" } });
 			}
@@ -307,7 +305,7 @@ export async function startServer(
 		} catch (e) {
 			// Details (host paths, stack) go to the server log only: a 500 body
 			// must not leak host internals to a token holder.
-			console.error("[a2a-bridge] internal error:", e);
+			console.error("[a2mcp] internal error:", e);
 			return json(500, {
 				jsonrpc: "2.0",
 				id: null,

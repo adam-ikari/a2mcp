@@ -81,16 +81,16 @@ function reportArmFailure(ctx: ExtensionContext, e: unknown): void {
 	// stderr outlives the toast, and the audit outlives the process: a refusal at
 	// startup says the host was *supposed* to be denied and is not, and nothing else
 	// in the bridge's record would say so later. `sid: null` because no caller asked.
-	console.error(`[a2a-bridge] takeover failed to arm: ${detail}`);
+	console.error(`[a2mcp] takeover failed to arm: ${detail}`);
 	// Nothing waits on this one — it is a startup record with no request to answer,
 	// and the process may be on its way out. `void` because the promise is real and
 	// someone should have to think about it, not because it is unsafe to drop: the
 	// chain never rejects.
 	void auditHostLlm(null, false, detail.slice(0, 200));
-	ctx.ui.notify(`A2A takeover failed to arm: ${detail}`, "error");
+	ctx.ui.notify(`a2mcp takeover failed to arm: ${detail}`, "error");
 }
 
-export default function a2aBridge(pi: ExtensionAPI): void {
+export default function a2mcpExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_ev, ctx) => {
 		// Re-arm whenever the switch is on, not only when the config says so: the
 		// config only decides the *startup* state, while a runtime-armed takeover has
@@ -148,7 +148,7 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 					// protocol page quotes this response verbatim — so 0.2.0 shipped with
 					// the code still answering "0.1.0" and the page agreeing with the
 					// code. Two copies of a version number, and nothing compares them.
-					serverInfo: () => ({ name: "omp-a2a-bridge", version: BRIDGE_VERSION }),
+					serverInfo: () => ({ name: "a2mcp", version: BRIDGE_VERSION }),
 					takeover: { setEnabled },
 				});
 				if (!hasMainSession()) {
@@ -164,22 +164,22 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 				const url = `http://${cfg.host}:${server.port}/`;
 				if (server.fellBack) {
 					ctx.ui.notify(
-						`A2A bridge: configured port ${cfg.port} is busy — bound ${server.port} instead; update remote mcp.json`,
+						`a2mcp: configured port ${cfg.port} is busy — bound ${server.port} instead; update remote mcp.json`,
 						"warning",
 					);
 				}
 				const tokenBrief = cfg.token.slice(0, 6);
-				ctx.ui.notify(`A2A bridge listening on ${url} (token ${tokenBrief}…)`);
+				ctx.ui.notify(`a2mcp listening on ${url} (token ${tokenBrief}…)`);
 				if (cfg.host === "0.0.0.0") {
-					ctx.ui.notify("A2A bridge bound to 0.0.0.0 — ensure firewall restricts access", "warning");
+					ctx.ui.notify("a2mcp bound to 0.0.0.0 — ensure firewall restricts access", "warning");
 				}
 			} catch (e) {
 				// Leave no half-initialized state: a failed start must not let
-				// `/a2a rotate` report success for a server that never bound.
+				// `/a2mcp rotate` report success for a server that never bound.
 				server?.stop();
 				server = null;
 				cfg = null;
-				ctx.ui.notify(`A2A bridge failed to start: ${(e as Error)?.message ?? String(e)}`, "error");
+				ctx.ui.notify(`a2mcp failed to start: ${(e as Error)?.message ?? String(e)}`, "error");
 			}
 		})();
 		try {
@@ -205,13 +205,13 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 		liveCallTool = null;
 	});
 
-	pi.registerCommand("a2a", {
-		description: "Show A2A bridge status, rotate its token with `a2a rotate`, or show the full token with `a2a token`.",
+	pi.registerCommand("a2mcp", {
+		description: "Show a2mcp status, rotate its token with `a2mcp rotate`, or show the full token with `a2mcp token`.",
 		handler: async (args, ctx) => {
 			try {
 				if (args.trim() === "rotate") {
 					if (!server || !cfg) {
-						ctx.ui.notify("A2A bridge not running", "error");
+						ctx.ui.notify("a2mcp not running", "error");
 						return;
 					}
 					const next = generateToken();
@@ -221,19 +221,19 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 					// gets an error saying nothing happened.
 					await saveConfig({ ...cfg, token: next });
 					cfg.token = next;
-					ctx.ui.notify("A2A token rotated — update remote mcp.json");
+					ctx.ui.notify("a2mcp token rotated — update remote mcp.json");
 					return;
 				}
 				if (args.trim() === "token") {
 					if (!server || !cfg) {
-						ctx.ui.notify("A2A bridge not running", "error");
+						ctx.ui.notify("a2mcp not running", "error");
 						return;
 					}
-					ctx.ui.notify(`A2A token: ${cfg.token}`);
+					ctx.ui.notify(`a2mcp token: ${cfg.token}`);
 					return;
 				}
 				if (!server || !cfg) {
-					ctx.ui.notify("A2A bridge not running", "error");
+					ctx.ui.notify("a2mcp not running", "error");
 					return;
 				}
 				const url = `http://${cfg.host}:${server.port}/`;
@@ -243,10 +243,10 @@ export default function a2aBridge(pi: ExtensionAPI): void {
 				// rather than left to be inferred from `denied=0`.
 				const st = hostLlmState();
 				ctx.ui.notify(
-					`A2A bridge on ${url} (token ${cfg.token.slice(0, 6)}…, port ${server.port}) host_llm=${st.enabled ? "allow" : st.degraded ? "deny (tripwire only)" : "deny"} denied=${st.denied}`,
+					`a2mcp on ${url} (token ${cfg.token.slice(0, 6)}…, port ${server.port}) host_llm=${st.enabled ? "allow" : st.degraded ? "deny (tripwire only)" : "deny"} denied=${st.denied}`,
 				);
 			} catch (e) {
-				ctx.ui.notify(`A2A command failed: ${(e as Error)?.message ?? String(e)}`, "error");
+				ctx.ui.notify(`a2mcp command failed: ${(e as Error)?.message ?? String(e)}`, "error");
 			}
 		},
 	});

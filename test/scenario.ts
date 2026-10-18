@@ -40,7 +40,7 @@ import { join } from "node:path";
 import { linkExtension, seedModels } from "./harness.ts";
 
 const OMP = process.env.OMP_BIN ?? "omp";
-const tmp = mkdtempSync(join(tmpdir(), "a2a-scen-"));
+const tmp = mkdtempSync(join(tmpdir(), "a2mcp-scen-"));
 
 let failures = 0;
 let checks = 0;
@@ -127,7 +127,7 @@ async function boot(label: string, opts: BootOpts = {}): Promise<Host> {
 	writeFileSync(cfgPath, JSON.stringify(opts.config ?? { port, host: "127.0.0.1" }, null, 2));
 
 	const child = spawn(OMP, ["--mode", "rpc", ...(opts.argv ?? [])], {
-		env: { ...process.env, HOME: home, A2A_BRIDGE_CONFIG: cfgPath, A2A_BRIDGE_AUDIT: auditPath },
+		env: { ...process.env, HOME: home, A2MCP_CONFIG: cfgPath, A2MCP_AUDIT: auditPath },
 		stdio: ["pipe", openSync(outLog, "w"), openSync(errLog, "w")],
 	});
 	const read = (f: string) => {
@@ -151,12 +151,12 @@ async function boot(label: string, opts: BootOpts = {}): Promise<Host> {
 	const waitMs = opts.announceMs ?? 30_000;
 	const deadline = Date.now() + waitMs;
 	while (Date.now() < deadline) {
-		if (/A2A bridge listening/.test(host.out())) break;
+		if (/a2mcp listening/.test(host.out())) break;
 		if (child.exitCode !== null) break;
 		child.stdin?.write(""); // the host exits on EOF, so keep stdin open
 		await Bun.sleep(200);
 	}
-	host.announced = host.out().match(/A2A bridge listening on (http:\/\/127\.0\.0\.1:\d+\/)/);
+	host.announced = host.out().match(/a2mcp listening on (http:\/\/127\.0\.0\.1:\d+\/)/);
 
 	// The token is written by the bridge on first start; give it a moment even
 	// when no announcement was expected, so the caller can read the reason.
@@ -263,7 +263,7 @@ await scenario("a remote bash call's side effect is on disk and in the audit log
 	step(!!host.announced, "bridge announced");
 	const { token: tk, sid } = await handshake(host);
 
-	const marker = `a2a-scenario-${Date.now()}`;
+	const marker = `a2mcp-scenario-${Date.now()}`;
 	const file = join(tmp, marker);
 	const call = await rpc(
 		host,

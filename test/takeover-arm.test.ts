@@ -31,7 +31,7 @@ import { getCustomApi } from "@oh-my-pi/pi-ai/api-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
-const AGENT_DIR = `/tmp/a2a-takeover-arm-${process.pid}`;
+const AGENT_DIR = `/tmp/a2mcp-takeover-arm-${process.pid}`;
 rmSync(AGENT_DIR, { recursive: true, force: true });
 mkdirSync(AGENT_DIR, { recursive: true });
 const previousAgentDir = process.env.OMP_AGENT_DIR;

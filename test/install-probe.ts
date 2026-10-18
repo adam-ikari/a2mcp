@@ -49,7 +49,7 @@
  * precondition before believing it.
  *
  * Env:
- *   A2A_INSTALL_SPEC  the spec under test, reported in the output so a failure
+ *   A2MCP_INSTALL_SPEC  the spec under test, reported in the output so a failure
  *                     names what was actually checked (default: origin git URL)
  */
 import { execFileSync, spawn } from "node:child_process";
@@ -67,10 +67,11 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pinsFor, targetKey } from "../src/obtain.ts";
+import { XFER_TOOL_NAMES } from "../src/xfer.ts";
 import { linkExtension, seedModels } from "./harness";
 
 const REPO = resolve(import.meta.dir, "..");
-const SPEC = process.env.A2A_INSTALL_SPEC ?? "https://github.com/adam-ikari/pi-a2a-ext.git";
+const SPEC = process.env.A2MCP_INSTALL_SPEC ?? "https://github.com/adam-ikari/pi-a2a-ext.git";
 
 let failures = 0;
 /**
@@ -127,7 +128,7 @@ check(files.includes("src/"), "files[] ships src/ (the entry imports ../src/*.ts
 
 // --- 2. what actually ships --------------------------------------------------
 
-const stage = mkdtempSync(join(tmpdir(), "a2a-pack-"));
+const stage = mkdtempSync(join(tmpdir(), "a2mcp-pack-"));
 console.log("\n--- pack the tarball ---");
 let packOut = "";
 try {
@@ -160,7 +161,10 @@ check(existsSync(join(pkgRoot, "package.json")), "tarball unpacks to a package/ 
 // instead, and the check becomes "every module in src/ ships", which cannot fall
 // behind the code.
 const shipped = [
-	"extensions/a2mcp.ts",
+	// Same reasoning as `src/` above, and the same field the host loads from: the
+	// entry path comes from the manifest, so a rename cannot leave this list
+	// pointing at a file that no longer ships.
+	...(manifest.pi?.extensions ?? []).map((rel) => rel.replace(/^\.\//, "")),
 	...readdirSync(join(REPO, "src"))
 		.filter((f) => f.endsWith(".ts"))
 		.sort()
@@ -176,7 +180,9 @@ check(shipped.length > 1, "the shipped-module list was derived, not typed", `${s
 // Walk the relative-import graph from the entry. Anything it reaches has to be
 // in the tarball; a module that only exists in the working tree (a dev-only
 // file, or one dropped from files[]) installs fine and then throws on load.
-const entry = join(pkgRoot, "extensions", "a2mcp.ts");
+// The entry is the manifest's first extension path — the same string group 1
+// verified — rather than a filename repeated here.
+const entry = join(pkgRoot, shipped[0] ?? "");
 const seen = new Set<string>();
 const missing: string[] = [];
 const queue = [entry];
@@ -277,13 +283,18 @@ console.log(`  ${e2eNote}`);
 // 18.11.0, and still on 18.12.1, the plugin registry is HOME-scoped, so an
 // install under the real HOME is invisible to that host (see the header).
 const e2eEnv = { ...process.env, HOME: e2eHome };
-const installedPlugin = join(e2eHome, ".omp", "plugins", "node_modules", "pi-a2a-ext");
+// Three places below key on the same string: the plugin directory, the uninstall
+// argument, the lock entry. It is the name the host registers under, so it comes
+// from the manifest rather than from a copy here — a hardcoded one is how a rename
+// leaves this probe checking for a package that no longer exists.
+const PKG_NAME = manifest.name ?? "";
+const installedPlugin = join(e2eHome, ".omp", "plugins", "node_modules", PKG_NAME);
 const lockPath = join(e2eHome, ".omp", "plugins", "omp-plugins.lock.json");
 let installNote = "";
 try {
 	// Uninstall first: a leftover git-URL copy is a real directory, and install
 	// would treat it as already present.
-	execFileSync("omp", ["plugin", "uninstall", "pi-a2a-ext"], { env: e2eEnv, stdio: "ignore" });
+	execFileSync("omp", ["plugin", "uninstall", PKG_NAME], { env: e2eEnv, stdio: "ignore" });
 } catch {
 	// Nothing installed is the normal case on a fresh machine.
 }
@@ -302,7 +313,7 @@ try {
 // no lock entry loads nothing. Kept as one item, and the detail says which half
 // is missing.
 const linked = existsSync(installedPlugin);
-const registered = existsSync(lockPath) && readFileSync(lockPath, "utf8").includes('"pi-a2a-ext"');
+const registered = existsSync(lockPath) && readFileSync(lockPath, "utf8").includes(`"${PKG_NAME}"`);
 check(
 	linked && registered,
 	"omp install links the plugin and registers it in the lock, under the HOME it ran in",
@@ -348,11 +359,11 @@ let baseUrl = "";
 let e2eToken = "";
 try {
 	const deadline = Date.now() + 90_000;
-	while (Date.now() < deadline && !hostOut.includes("A2A bridge listening")) {
+	while (Date.now() < deadline && !hostOut.includes("a2mcp listening")) {
 		host.stdin.write(""); // the host exits on EOF, so keep stdin open
 		await Bun.sleep(300);
 	}
-	const announced = hostOut.match(/A2A bridge listening on (http:\/\/127\.0\.0\.1:\d+\/)/);
+	const announced = hostOut.match(/a2mcp listening on (http:\/\/127\.0\.0\.1:\d+\/)/);
 	check(
 		!!announced,
 		"the host announces the bridge (a session needs model config to exist at all)",
@@ -391,10 +402,19 @@ try {
 		const list = await rpc("tools/list", {}, sid);
 		const names: string[] = (list.body?.result?.tools ?? []).map((t: { name: string }) => t.name);
 		check(names.length > 0, "tools/list returns the host registry", `${names.length} tools`);
+		// This line used to read `!names.some(n => n.startsWith("a2a_"))` under the label
+		// "the bridge contributes no tools of its own". The label went false when the
+		// transfer tools landed — this same probe calls `xfer_share` further down — and
+		// the assertion could not fail, since nothing registers an `a2a_*` name. Renaming
+		// the prefix here would have rebuilt the same decoration under a new spelling, so
+		// what gets checked is the positive: the bridge's own tools are appended to the
+		// installed catalog, with their names taken from src/xfer.ts rather than from a
+		// second list in this probe.
+		const owned = XFER_TOOL_NAMES.filter((n) => names.includes(n));
 		check(
-			!names.some((n) => n.startsWith("a2a_")),
-			"the bridge contributes no tools of its own",
-			names.filter((n) => n.startsWith("a2a_")).join(", "),
+			owned.length === XFER_TOOL_NAMES.length,
+			"the installed copy appends the tools the bridge owns",
+			`${owned.join(",")} of ${XFER_TOOL_NAMES.length}`,
 		);
 		check(
 			!names.includes("xd://") && !names.some((n) => n.startsWith("xd://")),
@@ -513,7 +533,7 @@ const realDufsBefore = existsSync(join(process.env.HOME ?? "", ".local", "bin", 
 const xferHost = answeredFor
 	? null
 	: spawn(ompReal, ["--mode", "rpc"], {
-			env: { ...process.env, HOME: xferHome, PATH: tightPath, A2A_BRIDGE_AUDIT: xferAudit },
+			env: { ...process.env, HOME: xferHome, PATH: tightPath, A2MCP_AUDIT: xferAudit },
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 let xferOut = "";
@@ -529,11 +549,11 @@ try {
 		console.log("info: the fetch group is skipped here — nothing was left for the bridge to install");
 	} else {
 		const deadline = Date.now() + 120_000;
-		while (Date.now() < deadline && !xferOut.includes("A2A bridge listening")) {
+		while (Date.now() < deadline && !xferOut.includes("a2mcp listening")) {
 			xferHost.stdin.write("");
 			await Bun.sleep(300);
 		}
-		const announced = xferOut.match(/A2A bridge listening on (http:\/\/127\.0\.0\.1:(\d+)\/)/);
+		const announced = xferOut.match(/a2mcp listening on (http:\/\/127\.0\.0\.1:(\d+)\/)/);
 		check(
 			!!announced,
 			"the host comes up on a PATH that names neither binary",

@@ -35,13 +35,13 @@ const savedEnv = { ...process.env };
 let auditDir: string;
 
 beforeAll(async () => {
-	auditDir = await mkdtemp(join(tmpdir(), "a2a-audit-"));
-	process.env.A2A_BRIDGE_AUDIT = join(auditDir, "audit.log");
+	auditDir = await mkdtemp(join(tmpdir(), "a2mcp-audit-"));
+	process.env.A2MCP_AUDIT = join(auditDir, "audit.log");
 });
 
 afterAll(async () => {
-	if (savedEnv.A2A_BRIDGE_AUDIT === undefined) delete process.env.A2A_BRIDGE_AUDIT;
-	else process.env.A2A_BRIDGE_AUDIT = savedEnv.A2A_BRIDGE_AUDIT;
+	if (savedEnv.A2MCP_AUDIT === undefined) delete process.env.A2MCP_AUDIT;
+	else process.env.A2MCP_AUDIT = savedEnv.A2MCP_AUDIT;
 	await rm(auditDir, { recursive: true, force: true });
 });
 

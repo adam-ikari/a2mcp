@@ -17,12 +17,12 @@ import { startServer } from "../src/server.ts";
 const TOKEN = "hostllm-test-token";
 const AUTH = { authorization: `Bearer ${TOKEN}` };
 
-const dir = `/tmp/a2a-hostllm-route-${process.pid}`;
+const dir = `/tmp/a2mcp-hostllm-route-${process.pid}`;
 const auditFile = join(dir, "audit.log");
 
 rmSync(dir, { recursive: true, force: true });
 mkdirSync(dir, { recursive: true });
-process.env.A2A_BRIDGE_AUDIT = auditFile;
+process.env.A2MCP_AUDIT = auditFile;
 
 type Call = { enabled: boolean };
 

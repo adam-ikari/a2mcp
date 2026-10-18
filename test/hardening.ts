@@ -1,7 +1,7 @@
 /**
  * Real-host hardening verification (bun run test:hardening; requires the omp
  * binary, no model credentials — see harness.ts).
- * Boots omp with the a2a extension and asserts the review fixes against the
+ * Boots omp with the a2mcp extension and asserts the review fixes against the
  * LIVE server: auth placement, mandatory session id, version negotiation,
  * catalog exposure gate, healed 0600 token, and the two-phase audit log.
  * Prints "HARDEN OK" on success; exits 1 on any failure.
@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 import { linkExtension, seedModels } from "./harness.ts";
 
 const _REPO = resolve(process.env.REPO ?? join(import.meta.dir, ".."));
-const tmp = mkdtempSync(join(tmpdir(), "a2a-harden-"));
+const tmp = mkdtempSync(join(tmpdir(), "a2mcp-harden-"));
 const agentDir = join(tmp, ".omp", "agent");
 const _extDir = join(agentDir, "extensions");
 const cfgPath = join(agentDir, "a2mcp.json");
@@ -51,7 +51,7 @@ writeFileSync(cfgPath, JSON.stringify({ port: PORT, host: "127.0.0.1" }, null, 2
 console.log(seedModels(agentDir));
 
 const child = spawn(process.env.OMP_BIN ?? "omp", ["--mode", "rpc"], {
-	env: { ...process.env, HOME: tmp, A2A_BRIDGE_CONFIG: cfgPath },
+	env: { ...process.env, HOME: tmp, A2MCP_CONFIG: cfgPath },
 	stdio: ["pipe", openSync(outLog, "w"), openSync(errLog, "w")],
 });
 

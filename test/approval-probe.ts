@@ -25,7 +25,7 @@ import { join, resolve } from "node:path";
 import { linkExtension, seedModels } from "./harness.ts";
 
 const _REPO = resolve(process.env.REPO ?? join(import.meta.dir, ".."));
-const tmp = mkdtempSync(join(tmpdir(), "a2a-apv2-"));
+const tmp = mkdtempSync(join(tmpdir(), "a2mcp-apv2-"));
 const agentDir = join(tmp, ".omp", "agent");
 const _extDir = join(agentDir, "extensions");
 const cfgPath = join(agentDir, "a2mcp.json");
@@ -49,7 +49,7 @@ const t0 = Date.now();
 const stage = (msg: string) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);
 
 const child = spawn(process.env.OMP_BIN ?? "omp", ["--mode", "rpc", "--approval-mode=always-ask"], {
-	env: { ...process.env, HOME: tmp, A2A_BRIDGE_CONFIG: cfgPath, A2A_BRIDGE_AUDIT: auditPath },
+	env: { ...process.env, HOME: tmp, A2MCP_CONFIG: cfgPath, A2MCP_AUDIT: auditPath },
 	stdio: ["pipe", openSync(outLog, "w"), openSync(errLog, "w")],
 });
 

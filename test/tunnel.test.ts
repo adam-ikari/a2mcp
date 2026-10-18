@@ -22,7 +22,7 @@ import { join } from "node:path";
 
 import { openQuickTunnel } from "../src/tunnel.ts";
 
-const dir = mkdtempSync(join(tmpdir(), "a2a-tunnel-"));
+const dir = mkdtempSync(join(tmpdir(), "a2mcp-tunnel-"));
 
 /**
  * A stand-in for cloudflared: `lines` log lines of about `width` characters, and the

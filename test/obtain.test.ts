@@ -23,9 +23,9 @@ import { join } from "node:path";
 import { auditStart } from "../src/audit.ts";
 import { type ObtainDeps, obtainLedgerPath, type Pin, pinsFor, resolveBinary, targetKey } from "../src/obtain.ts";
 
-const work = mkdtempSync(join(tmpdir(), "a2a-obtain-"));
+const work = mkdtempSync(join(tmpdir(), "a2mcp-obtain-"));
 const auditFile = join(work, "audit.log");
-process.env.A2A_BRIDGE_AUDIT = auditFile;
+process.env.A2MCP_AUDIT = auditFile;
 
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 const textOf = async (p: Promise<{ path: string }>) => (await p).path;
@@ -94,7 +94,7 @@ beforeAll(() => {
 
 afterAll(() => {
 	server?.stop(true);
-	delete process.env.A2A_BRIDGE_AUDIT;
+	delete process.env.A2MCP_AUDIT;
 	rmSync(work, { recursive: true, force: true });
 });
 
@@ -337,7 +337,7 @@ describe("the table production actually uses", () => {
 
 	test("the ledger lives where the docs say it does", () => {
 		expect(obtainLedgerPath({})).toMatch(/a2mcp\.installs\.json$/);
-		expect(obtainLedgerPath({ A2A_BRIDGE_INSTALLS: join(work, "elsewhere.json") })).toBe(join(work, "elsewhere.json"));
+		expect(obtainLedgerPath({ A2MCP_INSTALLS: join(work, "elsewhere.json") })).toBe(join(work, "elsewhere.json"));
 	});
 
 	test("a dufs download asks the release host for the tagged asset, not for `latest`", async () => {

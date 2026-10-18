@@ -133,7 +133,14 @@ describe("server protocol", () => {
 		// page, and nothing compared them: 0.2.0 answered `initialize` with "0.1.0"
 		// while the page quoted that response. This reads the entry's own source and
 		// the page's own line, because both are what a reader would copy.
-		const entry = readFileSync(join(root, "extensions", "a2mcp.ts"), "utf8");
+		const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+			version?: string;
+			pi?: { extensions?: string[] };
+		};
+		// The entry path is the manifest's, not a filename repeated here: this test is
+		// about the version field, and a second copy of the entry name would just be a
+		// second thing a rename can miss.
+		const entry = readFileSync(join(root, pkg.pi?.extensions?.[0] ?? ""), "utf8");
 		expect(entry).toContain("version: BRIDGE_VERSION");
 		// Anchored on `serverInfo` so the comment above it — which quotes the old
 		// literal as the mistake it replaced — is not itself the match. A regex over
@@ -144,7 +151,7 @@ describe("server protocol", () => {
 		const quoted = protocol.match(/"serverInfo":\s*\{[^}]*\}/)?.[0] ?? "";
 		expect(quoted).toContain("<package.json 的 version>");
 		// And the value it points at is the one the package actually declares.
-		expect(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version).toMatch(/^\d+\.\d+\.\d+$/);
+		expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
 	});
 
 	test("initialize with unsupported protocolVersion -> server version wins", async () => {

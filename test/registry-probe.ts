@@ -45,7 +45,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
 import { applyTakeover, DENY_API, hostLlmState, restoreTakeover, SENTINEL, TAKEOVER_SOURCE } from "../src/takeover.ts";
 
-const tmp = mkdtempSync(join(tmpdir(), "a2a-registry-XXXXXX"));
+const tmp = mkdtempSync(join(tmpdir(), "a2mcp-registry-XXXXXX"));
 const agentDir = join(tmp, ".omp", "agent");
 
 let failures = 0;

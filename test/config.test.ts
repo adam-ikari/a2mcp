@@ -18,9 +18,9 @@ const VALID: BridgeConfig = {
 };
 
 beforeAll(async () => {
-	dir = await mkdtemp(join(tmpdir(), "a2a-cfg-"));
+	dir = await mkdtemp(join(tmpdir(), "a2mcp-cfg-"));
 	file = join(dir, "a2mcp.json");
-	env = { A2A_BRIDGE_CONFIG: file };
+	env = { A2MCP_CONFIG: file };
 });
 
 afterAll(async () => {
@@ -144,5 +144,17 @@ describe("generateToken", () => {
 		expect(a).toHaveLength(43);
 		expect(a).toMatch(/^[A-Za-z0-9_-]+$/);
 		expect(a).not.toBe(b);
+	});
+});
+
+describe("configPath", () => {
+	test("the default is the filename the docs and the probes use", () => {
+		// Everything above runs with $A2MCP_CONFIG set, so nothing here opens the
+		// default path. That is the shape a half-done rename survives in: production
+		// reads `<agentDir>/a2mcp.json` while the probes keep seeding the file under
+		// the previous name, and the file they seed is a file nobody opens. Same
+		// cross-check test/obtain.test.ts runs on the install ledger.
+		expect(configPath({})).toMatch(/(^|\/)a2mcp\.json$/);
+		expect(configPath({ A2MCP_CONFIG: "/elsewhere/x.json" })).toBe("/elsewhere/x.json");
 	});
 });

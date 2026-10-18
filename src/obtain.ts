@@ -297,7 +297,7 @@ function ledgerPath(deps: ObtainDeps, env: NodeJS.ProcessEnv): string {
  * later: the binary is in `~/.local/bin`, the account of it is here.
  */
 export function obtainLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
-	return env.A2A_BRIDGE_INSTALLS ?? join(getAgentDir(), "a2mcp.installs.json");
+	return env.A2MCP_INSTALLS ?? join(getAgentDir(), "a2mcp.installs.json");
 }
 
 async function readLedger(file: string): Promise<Ledger> {
@@ -353,7 +353,7 @@ function runTar(args: string[]): Promise<string> {
  */
 async function extract(bytes: Buffer, wanted: string, kind: Kind): Promise<Buffer> {
 	if (kind === "binary") return bytes;
-	const stage = await mkdtemp(join(tmpdir(), "a2a-obtain-"));
+	const stage = await mkdtemp(join(tmpdir(), "a2mcp-obtain-"));
 	try {
 		const file = join(stage, "archive.tar.gz");
 		await writeFile(file, bytes);

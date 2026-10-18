@@ -8,7 +8,7 @@
  * So the events are per session and the resource is per process, and the entrypoint
  * is the only place that has to reconcile them.
  *
- * Nothing here is mocked: `$A2A_BRIDGE_CONFIG` points at a temp file, the port is
+ * Nothing here is mocked: `$A2MCP_CONFIG` points at a temp file, the port is
  * `0`, and the Main session is a fake registered in the real `AgentRegistry`. Every
  * claim is checked over HTTP against the port the bridge advertised, because that is
  * the only claim a caller can act on.
@@ -18,13 +18,13 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry, type ExtensionAPI, type ExtensionContext, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent";
-import a2aBridge from "../extensions/a2mcp.ts";
+import a2mcpExtension from "../extensions/a2mcp.ts";
 import { configPath } from "../src/config.ts";
 
-const dir = mkdtempSync(join(tmpdir(), "a2a-entry-"));
+const dir = mkdtempSync(join(tmpdir(), "a2mcp-entry-"));
 const savedEnv = { ...process.env };
-process.env.A2A_BRIDGE_CONFIG = join(dir, "a2mcp.json");
-process.env.A2A_BRIDGE_AUDIT = join(dir, "audit.log");
+process.env.A2MCP_CONFIG = join(dir, "a2mcp.json");
+process.env.A2MCP_AUDIT = join(dir, "audit.log");
 // A 0700 dir, not the default 0755 temp dir: the read-only-file test needs the
 // non-root owner to be refused, and a group/other-writable dir would let the write
 // land from elsewhere.
@@ -92,7 +92,7 @@ function newRunner(uiThrowsOn = ""): Runner {
 		},
 		getAllTools: () => [{ name: "read", description: "Read a file", parameters: { type: "object" } }],
 	} as unknown as ExtensionAPI;
-	a2aBridge(pi);
+	a2mcpExtension(pi);
 	const runner: Runner = {
 		notes,
 		commandNames: commandDefs.map((c) => c.name),
@@ -141,7 +141,7 @@ beforeEach(async () => {
 afterAll(async () => {
 	await releaseBridge();
 	AgentRegistry.resetGlobalForTests();
-	for (const key of ["A2A_BRIDGE_CONFIG", "A2A_BRIDGE_AUDIT"] as const) {
+	for (const key of ["A2MCP_CONFIG", "A2MCP_AUDIT"] as const) {
 		if (savedEnv[key] === undefined) delete process.env[key];
 		else process.env[key] = savedEnv[key];
 	}
@@ -233,7 +233,7 @@ describe("session_start", () => {
 	});
 
 	test("a start that fails after binding leaves no half-initialized state", async () => {
-		// The announce step throws. Before the catch cleared the module state, `a2a rotate`
+		// The announce step throws. Before the catch cleared the module state, `a2mcp rotate`
 		// reported success for a server nobody could reach.
 		const r = newRunner("listening on");
 		await r.start();
@@ -243,7 +243,7 @@ describe("session_start", () => {
 		expect(r.notes.some((n) => n.level === "error" && n.text.includes("failed to start"))).toBe(true);
 		const before = readFileSync(configPath(), "utf8");
 		await r.command("rotate");
-		expect(texts(r)).toContain("A2A bridge not running");
+		expect(texts(r)).toContain("a2mcp not running");
 		expect(readFileSync(configPath(), "utf8")).toBe(before);
 	});
 });
@@ -268,7 +268,7 @@ describe("session_shutdown", () => {
 		await r.shutdown();
 		expect(await ping(port as number)).toBeNull();
 		await r.command("status");
-		expect(texts(r)).toContain("A2A bridge not running");
+		expect(texts(r)).toContain("a2mcp not running");
 	});
 
 	test("a shutdown landing mid-bind leaves no orphan endpoint", async () => {
@@ -283,7 +283,7 @@ describe("session_shutdown", () => {
 		// it announced nothing, and the process-level state says the bridge is not running.
 		expect(main.advertisedPort()).toBeNull();
 		await main.command("status");
-		expect(texts(main)).toContain("A2A bridge not running");
+		expect(texts(main)).toContain("a2mcp not running");
 		mountMain();
 		const next = newRunner();
 		await next.start();
@@ -324,9 +324,9 @@ describe("session_shutdown", () => {
 	});
 });
 
-describe("the a2a command", () => {
-	test("registers as `a2a` on every runner", () => {
-		expect(newRunner().commandNames).toEqual(["a2a"]);
+describe("the a2mcp command", () => {
+	test("registers as `a2mcp` on every runner", () => {
+		expect(newRunner().commandNames).toEqual(["a2mcp"]);
 	});
 
 	test("rotate persists the new token and the running server takes it", async () => {
@@ -351,7 +351,7 @@ describe("the a2a command", () => {
 		} finally {
 			chmodSync(configPath(), 0o600);
 		}
-		expect(r.notes.some((n) => n.level === "error" && n.text.includes("A2A command failed"))).toBe(true);
+		expect(r.notes.some((n) => n.level === "error" && n.text.includes("a2mcp command failed"))).toBe(true);
 		expect(await ping(port)).toBe(200);
 		expect((JSON.parse(readFileSync(configPath(), "utf8")) as { token: string }).token).toBe(TOKEN);
 	});
@@ -360,12 +360,18 @@ describe("the a2a command", () => {
 		const r = newRunner();
 		await r.start();
 		await r.command("token");
-		expect(texts(r)).toContain(TOKEN);
+		// Read back through `configPath()` rather than trusting the constant the fixture
+		// wrote: if the default filename and the seeded file ever disagree, the command
+		// would be showing a token that came from a file nobody opens — which is exactly
+		// how a half-done rename stays green.
+		const onDisk = (JSON.parse(readFileSync(configPath(), "utf8")) as { token: string }).token;
+		expect(texts(r)).toContain(onDisk);
+		expect(onDisk).toBe(TOKEN);
 		// A different runner reads the same singleton: status shows the prefix, not the token.
 		const other = newRunner();
 		await other.command("");
-		expect(texts(other)).toContain(`token ${TOKEN.slice(0, 6)}…`);
-		expect(texts(other)).not.toContain(TOKEN);
+		expect(texts(other)).toContain(`token ${onDisk.slice(0, 6)}…`);
+		expect(texts(other)).not.toContain(onDisk);
 	});
 
 	test("every subcommand says not running when the bridge never started", async () => {
@@ -374,7 +380,7 @@ describe("the a2a command", () => {
 		const r = newRunner();
 		await r.start();
 		for (const args of ["rotate", "token", "status"]) await r.command(args);
-		expect(r.notes.filter((n) => n.text === "A2A bridge not running")).toHaveLength(3);
+		expect(r.notes.filter((n) => n.text === "a2mcp not running")).toHaveLength(3);
 		// Fail-closed means leaving the file alone, not healing it into something else.
 		expect(readFileSync(configPath(), "utf8")).toContain("not a number");
 	});
