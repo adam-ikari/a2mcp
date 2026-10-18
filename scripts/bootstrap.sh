@@ -11,8 +11,8 @@
 # [--host-version <version>|latest] [--spec <git-url>]
 set -eu
 
-PLUGIN="pi-a2a-ext"
-DEFAULT_SPEC="https://github.com/adam-ikari/pi-a2a-ext.git"
+PLUGIN="a2mcp"
+DEFAULT_SPEC="https://github.com/adam-ikari/a2mcp.git"
 INSTALLER_URL="https://omp.sh/install"
 PIN_PACKAGE="@oh-my-pi/pi-coding-agent"
 

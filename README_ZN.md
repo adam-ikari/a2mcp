@@ -1,8 +1,10 @@
-# omp A2A Bridge
+# a2mcp
 
 [English](README.md) | 简体中文
 
 这是一个 omp 扩展。装上之后，本机跑着的 omp 会多开出一个 MCP 接口（MCP 是 agent 调用外部工具的标准协议）：另一个 omp、Claude Code、一段 curl 脚本，任何说 MCP 的程序都能通过它调用这台机器上的工具（`read`、`bash`、`edit`……），命令在本机的 shell 里真跑，文件在本机的磁盘上真改。扩展自己从不请求模型：收请求、跑工具、回结果，推理在调用方那一侧。默认只监听 `127.0.0.1`，跨机器要用 SSH 端口转发接进来。
+
+名字讲的是机制：**a2mcp**，Agent2MCP——一个 agent 的工具面通过 HTTP 交给另一个 agent 用。旧名字里的 A2A 是隔壁那个协议，这里的代码一点没实现它：没有 agent card，没有 task 状态机，没有 `contextId` 和 `taskId`。线上跑的是 MCP `2025-11-25`，语义是「调用方点名工具，宿主执行」。
 
 ## 什么时候用哪个
 
@@ -60,14 +62,23 @@ graph TB
 任意机器上，从 git URL 装：
 
 ```sh
-omp install https://github.com/adam-ikari/pi-a2a-ext.git
+omp install https://github.com/adam-ikari/a2mcp.git
 ```
 
-它会装到 `~/.omp/plugins/node_modules/pi-a2a-ext`。卸载：
+它会装到 `~/.omp/plugins/node_modules/a2mcp`。卸载：
+
+```sh
+omp plugin uninstall a2mcp
+```
+
+**从 v0.3.0 或更早升上来的，先卸载。** 插件记账按 `package.json:name` 落，而这一轮把名字改了。新 URL 装进来时如果 `pi-a2a-ext` 还在登记里，两个入口都在，宿主两个都加载——同一台机器上两个端口、两份 token、两次 takeover 装配，而后一次快照是唯一还拿来得住的那份。
 
 ```sh
 omp plugin uninstall pi-a2a-ext
+omp install https://github.com/adam-ikari/a2mcp.git
 ```
+
+`~/.omp/agent/a2a-bridge.json` 从此没人读，桥也不去找它：配置文件换成 `~/.omp/agent/a2mcp.json`，token 是新生成的，远程那份 `mcp.json` 要重抄一遍。`a2a-bridge.log` 与 `a2a-bridge.installs.json` 原地留着，新一代自己另起两个文件。环境里剩下的 `A2A_BRIDGE_*` 如今只是普通变量，没有谁读它们。
 
 **只有这一条安装路径。** `omp install` 本身也接受目录和 npm spec，但本扩展不提供
 本地安装方式：装的就是上面那个 git URL 对应的仓库。`package.json` 里的
@@ -100,7 +111,7 @@ sh scripts/bootstrap.sh
 登记——光有软链不加载，已实测。所以那半程是自包含的，也不会在你的真实机器上留下
 登记。见 [docs/testing.md](docs/testing.md)。
 
-也别手工软链到 `~/.omp/agent/extensions/`：`ln -s "$PWD/extensions/a2a-bridge.ts" ...`
+也别手工软链到 `~/.omp/agent/extensions/`：`ln -s "$PWD/extensions/a2mcp.ts" ...`
 只在 `$PWD` 恰好是仓库根目录时有效，换个目录执行就链到一个不存在的路径，桥静默地
 不启动，而宿主不会报错。
 
@@ -110,14 +121,14 @@ sh scripts/bootstrap.sh
 启动宿主 omp 后，通知栏显示：
 
 ```
-A2A bridge listening on http://127.0.0.1:<port> (token <前6字符>…)
+a2mcp listening on http://127.0.0.1:<port> (token <前6字符>…)
 ```
 
 `<port>` 是实际监听端口（默认随机）。
 
 ## 配置
 
-配置文件 `~/.omp/agent/a2a-bridge.json`，首次启动自动生成，权限 `0600`（创建时即 0600，无权限窗口）：
+配置文件 `~/.omp/agent/a2mcp.json`，首次启动自动生成，权限 `0600`（创建时即 0600，无权限窗口）：
 
 ```json
 { "port": 0, "token": "<base64url 32B>", "host": "127.0.0.1", "host_llm": "allow", "xfer": { "dufs": "dufs", "cloudflared": "cloudflared" } }
@@ -134,19 +145,19 @@ A2A bridge listening on http://127.0.0.1:<port> (token <前6字符>…)
 
 只有这些字段：上面的四个顶层字段，加一个可选的 `xfer` 块。**没有工具白名单或黑名单，没有文件沙箱**——桥不替宿主做权限决定，配置里加这些字段不会生效（多余字段被忽略）。`host_llm` 也不在此列：它管的不是调用方能执行什么（那由 token 和宿主自己的工具权限决定），是宿主自己能不能推理。
 
-环境变量 `A2A_BRIDGE_CONFIG` 可覆盖配置文件路径；`A2A_BRIDGE_AUDIT` 可覆盖审计日志路径；`A2A_BRIDGE_INSTALLS` 可覆盖桥记录「自己装过哪些二进制」的位置。
+环境变量 `A2MCP_CONFIG` 可覆盖配置文件路径；`A2MCP_AUDIT` 可覆盖审计日志路径；`A2MCP_INSTALLS` 可覆盖桥记录「自己装过哪些二进制」的位置。
 
 校验是 **fail-closed** 的：字段类型非法（`port` 非整数/越界、`host` 非非空字符串、`token` 短于 32 字符或含空白、`host_llm` 不是 `deny`/`allow` 之一）时扩展拒绝启动并报错。唯一的例外是**缺失**的 `token`（或根本不是字符串）：自动生成并**写回配置**，保证跨重启稳定。谁手写进去的 token 不会被桥换成桥自己生成的那一个——那会让远程 `mcp.json` 对不上号，且没有任何地方说明原因。下限压在 `generateToken` 的产出（43 字符）之下，它拦的是占位符，不是从别处抄来的密钥。
 
-配置文件的改动在**下次重启宿主**后生效；运行中只想换 token 用 `/a2a rotate`（立即生效，旧 token 即刻作废）。
+配置文件的改动在**下次重启宿主**后生效；运行中只想换 token 用 `/a2mcp rotate`（立即生效，旧 token 即刻作废）。
 
 ### 命令
 
 宿主会话内：
 
-- `/a2a` — 显示当前监听地址、端口与 token 前缀
-- `/a2a rotate` — 轮换 token（写完配置后需同步更新远程 `mcp.json`）
-- `/a2a token` — 打印完整 token（状态行只显示前缀）
+- `/a2mcp` — 显示当前监听地址、端口与 token 前缀
+- `/a2mcp rotate` — 轮换 token（写完配置后需同步更新远程 `mcp.json`）
+- `/a2mcp token` — 打印完整 token（状态行只显示前缀）
 
 ## 远程连接示例
 
@@ -204,7 +215,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 **`deny` 的含义是宿主自己的会话发不出任何模型请求。** 三层，分工按「每条推理请求最后从哪个口出去」划（判据读自宿主自己的代码）：
 
-- **deny API + 宿主当前持有的模型行**：`a2a-deny` 注册成一个只计数、只失败的实现，宿主 agent 手里那一行换成同一行的 deny 副本。宿主自己那一轮因此在建请求之前就被拒：一次尝试、一次 stderr 行、错误 `a2a-bridge takeover: host inference is disabled in this mode`。这段文本不命中宿主的任何重试触发条件——真实宿主上实测，被拒的一轮只发起一次尝试，以 `retryable: false` 结束。deny 副本不带凭据解析器，所以被拒的一轮连 provider 的取密钥程序都不会跑。
+- **deny API + 宿主当前持有的模型行**：`a2mcp-deny` 注册成一个只计数、只失败的实现，宿主 agent 手里那一行换成同一行的 deny 副本。宿主自己那一轮因此在建请求之前就被拒：一次尝试、一次 stderr 行、错误 `a2mcp takeover: host inference is disabled in this mode`。这段文本不命中宿主的任何重试触发条件——真实宿主上实测，被拒的一轮只发起一次尝试，以 `retryable: false` 结束。deny 副本不带凭据解析器，所以被拒的一轮连 provider 的取密钥程序都不会跑。
 - **按目的地的绊线**：宿主进程的 `globalThis.fetch` 包一层，URL 主机名匹配模型配置里任一 `baseUrl` 的请求一律拒绝。pi-ai 取 fetch 的顺序是 `options.fetch ?? globalThis.fetch`，取的是全局绑定、每次调用现读，所以这层盖住所有走 fetch 的推理请求，包括自建注册表的调用者（task 子代理、web 搜索、commit 消息）。
 - **只声明不得不声明的两个 provider**：有两条道不是 fetch——cowork 道（`anthropic` + `anthropic-messages` 时宿主换 `node:https` 直连）和 Codex 的 websocket 道（`api: openai-codex-responses`，宿主把 `providers.openaiWebsockets` 逐次转发给 provider 调用）。这两者的 provider 名字被放到 deny 后面；默认装法下是七十多个 provider 里的 2 个。
 
@@ -212,9 +223,9 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 降噪层把会让宿主自己忙起来、说个不停的设置按住（长命令自动转后台、宿主侧重试、advisor、TTSR、prewalk、autolearn、cache warming、自动压缩），全部是运行时 override，不落盘。实测：接管在位时，一条远程 3 秒 `bash` 跑完就结束，不会变成后台任务。
 
-**归谁控制。** 配置里的 `host_llm` 只决定启动状态（缺省 `allow`）。运行中用 `POST /host-llm` 带 `{"enabled": false}` 装 deny，带 `{"enabled": true}` 按 takeover 的快照恢复（deny API 注销、被声明的 provider 恢复、原始模型行放回、fetch 引用还原、settings overrides），回包是 `{enabled, denied, degraded}`。鉴权与其他路径同一个 Bearer token，每次切换写一条 `tool: "host_llm"` 审计；装配被拒也写一条（`sid: null`，因为没有调用方），外加宿主 stderr 一行——提示条会滚走，审计不会。这个端点刻意**不是**工具：`tools/list` 保持宿主注册表原样。`/a2a` 显示当前状态（`host_llm=deny denied=2`）。切换从不落盘，重启回到操作员的配置。装配在每一次 `session_start` 重装（配置里的 `deny` 与远端打开的 deny 都一样）：会话重建会带一份没被影子化的新注册表出来，而端口开着说明不了注册表的状态。装例行把声明的 provider 名字打出来（`takeover armed: 2 provider(s) shadowed (anthropic, openai-codex), …`）——声明是把名字从原主人手里拿走，注册表还不回去，操作员看得见的只有这一行。
+**归谁控制。** 配置里的 `host_llm` 只决定启动状态（缺省 `allow`）。运行中用 `POST /host-llm` 带 `{"enabled": false}` 装 deny，带 `{"enabled": true}` 按 takeover 的快照恢复（deny API 注销、被声明的 provider 恢复、原始模型行放回、fetch 引用还原、settings overrides），回包是 `{enabled, denied, degraded}`。鉴权与其他路径同一个 Bearer token，每次切换写一条 `tool: "host_llm"` 审计；装配被拒也写一条（`sid: null`，因为没有调用方），外加宿主 stderr 一行——提示条会滚走，审计不会。这个端点刻意**不是**工具：`tools/list` 保持宿主注册表原样。`/a2mcp` 显示当前状态（`host_llm=deny denied=2`）。切换从不落盘，重启回到操作员的配置。装配在每一次 `session_start` 重装（配置里的 `deny` 与远端打开的 deny 都一样）：会话重建会带一份没被影子化的新注册表出来，而端口开着说明不了注册表的状态。装例行把声明的 provider 名字打出来（`takeover armed: 2 provider(s) shadowed (anthropic, openai-codex), …`）——声明是把名字从原主人手里拿走，注册表还不回去，操作员看得见的只有这一行。
 
-**降级。** 开关开着时的拒绝与启动时的拒绝不是一回事。开关仍开着、进程级的绊线仍在，但当前活着的那会话没拿到 deny 行、也没拿到声明，于是它的两条非 fetch 道是裸的。这时回包带 `degraded: true`，`/a2a` 显示 `host_llm=deny (tripwire only)`，stderr 与审计各留一行。拒绝检查排在恢复旧会话**之前**就是为了这个：先恢复再拒绝，等于在失败的路上顺手把绊线也拆了。
+**降级。** 开关开着时的拒绝与启动时的拒绝不是一回事。开关仍开着、进程级的绊线仍在，但当前活着的那会话没拿到 deny 行、也没拿到声明，于是它的两条非 fetch 道是裸的。这时回包带 `degraded: true`，`/a2mcp` 显示 `host_llm=deny (tripwire only)`，stderr 与审计各留一行。拒绝检查排在恢复旧会话**之前**就是为了这个：先恢复再拒绝，等于在失败的路上顺手把绊线也拆了。
 
 **它放弃了什么，什么在承诺之外。**
 
@@ -239,7 +250,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 前置的两个二进制，桥自己找：先查 PATH，查不到就拉一份钉死版本的构建装进 `~/.local/bin`，用它起服务。两个都钉版本号加 sha256，写在 `src/obtain.ts`：`dufs` 是 0.46.0，`cloudflared` 是 2026.10.1，各四个平台，每一个哈希都由 `bun run test:obtain` 对着 GitHub 实际下发的字节复验过。桥不要 `latest`，也不向递给它字节的那台服务器要校验和。
 
-拉取是桥多出来的一个意见。它先前已经决定用 `dufs` 当文件服务器，这次只补一句「字节从哪来」。出口是写路径：`xfer.dufs` 写成 `"/srv/bin/dufs"`，桥就拿这个文件用，一次都不下载。写裸名字就是让它去找，找不到就去拉。别人放的文件桥不动：`~/.local/bin/dufs` 已经存在、又不是自己装的那一份，桥拒绝继续，并把它的 sha256 打出来。自己装过什么，记在 `<agentDir>/a2a-bridge.installs.json`。
+拉取是桥多出来的一个意见。它先前已经决定用 `dufs` 当文件服务器，这次只补一句「字节从哪来」。出口是写路径：`xfer.dufs` 写成 `"/srv/bin/dufs"`，桥就拿这个文件用，一次都不下载。写裸名字就是让它去找，找不到就去拉。别人放的文件桥不动：`~/.local/bin/dufs` 已经存在、又不是自己装的那一份，桥拒绝继续，并把它的 sha256 打出来。自己装过什么，记在 `<agentDir>/a2mcp.installs.json`。
 
 需要拉取的共享会等拉完，回包用 `installed` 说清拉的是哪个版本，本来就在的地方是 `null`。每次调用一条审计，`tool: "xfer"`，拉取那几次是 `action: install`。
 
@@ -278,7 +289,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 - **`POST /host-llm` 是桥不属于工具的那条路。** 它直接伸手进宿主会话——换注册表行、override 设置、替换进程的 `fetch`——桥在这里有了自己的意见，绕开了宿主的工具分发，代价是审计（`tool: "host_llm"`，每次切换一条）和文档。它限制的是宿主自己的推理，且只听从握着 token 的人的指令。见「宿主推理接管」。
 - 默认仅回环监听；真要对外暴露，防火墙自己负责。
 - **会话强制**：除 `initialize` 外所有消息必须携带 `Mcp-Session-Id`（缺失 → 400，未知/空闲超 24h → 404）。会话上限 64 个，超出淘汰最久未用；每次命中刷新空闲计时。
-- **审计日志**：每次远程 `tools/call` 写两条 JSONL——发起时 `{ts,id,sid,phase:"start",tool,args}`，完成时 `{ts,id,sid,phase:"done",tool,isError,args}`（同 `id` 配对；`sid` 为该调用的 `Mcp-Session-Id`，共享 token 下可把调用归因到客户端会话；参数摘要截断 1KB）到 `~/.omp/agent/a2a-bridge.log`，权限 0600，超过 512KB 轮转为 `.1`。这里的 `id` 是本桥为配对生成的 UUID，调用方的 JSON-RPC id 不落日志，所以按 JSON-RPC id 查不到。参数里超过 120 字符的字符串只记 `<len:N,sha256:前8位>`，日志不落载荷，且**不分嵌套层数**：宿主 `edit` 的文件正文就落在 `args.edits[0].oldText`（第三层），只走两层的脱敏会把它原样写出去。嵌套超过 32 层整个子树换成 `<max-depth>`，不再往下走。这里说的是桥自己这份日志；宿主会话照常收到那些参数，宿主自己的记录归宿主管。记录按进程内一条队列落盘，因为「查大小 → 轮转 → 写行」是三步而不是一个整体：两个并发写都读到越过上限的尺寸就会都去轮转，第二次 `rename` 覆盖掉的正是第一次刚放好的那个 `.1`。不串行时同一份代码重跑六轮，最坏的一次两个文件各剩 1 条记录——测试摆到磁盘上的 572 条里有 570 条在两个文件都找不到；最轻的一次是并发那 60 条只剩 1 条。日志写失败不影响调用，但也不无声吞掉：每个日志路径的头一次写失败会往宿主 stderr 打一行 `[a2a-bridge] audit record not written to <路径>（<原因>）`，此后每满一百次再打一行——写不成的日志与从没被调用过的桥看起来一模一样。`start` 排在工具执行之前、`done` 排在响应发出之前，两者都要落盘了请求才走：拿到 200 就意味着那一行已经在盘上，接着读日志不必轮询。这一条以前是反的（落盘走进程内队列、调用方不等它），而且只在磁盘慢到队列排得上时才显形，实测代价是每条记录约 99 µs（`stat` + `appendFile` + `chmod`，串行），对着一次 bash 调用可以忽略。未鉴权的尝试在这份日志里一条不写——走宿主 stderr，第一次与其后每五十次各一行——写审计就要驱动轮转，这个杠杆不该交到还在猜 token 的人手里，少记那几行的损失没有它大。
+- **审计日志**：每次远程 `tools/call` 写两条 JSONL——发起时 `{ts,id,sid,phase:"start",tool,args}`，完成时 `{ts,id,sid,phase:"done",tool,isError,args}`（同 `id` 配对；`sid` 为该调用的 `Mcp-Session-Id`，共享 token 下可把调用归因到客户端会话；参数摘要截断 1KB）到 `~/.omp/agent/a2mcp.log`，权限 0600，超过 512KB 轮转为 `.1`。这里的 `id` 是本桥为配对生成的 UUID，调用方的 JSON-RPC id 不落日志，所以按 JSON-RPC id 查不到。参数里超过 120 字符的字符串只记 `<len:N,sha256:前8位>`，日志不落载荷，且**不分嵌套层数**：宿主 `edit` 的文件正文就落在 `args.edits[0].oldText`（第三层），只走两层的脱敏会把它原样写出去。嵌套超过 32 层整个子树换成 `<max-depth>`，不再往下走。这里说的是桥自己这份日志；宿主会话照常收到那些参数，宿主自己的记录归宿主管。记录按进程内一条队列落盘，因为「查大小 → 轮转 → 写行」是三步而不是一个整体：两个并发写都读到越过上限的尺寸就会都去轮转，第二次 `rename` 覆盖掉的正是第一次刚放好的那个 `.1`。不串行时同一份代码重跑六轮，最坏的一次两个文件各剩 1 条记录——测试摆到磁盘上的 572 条里有 570 条在两个文件都找不到；最轻的一次是并发那 60 条只剩 1 条。日志写失败不影响调用，但也不无声吞掉：每个日志路径的头一次写失败会往宿主 stderr 打一行 `[a2mcp] audit record not written to <路径>（<原因>）`，此后每满一百次再打一行——写不成的日志与从没被调用过的桥看起来一模一样。`start` 排在工具执行之前、`done` 排在响应发出之前，两者都要落盘了请求才走：拿到 200 就意味着那一行已经在盘上，接着读日志不必轮询。这一条以前是反的（落盘走进程内队列、调用方不等它），而且只在磁盘慢到队列排得上时才显形，实测代价是每条记录约 99 µs（`stat` + `appendFile` + `chmod`，串行），对着一次 bash 调用可以忽略。未鉴权的尝试在这份日志里一条不写——走宿主 stderr，第一次与其后每五十次各一行——写审计就要驱动轮转，这个杠杆不该交到还在猜 token 的人手里，少记那几行的损失没有它大。
 - **只有 `start` 没有 `done` = 调用已发起但未完成**（典型：无 UI 下挂起的审批）。读这个信号有两处坑，都实测过：轮转可能把一次调用的两条分处 `.1` 与当前文件，所以要在两个文件里按 `id` 配对；而且只保留一代——下一次轮转会覆盖 `.1`，挂起调用的证据会被后续流量冲出日志。要在它还在的时候读。
 - 端口被占用时回退到随机端口并告警（远程 `mcp.json` 需同步改端口）。
 
@@ -286,7 +297,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 请求/响应格式、处理顺序、会话生命周期与错误码总表的完整 wire 契约见 [docs/protocol.md](docs/protocol.md)。
 
-在线文档站（GitHub Pages，push 自动发布）：<https://adam-ikari.github.io/pi-a2a-ext/>
+在线文档站（GitHub Pages，push 自动发布）：<https://adam-ikari.github.io/a2mcp/>
 
 v1 边界：
 
@@ -304,18 +315,18 @@ v1 边界：
 
 ## 故障排查
 
-- **401 `unauthorized`**：token 不匹配。远程 `mcp.json` 的 `Authorization` 头必须与配置 `token` 一致；`/a2a rotate` 之后要同步改远程侧。宿主 stderr 会在第一次失败以及此后每五十次打一行 `[a2a-bridge] N unauthorized attempt(s)`；这些尝试刻意不进审计日志（理由见「安全与边界」的审计日志条目）。
-- **桥拒绝启动，报 `field 'token' must be at least 32 characters`**：有人往 `a2a-bridge.json` 里写了个短的 token。放真正的密钥进去，或者删掉该字段让桥自己生成并持久化一个——桥不会替换交到它手里的那份。
+- **401 `unauthorized`**：token 不匹配。远程 `mcp.json` 的 `Authorization` 头必须与配置 `token` 一致；`/a2mcp rotate` 之后要同步改远程侧。宿主 stderr 会在第一次失败以及此后每五十次打一行 `[a2mcp] N unauthorized attempt(s)`；这些尝试刻意不进审计日志（理由见「安全与边界」的审计日志条目）。
+- **桥拒绝启动，报 `field 'token' must be at least 32 characters`**：有人往 `a2mcp.json` 里写了个短的 token。放真正的密钥进去，或者删掉该字段让桥自己生成并持久化一个——桥不会替换交到它手里的那份。
 - **桥拒绝启动，报 `field 'host_llm' must be 'deny' or 'allow'`**：这个字段被写成了别的值（`"false"`、`"ALLOW"`、布尔量）。它决定接管的启动状态；含糊的值一律拒绝，不猜（见「宿主推理接管」）。
-- **takeover 装配失败**（`/a2a` 通知、宿主 stderr 里的 `[a2a-bridge] takeover failed to arm: …`，以及一条带 `error` 的 `host_llm` 审计记录）：模型配置里有落在被声明名单之外的 provider 带 `transport`（`pi-native` 或任何在 API 分派之前短路的 transport），桥排不到它前面，于是拒绝装配，推理照常归宿主自己的规则管。确实需要 deny，就删掉或改掉那个 provider。
+- **takeover 装配失败**（`/a2mcp` 通知、宿主 stderr 里的 `[a2mcp] takeover failed to arm: …`，以及一条带 `error` 的 `host_llm` 审计记录）：模型配置里有落在被声明名单之外的 provider 带 `transport`（`pi-native` 或任何在 API 分派之前短路的 transport），桥排不到它前面，于是拒绝装配，推理照常归宿主自己的规则管。确实需要 deny，就删掉或改掉那个 provider。
 - **宿主 stderr 出现 `takeover restore left N provider(s) unregistered … restart the host to recover`**：被声明的那两个 provider 里，有一个本来就是别的扩展在运行期注册的（不是 `models.yml` 里配的），而注册表的撤销原语没法重放别人的注册。deny 本身已经装回去了，缺的只是那个 provider，要回来得重启宿主。
-- **审计一条没有、调用也没有失败**：日志路径写不进去——`$A2A_BRIDGE_AUDIT` 指向不存在的目录、权限不对，或磁盘满。宿主 stderr 里有 `[a2a-bridge] audit record not written to <路径>（<原因>）`。修好路径拿不回已经丢掉的那些记录。
+- **审计一条没有、调用也没有失败**：日志路径写不进去——`$A2MCP_AUDIT` 指向不存在的目录、权限不对，或磁盘满。宿主 stderr 里有 `[a2mcp] audit record not written to <路径>（<原因>）`。修好路径拿不回已经丢掉的那些记录。
 - **400 `missing mcp-session-id` / 404 `unknown session`**：除 `initialize` 外都要带会话头。会话是宿主进程内存态——宿主重启即全部失效、空闲超 24h 也回收；重新 `initialize` 拿新会话即可（正规 MCP 客户端库会自动处理）。
-- **连不上 / 端口对不上**：宿主启动时配置端口被占用会回退到随机端口并在通知栏告警——以通知栏或 `/a2a` 显示的实际端口更新 `mcp.json`。
+- **连不上 / 端口对不上**：宿主启动时配置端口被占用会回退到随机端口并在通知栏告警——以通知栏或 `/a2mcp` 显示的实际端口更新 `mcp.json`。
 - **调用一直没有返回**：宿主无交互 UI 且该工具审批为 `prompt`（见「审批」）——命令不会执行但也不返回；调用方必须自设超时，审计日志里该调用只有 `start` 没有 `done`（见「安全与边界」的审计日志条目）。
-- **500 `internal error`**：服务端内部故障；响应体固定不含细节（防泄露），真实原因在宿主 stderr，形如 `[a2a-bridge] internal error: …`。
-- **改了配置不生效**：外部编辑 `a2a-bridge.json`（如 `port`）需重启宿主；运行中只有 `/a2a rotate` 即时生效。
-- **`bun test` 版本守卫失败**（开发）：两种可能——`@oh-my-pi/pi-*` 实装与 pin/lock 失同步（`bun install` 恢复），或本机 `omp --version` 与 pin 不一致（升级宿主时同步改 `package.json` 里的两个精确版本号）。宿主那一半此前只告警，pin 于是可以无人察觉地漂移；现在会失败，只在 `PATH` 上没有宿主时跳过。确实要对着别的宿主版本跑，用 `A2A_SKIP_HOST_VERSION_CHECK=1`，会打一行大声的 SKIPPED，不静默放过。
+- **500 `internal error`**：服务端内部故障；响应体固定不含细节（防泄露），真实原因在宿主 stderr，形如 `[a2mcp] internal error: …`。
+- **改了配置不生效**：外部编辑 `a2mcp.json`（如 `port`）需重启宿主；运行中只有 `/a2mcp rotate` 即时生效。
+- **`bun test` 版本守卫失败**（开发）：两种可能——`@oh-my-pi/pi-*` 实装与 pin/lock 失同步（`bun install` 恢复），或本机 `omp --version` 与 pin 不一致（升级宿主时同步改 `package.json` 里的两个精确版本号）。宿主那一半此前只告警，pin 于是可以无人察觉地漂移；现在会失败，只在 `PATH` 上没有宿主时跳过。确实要对着别的宿主版本跑，用 `A2MCP_SKIP_HOST_VERSION_CHECK=1`，会打一行大声的 SKIPPED，不静默放过。
 
 ## 开发
 
@@ -345,7 +356,7 @@ bun run website        # 文档站（VitePress）本地预览，端口见输出�
 
 | 路径 | 职责 |
 | --- | --- |
-| `extensions/a2a-bridge.ts` | 扩展入口，`session_start` 起服务器，注册 `/a2a` |
+| `extensions/a2mcp.ts` | 扩展入口，`session_start` 起服务器，注册 `/a2mcp` |
 | `src/server.ts` | `Bun.serve` + JSON-RPC（MCP 2025-11-25，纯 JSON 响应）、会话与版本协商 |
 | `src/bridge.ts` | 工具目录与执行（都走 AgentRegistry 的 `Main` 会话，入口那份 `pi.getAllTools` 只在没有活的 Main 时兜底）、暴露交集判定 |
 | `src/config.ts` | 配置加载/保存、字段校验、token 生成 |

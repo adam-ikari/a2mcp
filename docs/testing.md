@@ -5,7 +5,7 @@
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
 | `bun run test:tree` | 仓库形状核验，3 项，无依赖 | 否 | `tree-probe: repo shape OK` |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 186 pass / 0 fail（14 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 194 pass / 0 fail（15 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
 | `bun run test:obtain` | 外部二进制获取核验，31 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
@@ -17,7 +17,7 @@
 | `bun run test:bootstrap` | 一键脚本的判断核验，28 项，约 9 秒 | 第五组要 | `BOOTSTRAP OK` |
 | `bun run test:scenario` | 端到端场景，8 个叙事 / 41 步，约 45 秒 | 是 | `SCENARIOS: 41 steps, 0 failed` |
 
-统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。`test:bootstrap` 前四组连真宿主都不起：它用脚本自己造在临时目录里的记账 `omp` stub，PATH 上没有真宿主也照样跑，只有第五组用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主自 18.11.0（18.12.1 上重测仍如此）按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的第五组是这趟里唯一真出网的一支：`PATH` 上什么都不留，让桥自己把两个二进制拉下来，约 46 MB，落点仍是它自己那个临时 `HOME`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2a-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。`test:bootstrap` 前四组连真宿主都不起：它用脚本自己造在临时目录里的记账 `omp` stub，PATH 上没有真宿主也照样跑，只有第五组用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2MCP_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主自 18.11.0（18.12.1 上重测仍如此）按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的第五组是这趟里唯一真出网的一支：`PATH` 上什么都不留，让桥自己把两个二进制拉下来，约 46 MB，落点仍是它自己那个临时 `HOME`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2mcp-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
 六个宿主核验、`test:obtain`、`test:bootstrap` 与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
@@ -29,8 +29,8 @@
 | --- | --- | --- |
 | manifest | 6 | 有 `name`；有 `version`（否则 omp 显示 `@undefined`）；声明 `pi.extensions`（加载开关）；**无 runtime 依赖**（`@oh-my-pi/*` 由宿主 shim 提供）；`files[]` 同时含 `extensions/` 与 `src/` |
 | 打包 | 3 | `npm pack` 出 tarball；体积 < 500KB（不含 `node_modules`）；解开是 `package/` 根 |
-| 内容 | 15 | 入口 `extensions/a2a-bridge.ts` 与 `src/` 下每一个 `*.ts` 都在 tarball 里（清单由 `readdirSync(src)` 现读，新增模块不需要改探针，`src/obtain.ts`、`src/tunnel.ts`、`src/xfer.ts` 就是这样自己进的名）；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块，当前 10）；整包除 `@oh-my-pi/pi-coding-agent` 之外不引任何宿主包，而这一项确实读到了 import（不是空过） |
-| 端到端 | 11 | 每次先卸载再 `omp install .`——装的是链接，所以宿主加载的就是工作区；断言该路径不是实体拷贝；桥被发现并广播监听地址；首次启动只写 `host`/`host_llm`/`port`/`token` 加一个 `xfer`（里面是两个二进制名，没有路径也没有沙箱字段）；`initialize` 返回协议版本；`tools/list` 非空且无 `a2a_*`（不断言具体数量——宿主装几个扩展就变几个，写死会静默过期）；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
+| 内容 | 15 | 入口 `extensions/a2mcp.ts` 与 `src/` 下每一个 `*.ts` 都在 tarball 里（清单由 `readdirSync(src)` 现读，新增模块不需要改探针，`src/obtain.ts`、`src/tunnel.ts`、`src/xfer.ts` 就是这样自己进的名）；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块，当前 10）；整包除 `@oh-my-pi/pi-coding-agent` 之外不引任何宿主包，而这一项确实读到了 import（不是空过） |
+| 端到端 | 11 | 每次先卸载再 `omp install .`——装的是链接，所以宿主加载的就是工作区；断言该路径不是实体拷贝；桥被发现并广播监听地址；首次启动只写 `host`/`host_llm`/`port`/`token` 加一个 `xfer`（里面是两个二进制名，没有路径也没有沙箱字段）；`initialize` 返回协议版本；`tools/list` 非空，且桥自己那三个传输工具确实出现在目录里（名字从 `src/xfer.ts` 的 `XFER_TOOL_NAMES` 现读，不在探针里抄第二份；不断言具体数量——宿主装几个扩展就变几个，写死会静默过期。这一条原先断言的是「目录里没有桥自带的工具」，桥自带工具之后标签已经不成立而断言也永远不会红，改成正面断言的来龙去脉写在 `test/install-probe.ts` 的注释里）；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
 | 两个二进制都由一次 `xfer_share` 拉下来 | 13 | 给这个宿主削过的 `PATH`（`omp` 所在目录 + bun + `/usr/bin` + `/bin`）上 `dufs` 与 `cloudflared` 都不应答——这两条不成立就整组跳过并说明原因，这台机器证不了不等于桥错了；宿主照样起；`xfer_share` 的答复里没有一句是关于获取的；两个文件都在桥自己的 `HOME` 里且是 `0755`（6.4 MB 与 38.4 MB）；登记两个版本各一行、`target` 是本机平台；审计两条 `install` 且不是 `isError`；回包 `installed` 同时点名两个版本；loopback GET 字节一致、错密码 401、`xfer_stop` 后端口释放；操作者真正的 `~/.local/bin` 前后一样 |
 
 第三组是关键：入口 import 的是 `../src/*.ts`，`files[]` 漏掉任何一个都会**装得上、加载时才炸**。逐个断言文件名会被新增的模块绕过，走 import 图才抓得到。
@@ -87,11 +87,13 @@
 
 `PATH` 是探针自己造的目录，只软链点名的那几个真二进制，所以「没有 curl」是真没有，不是脚本自己说的。`omp` 换成一个只往文件里追加 argv 的 stub，于是安装、卸载、`plugin list`、`plugin doctor` 全都看得见，而机器上什么都没被改动。
 
+插件名与安装 URL 都不抄在探针里：前者读 `package.json:name`，后者读 README 里那行 `omp install <url>`，读出来是空就抛错而不是继续跑。这一条是本轮改名换来的教训——脚本、README、探针三处各写着同一个名字，手抄的话改一半也能全绿。
+
 一个洞是写的过程中自己踩到的：前置那组第一个场景拿掉了 `curl`，可 PATH 上还留着 stub 宿主，脚本走的是「已有宿主」那一支，`curl` 那条检查根本没跑到；它顺手把扩展「装」进了 stub 的登记文件，于是下一个场景（拿掉 `git`）读到已登记、跳过安装，两条都绿。修法是该场景把 `omp` 也从 PATH 上拿掉，并且每个场景重铺 stub 的状态。这类「上一个场景改了夹具」的污染，只有把每条的期望退出码打出来才看得见。
 
 边界写在探针文件头，不藏着：**宿主那一支在本仓库永远走不到**——探针要么 PATH 上有宿主（脚本就不装），要么在 `--dry-run` 里（只打印计划）。那半程的第一次真执行发生在别人的新机器上，本仓库能给它的只有 stub 覆盖加一行诚实的说明。
 
-第五组用 `omp install .`（本地安装在这里同样是测试夹具，不是受支持的安装方式），它验的是脚本能不能驱动真宿主走完登记、自检、卸载这一串；`A2A_BOOTSTRAP_SPEC` 指成 git URL 就改成验 omp 自己的 git 抓取，那条路 `test:install` 前三组已经覆盖。
+第五组用 `omp install .`（本地安装在这里同样是测试夹具，不是受支持的安装方式），它验的是脚本能不能驱动真宿主走完登记、自检、卸载这一串；`A2MCP_BOOTSTRAP_SPEC` 指成 git URL 就改成验 omp 自己的 git 抓取，那条路 `test:install` 前三组已经覆盖。
 
 ## `test:obtain` — 外部二进制获取核验（31 项）
 
@@ -212,11 +214,11 @@
 
 ## 入口那一层（`test/entry.test.ts`，19 项）
 
-`extensions/a2a-bridge.ts` 此前没有任何单测能引到它——不起了宿主就摸不到，而它管的是这台服务器的生死。它现在被直接 import：`$A2A_BRIDGE_CONFIG` 指到临时文件，端口写 `0`，`Main` 会话是真注册进 `AgentRegistry.global()` 的假货。不 mock 任何模块：入口的每个决定最后都要落到一个能被连接的端口上，所以断言一律是「从广播里解析出那个端口，然后去连它」。连不上就是没在服务，200 就是在服务——这比数调用次数结实，而 `mock.module` 在本机还有个硬伤：Bun 的模块 mock 是进程级的，`test/config.test.ts` 的 `loadConfig` 会被同一进程里的 mock 换掉，一次 `bun test` 就绿不回来了。
+`extensions/a2mcp.ts` 此前没有任何单测能引到它——不起了宿主就摸不到，而它管的是这台服务器的生死。它现在被直接 import：`$A2MCP_CONFIG` 指到临时文件，端口写 `0`，`Main` 会话是真注册进 `AgentRegistry.global()` 的假货。不 mock 任何模块：入口的每个决定最后都要落到一个能被连接的端口上，所以断言一律是「从广播里解析出那个端口，然后去连它」。连不上就是没在服务，200 就是在服务——这比数调用次数结实，而 `mock.module` 在本机还有个硬伤：Bun 的模块 mock 是进程级的，`test/config.test.ts` 的 `loadConfig` 会被同一进程里的 mock 换掉，一次 `bun test` 就绿不回来了。
 
 事件序列照宿主的实际行为摆：交互式宿主里 `/new` 复用同一个 runner、不再发 `session_start`，但 task 子代理、ACP 会话、持久化 revive 各建一套 runner 并重跑扩展工厂（模块图不重新求值，所以 `server`/`cfg` 共享，而 handler 是各自的）。于是 `session_start` / `session_shutdown` 是每会话的，端口是每进程的。
 
-写不出来的那一条正好是这里的缺陷：`session_shutdown` 无条件 `server.stop()`，所以**任何一次子代理结束都会把还在服务的端口拆掉**，而主会话那边再没有第二个 `session_start` 来把它重启。修法是让释放与否取决于宿主注册表里还有没有 `Main` 会话（`hasMainSession()`，`src/bridge.ts`），这条读数本身也对着真注册表测了三种情形。顺带两处：启动失败时代码清掉了 `cfg` 却没清 `server` 的话，`/a2a rotate` 会替一个已经停服的端口报成功；`rotate` 原先先改内存再写文件，写失败就是「运行中的桥换了 token、配置文件还是旧的、而操作者收到一句失败」。
+写不出来的那一条正好是这里的缺陷：`session_shutdown` 无条件 `server.stop()`，所以**任何一次子代理结束都会把还在服务的端口拆掉**，而主会话那边再没有第二个 `session_start` 来把它重启。修法是让释放与否取决于宿主注册表里还有没有 `Main` 会话（`hasMainSession()`，`src/bridge.ts`），这条读数本身也对着真注册表测了三种情形。顺带两处：启动失败时代码清掉了 `cfg` 却没清 `server` 的话，`/a2mcp rotate` 会替一个已经停服的端口报成功；`rotate` 原先先改内存再写文件，写失败就是「运行中的桥换了 token、配置文件还是旧的、而操作者收到一句失败」。
 
 同一层还有一个缺陷：绑定不是原子的，`loadConfig` 与 `startServer` 都要 await，所以两个 `session_start` 可以在同一个 `if (server)` 检查上同时通过，各绑一套。模块只记住后一个，前一个端口没有名字，谁也停不掉，操作者还会收到两条指向不同端口的广播。这一条先是红的：并发用例里第二个 runner 从广播里解析出了一个端口号，说明它确实又绑了一套。现在的写法是后到的等前一个绑完再复用（`bringingUp`）。
 
@@ -231,9 +233,21 @@
 | `session_shutdown` 落在绑定完成之前：刚绑的端口自己收掉，也不广播，后来的 `session_start` 重新绑一个能用的 | 1 |
 | `Main` 槽位还在但 `session` 是 `null`（宿主的 parked/aborted）：端口照样释放 | 1 |
 | 子代理结束端口仍在；`Main` 没了端口才释放；释放后新的 `session_start` 重绑 | 3 |
-| `/a2a`：注册名、rotate 先落盘再生效、落盘失败则运行中的仍是旧 token、`token` 出全串而 status 只出前缀、未运行时三个子命令都拒绝 | 5 |
+| `/a2mcp`：注册名、rotate 先落盘再生效、落盘失败则运行中的仍是旧 token、`token` 出全串而 status 只出前缀、未运行时三个子命令都拒绝 | 5 |
 
 变异核验十项：去掉 `hasMainSession()` 那道闸、把 `rotate` 的赋值挪回写盘之前、启动失败的 catch 里不再 `stop()`、catch 里什么都不清、`hasMainSession()` 恒真与恒假、去掉在途那道闸（红的正是并发那条）、去掉绑完之后的那次复查（红的正是绑定中途结束那条）、把 `hasMainSession()` 的比较换回 `!== undefined`（红的正是 parked 那两条），各红自己那一两条。只有把广播里的端口换成配置值而不是实际绑上的那个，红了七条：端口报错了，所有「去连它」的断言一起塌。这正是把断言写成真连接的代价与好处，它不给你留「实现错了但计数对得上」的余地。
+
+## 名字守卫（`test/naming.test.ts`，6 项）
+
+**要回答的问题**：这一轮把项目改到了 `a2mcp`，改的是名字，而名字的敌人是复制。旧拼写会从三条路回来：抄错的一行文档、新写的一个探针、手填的 `serverInfo`。
+
+按形态匹配，不是全文禁那个协议名：`docs/protocol.md` 拿它当隔壁那个协议来比较，那是合法用法。拦的是自指的四种形态——旧包名、旧桥名、旧环境变量前缀、旧斜杠命令，外加旧前缀打头的标识符和散文里那句旧称呼。这比一刀切禁字符串弱，弱出来的那一寸是明说的：要拦临时目录前缀就得把那个前缀列成形态，而两个历史设计稿的文件名长得和它一样。
+
+扫描面是 `src`、`extensions`、`test`、`scripts`、`.github`、`docs` 顶层、`website`（生成物除外）加四个根文件。豁免两种：整文件是历史（变更日志、brain、设计稿、锁文件与站点构建输出——锁文件记的是它生成时那个目录名，本仓库的工作目录留着旧拼写是有意的），以及逐条列出的旧名引用：README 的迁移段必须写出该卸载哪个、哪个文件从此没人读，探针与被替换那句断言的注释绕不开旧名字。按文件生效而不是按行，这是个真实的洞；收下它是因为每个文件只有一个理由拼旧名字，而没人用的豁免会让这条测试变红——表自己烂不掉。守卫这份文件自己也在豁免里：旧拼写在它那儿是数据，它不能同时是扫描对象。
+
+另三条是结构断言：`pi.extensions` 里每个路径都存在，而 `extensions/` 里除了它不许有第二个 `.ts`；`harness.linkExtension()` 软链出去的文件名就是它；包名、命令名、`serverInfo.name` 是同一个词。v0.3.0 上这三个是三个词，远程调用方在 `initialize` 里读到的名字和宿主 `plugin list` 里的不是一回事。
+
+变异核验四条都实跑过：把入口那行 notify 的自称改回旧称呼 → 红并点名 `extensions/a2mcp.ts:172`；从豁免表里删掉一条 → 红并指回 README 那一行；把表里某条的字面量改错一个字母 → 同一条测试既报这条豁免没人用了，又报 README 的那行；把协议页样例回包里的名字改回旧桥名 → 红的是那条对照代码与文档的断言。
 
 ## `test:approval` — 审批边界判别核验
 
@@ -303,7 +317,7 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 **为什么「重建后的会话」只能在进程内验。** 试过在宿主探针里用 rpc 的 `new_session` 驱动，结果是它根本不重建会话：`AgentSession.newSession()` 保留同一个会话对象与监听器（`agent-session.ts:9659` 的注释原话是 "Listeners are preserved"），只是清空消息，等于 `/clear`，不发 `session_start`。而 `session_start` 全宿主只有三个发射点——`runtime-init.ts:212`（建会话时）、`acp-agent.ts:2662`（ACP 挂载）、交互式 UI——rpc 对 **Main** 一个都不暴露。所以换主会话这件事在宿主探针里根本驱动不了，本探针用第二个真实注册表把它 stood in for：重建的实质就是「同一份配置上一个全新的注册表」。
 
-**ACP 那条路也堵死了，这条是量出来的。** `acp-agent.ts:2662` 确实是第二个真实发射点，看起来能在同一个进程里既重建会话又带着桥，所以实测了一次：起 `omp --mode acp`（临时 HOME、`host_llm: deny`、配置与其它探针同形），ACP 的 `initialize` 有正常应答（`protocolVersion: 1`、`agentInfo.version 18.8.7`），但**扩展根本没被加载**——stderr 里一次都没提到 extension，进程一个端口都没在听，`/a2a` 连不上。也就是说 ACP 模式不加载 `~/.omp/agent/extensions/`，那个发射点对桥不可达。两条路都试过之后，这项覆盖的阻塞不在桥这一侧，而在宿主没有为 Main 暴露重建口；要它得宿主加一个 rpc/ACP 钩子。
+**ACP 那条路也堵死了，这条是量出来的。** `acp-agent.ts:2662` 确实是第二个真实发射点，看起来能在同一个进程里既重建会话又带着桥，所以实测了一次：起 `omp --mode acp`（临时 HOME、`host_llm: deny`、配置与其它探针同形），ACP 的 `initialize` 有正常应答（`protocolVersion: 1`、`agentInfo.version 18.8.7`），但**扩展根本没被加载**——stderr 里一次都没提到 extension，进程一个端口都没在听，`/a2mcp` 连不上。也就是说 ACP 模式不加载 `~/.omp/agent/extensions/`，那个发射点对桥不可达。两条路都试过之后，这项覆盖的阻塞不在桥这一侧，而在宿主没有为 Main 暴露重建口；要它得宿主加一个 rpc/ACP 钩子。
 
 这条也解释了为什么降级状态在真实宿主上验不了：降级需要「开关开着 + 换主会话 + 新目录里有拦不住的道」，而换主会话这一步就驱动不了。降级的覆盖留在 `test/takeover-arm.test.ts` 的 stub session 上（读出 `degraded`、恢复后清掉、拒绝排在恢复之前——三项各有变异）。
 
@@ -356,10 +370,10 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 第四项以前只 warn，那是这条不变量唯一的信号恰好落在没人必须处理的地方：宿主自己会升级（`startup.checkUpdate`，默认开），而 CI 两个 job 都看不见——`check` 用 frozen-lockfile 装，pin 与 lock 自洽；`host-probes` 装的就是 pin 本身，比的也是 pin。**没人必须处理的 warn 不是守卫**，所以它现在 fail。
 
-失败信息同时给出两个版本与修法。确实要对着别的宿主版本跑时用 `A2A_SKIP_HOST_VERSION_CHECK=1`，会打一行大声的 SKIPPED 日志，不会静默。宿主二进制认 `OMP_BIN`。
+失败信息同时给出两个版本与修法。确实要对着别的宿主版本跑时用 `A2MCP_SKIP_HOST_VERSION_CHECK=1`，会打一行大声的 SKIPPED 日志，不会静默。宿主二进制认 `OMP_BIN`。
 
 ## 约定
 
 - `test/*.test.ts` 被 `bun test` 自动发现；核验脚本（`smoke.ts` / `hardening.ts` / `approval-probe.ts` / `obtain-probe.ts`）故意不带 `.test` 后缀，只能手动跑，避免 CI/本地把真实宿主进程拉起来。
-- 环境变量：`OMP_BIN`（宿主二进制）、`REPO`（仓库根，脚本默认自推导）、`A2A_BRIDGE_AUDIT`（审计日志路径，默认 `<agentDir>/a2a-bridge.log`）、`A2A_BRIDGE_INSTALLS`（安装账本路径，默认 `<agentDir>/a2a-bridge.installs.json`，见 `src/obtain.ts`）、`A2A_OBTAIN_TARGET`（`test:obtain` 的安装目录覆盖，默认临时目录，所以它不会写真的 `~/.local/bin`）、`A2A_SKIP_HOST_VERSION_CHECK`（设 `1` 跳过版本守卫的宿主比较，见上一节）。
+- 环境变量：`OMP_BIN`（宿主二进制）、`REPO`（仓库根，脚本默认自推导）、`A2MCP_AUDIT`（审计日志路径，默认 `<agentDir>/a2mcp.log`）、`A2MCP_INSTALLS`（安装账本路径，默认 `<agentDir>/a2mcp.installs.json`，见 `src/obtain.ts`）、`A2MCP_OBTAIN_TARGET`（`test:obtain` 的安装目录覆盖，默认临时目录，所以它不会写真的 `~/.local/bin`）、`A2MCP_SKIP_HOST_VERSION_CHECK`（设 `1` 跳过版本守卫的宿主比较，见上一节）。
 - 判定性结论（如审批挂起语义）必须由核验复核，不以源码阅读或推理代替——这是本仓库评审沉淀的规矩。

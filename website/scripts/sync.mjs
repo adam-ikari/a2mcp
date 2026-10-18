@@ -34,13 +34,13 @@ if (process.env.DRAFT === "1") {
 		`---
 layout: home
 hero:
-  name: omp A2A Bridge
+  name: a2mcp
   text: 文档站正在重写
   tagline: 扩展的形态还没定下来，现在发布出来的内容可能改掉。仓库里的 README 与 docs 是准绳，改完再上线。
   actions:
     - theme: alt
       text: 看仓库
-      link: https://github.com/adam-ikari/pi-a2a-ext
+      link: https://github.com/adam-ikari/a2mcp
 features: []
 ---
 `,
@@ -59,7 +59,7 @@ const PAGE_DESCRIPTIONS = {
 	"protocol.md":
 		"桥实现的 MCP 2025-11-25 Streamable HTTP 子集：处理顺序、会话生命周期、错误码总表、POST /host-llm 的宿主推理切换，以及它放弃的东西。",
 	"testing.md":
-		"核验矩阵：3 项仓库形状（无依赖，排在 bun test 之前）、160 单测、28 项真实模型注册表（不起宿主）、34 项加固、33 项发布包与端到端、34 项宿主推理 deny/restore、8 个端到端场景，另有审批边界判别。顺手量的还有审计轮转与逐层脱敏；插件发现与 HOME 的实测结论在正文。",
+		"核验矩阵：3 项仓库形状（无依赖，排在 bun test 之前）、194 单测、28 项真实模型注册表（不起宿主）、34 项加固、48 项发布包与端到端、34 项宿主推理 deny/restore、8 个端到端场景，另有审批边界判别。顺手量的还有审计轮转与逐层脱敏；插件发现与 HOME 的实测结论在正文。",
 	"computer-use.md":
 		"computer use 让模型看屏幕猜坐标去点按，本桥让调用方按名字调工具。执行走的是本机工具自己的实现，目录由 tools/list 一条条给出名字和参数。",
 };
@@ -84,8 +84,10 @@ for (const [file, description] of Object.entries(PAGE_DESCRIPTIONS)) {
 // copy the tracked website/public assets there as part of generation.
 cpSync(join(SITE, "public"), join(CONTENT, "public"), { recursive: true });
 // and a half-rewritten link is a broken link in the site build.
+// The H1 strip is by position, not by name: the site carries the project name in
+// SITE_NAME (config.ts), so naming it here too would be a second copy to forget.
 const intro = readFileSync(join(REPO, "README_ZN.md"), "utf8")
-	.replace(/^# omp A2A Bridge\n/, "")
+	.replace(/^# .+\n/, "")
 	.replace(/^\[English\]\(README\.md\) \| 简体中文\n+/m, "")
 	.replaceAll("](docs/protocol.md)", "](./protocol.md)")
 	.replaceAll("](docs/testing.md)", "](./testing.md)")
@@ -133,7 +135,7 @@ const home = `---
 layout: home
 
 hero:
-  name: omp A2A Bridge
+  name: a2mcp
   text: 把本机的工具开给远程的 agent
   tagline: 一个 omp 扩展。装上后，本机 omp 多开出一个 MCP 接口，别的 agent 从远程调用这台机器上的 read、bash、edit——命令在本机真跑，文件在本机真改。推理归调用方，桥自己从不请求模型。
   actions:
@@ -164,7 +166,7 @@ features:
     details: 客户端要实现的全部约定：处理顺序、会话生命周期、错误码总表。
     link: /protocol
   - title: 测试与核验
-    details: 160 项单测之外，六个核验全都拉起真实的 omp 跑完整流程；宿主推理那一个让宿主真连进计数 sink，发布包那一个装回去跑通才算过，第七个把接管架在宿主真实的模型注册表上跑、连宿主都不用起。各项覆盖什么、怎么判读，测试页写着。
+    details: 194 项单测之外，六个核验全都拉起真实的 omp 跑完整流程；宿主推理那一个让宿主真连进计数 sink，发布包那一个装回去跑通才算过，第七个把接管架在宿主真实的模型注册表上跑、连宿主都不用起。各项覆盖什么、怎么判读，测试页写着。
     link: /testing
 ---
 `;

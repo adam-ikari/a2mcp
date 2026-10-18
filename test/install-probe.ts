@@ -71,7 +71,7 @@ import { XFER_TOOL_NAMES } from "../src/xfer.ts";
 import { linkExtension, seedModels } from "./harness";
 
 const REPO = resolve(import.meta.dir, "..");
-const SPEC = process.env.A2MCP_INSTALL_SPEC ?? "https://github.com/adam-ikari/pi-a2a-ext.git";
+const SPEC = process.env.A2MCP_INSTALL_SPEC ?? "https://github.com/adam-ikari/a2mcp.git";
 
 let failures = 0;
 /**

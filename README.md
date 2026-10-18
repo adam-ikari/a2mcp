@@ -1,8 +1,10 @@
-# omp A2A Bridge
+# a2mcp
 
 [简体中文](README_ZN.md)
 
 This is an omp extension. Once installed, the omp running on this machine also serves an MCP endpoint (MCP is the standard protocol for agents calling external tools): any program that speaks MCP — another omp, Claude Code, a curl script — can call this machine's tools (`read`, `bash`, `edit`…), and the commands run for real in this machine's shell, on this machine's files. The bridge itself never issues a model request: request in, tool run, result back — the reasoning is on the caller's side. It listens on `127.0.0.1` by default; reaching it from another machine means SSH port forwarding.
+
+The name states the mechanism: **a2mcp** — Agent2MCP, one agent's tool surface handed to another agent over HTTP. The A2A in the old name is a different protocol, and this code implements none of it: no agent card, no task state machine, no `contextId` or `taskId`. What is on the wire is MCP `2025-11-25`, and the semantics are "the caller names a tool, the host runs it".
 
 ## Which one to use
 
@@ -63,14 +65,32 @@ graph TB
 On any machine, from the git URL:
 
 ```sh
-omp install https://github.com/adam-ikari/pi-a2a-ext.git
+omp install https://github.com/adam-ikari/a2mcp.git
 ```
 
-That installs it into `~/.omp/plugins/node_modules/pi-a2a-ext`. To remove it:
+That installs it into `~/.omp/plugins/node_modules/a2mcp`. To remove it:
+
+```sh
+omp plugin uninstall a2mcp
+```
+
+**Upgrading from v0.3.0 or earlier: uninstall first.** The plugin lock keeps its
+record under `package.json:name`, and this round changed the name. Installing the
+new URL while `pi-a2a-ext` is still registered leaves both entries in place, and
+the host loads both — two ports, two tokens, two takeover arms in one process,
+where the second arm's snapshot is the only one left to restore from.
 
 ```sh
 omp plugin uninstall pi-a2a-ext
+omp install https://github.com/adam-ikari/a2mcp.git
 ```
+
+Nothing reads `~/.omp/agent/a2a-bridge.json` any more and the bridge does not look
+for it: the config file is `~/.omp/agent/a2mcp.json` now, with a token generated
+fresh, so every remote `mcp.json` has to be re-copied. `a2a-bridge.log` and
+`a2a-bridge.installs.json` stay where they are; the new generation writes its own
+two files. Leftover `A2A_BRIDGE_*` environment variables are ordinary variables
+now — nobody reads them.
 
 **That is the only install path.** `omp install` itself also takes a directory and
 npm specs, but this extension does not offer a local install: what you install is
@@ -115,7 +135,7 @@ self-contained, and it leaves no registration on your real machine. See
 [docs/testing.md](docs/testing.md).
 
 Nor hand-symlink into `~/.omp/agent/extensions/`:
-`ln -s "$PWD/extensions/a2a-bridge.ts" ...` only works when `$PWD` happens to be
+`ln -s "$PWD/extensions/a2mcp.ts" ...` only works when `$PWD` happens to be
 the repo root. Run it from anywhere else and it links a path that does not exist,
 the bridge never comes up, and the host says nothing about it.
 
@@ -125,14 +145,14 @@ On first start the bridge generates its own config and token under
 After starting the host omp, the notification bar shows:
 
 ```
-A2A bridge listening on http://127.0.0.1:<port> (token <first 6 chars>…)
+a2mcp listening on http://127.0.0.1:<port> (token <first 6 chars>…)
 ```
 
 `<port>` is the actual listening port (random by default).
 
 ## Configuration
 
-The config file is `~/.omp/agent/a2a-bridge.json`, generated on first start with mode `0600` (created at that mode, so there is no permission window):
+The config file is `~/.omp/agent/a2mcp.json`, generated on first start with mode `0600` (created at that mode, so there is no permission window):
 
 ```json
 { "port": 0, "token": "<base64url 32B>", "host": "127.0.0.1", "host_llm": "allow", "xfer": { "dufs": "dufs", "cloudflared": "cloudflared" } }
@@ -149,19 +169,19 @@ The config file is `~/.omp/agent/a2a-bridge.json`, generated on first start with
 
 Only those fields: the four top-level ones above, plus an optional `xfer` block. **There is no tool allow/deny list and no file sandbox** — the bridge makes no permission decision of its own, so adding such fields to the config has no effect (unknown fields are ignored). `host_llm` is not a tool permission either: it gates the host's *own inference*, not what the caller may execute — the caller holds the token and runs whatever the host exposes.
 
-`A2A_BRIDGE_CONFIG` overrides the config path; `A2A_BRIDGE_AUDIT` overrides the audit log path; `A2A_BRIDGE_INSTALLS` overrides where the bridge keeps its record of binaries it fetched.
+`A2MCP_CONFIG` overrides the config path; `A2MCP_AUDIT` overrides the audit log path; `A2MCP_INSTALLS` overrides where the bridge keeps its record of binaries it fetched.
 
 Validation is **fail-closed**: a present-but-malformed field (`port` not an integer or out of range, `host` not a non-empty string, `token` shorter than 32 characters or containing whitespace) makes the extension refuse to start and report an error. The one exception is a `token` that is **absent** (or not a string at all): it is regenerated and **written back to the config**, so it stays stable across restarts. A token somebody typed is never replaced by one the bridge chose — that would break the remote `mcp.json` with no explanation anywhere. The floor sits below what `generateToken` emits (43 characters), so it catches a placeholder, not a secret copied from elsewhere.
 
-Config edits take effect on the **next host restart**; to change only the token at runtime, use `/a2a rotate` (immediate, and the old token stops working at once).
+Config edits take effect on the **next host restart**; to change only the token at runtime, use `/a2mcp rotate` (immediate, and the old token stops working at once).
 
 ### Commands
 
 Inside a host session:
 
-- `/a2a` — show the current listen address, port and token prefix
-- `/a2a rotate` — rotate the token (update the remote `mcp.json` afterwards)
-- `/a2a token` — print the full token (the status line only shows a prefix)
+- `/a2mcp` — show the current listen address, port and token prefix
+- `/a2mcp rotate` — rotate the token (update the remote `mcp.json` afterwards)
+- `/a2mcp token` — print the full token (the status line only shows a prefix)
 
 ## Remote connection example
 
@@ -219,7 +239,7 @@ The measured wake-up chain (see [Security and boundaries](#security-and-boundari
 
 **`deny` means the host's own session cannot make a model request.** Three layers, divided by which door a given inference request finally leaves through — a division read off the host's own source, not assumed:
 
-- **A deny API plus the model row the host is holding.** `a2a-deny` is registered as a custom API whose `streamSimple` only counts and fails, and the row the host's agent holds is swapped for a deny copy of itself. The host's own turn is therefore refused before a request is built: one attempt, one stderr line, and the error `a2a-bridge takeover: host inference is disabled in this mode`. The text matches none of the host's retry triggers — measured on a live host, a denied turn makes exactly one attempt and ends with `retryable: false`. The deny copy carries no credential resolver, so a refused turn does not even run the provider's `!command` key program.
+- **A deny API plus the model row the host is holding.** `a2mcp-deny` is registered as a custom API whose `streamSimple` only counts and fails, and the row the host's agent holds is swapped for a deny copy of itself. The host's own turn is therefore refused before a request is built: one attempt, one stderr line, and the error `a2mcp takeover: host inference is disabled in this mode`. The text matches none of the host's retry triggers — measured on a live host, a denied turn makes exactly one attempt and ends with `retryable: false`. The deny copy carries no credential resolver, so a refused turn does not even run the provider's `!command` key program.
 - **A destination-keyed tripwire** on the host process's `globalThis.fetch`: any request whose URL host matches a `baseUrl` from the model configuration is refused. pi-ai resolves its fetch as `options.fetch ?? globalThis.fetch`, reading the global binding per call, so this covers every fetch-based inference request — including callers that build their own registry (task runners, web search, commit messages) instead of asking the session's.
 - **Registry shadowing, for the two providers whose requests skip fetch.** Two lanes are not fetches: the cowork lane (`provider: anthropic` with `api: anthropic-messages`, where the host swaps in a raw `node:https` client) and the Codex websocket lane (`api: openai-codex-responses`, where the host forwards the `providers.openaiWebsockets` setting on every provider call). Those provider names go behind the deny; on a stock install that is 2 of 73.
 
@@ -227,9 +247,9 @@ The measured wake-up chain (see [Security and boundaries](#security-and-boundari
 
 A noise layer mutes the settings that would otherwise keep the host busy and chatty (auto-backgrounding of long commands, host-side retries, advisor, TTSR, prewalk, autolearn, cache warming, auto-compaction) — runtime overrides, nothing persisted. Measured: with the takeover armed, a remote 3-second `bash` runs to completion instead of becoming a background job.
 
-**Who controls it.** `host_llm` in the config decides the startup state (`allow` when unset). At runtime, `POST /host-llm` with `{"enabled": false}` arms the deny and `{"enabled": true}` restores what the takeover snapshotted (the deny API is unregistered, claimed providers restored, the original model row put back, the fetch reference and settings overrides rolled back); the reply is `{enabled, denied, degraded}`. Same Bearer token as everything else, and every toggle writes one audit record tagged `tool: "host_llm"` — a refused arming writes one too (`sid: null`, since no caller asked) plus a stderr line, because a toast scrolls away and an audit record does not. The endpoint is deliberately **not** a tool: `tools/list` stays the host registry verbatim. `/a2a` shows the live state (`host_llm=deny denied=2`). A toggle never persists — restart returns to the operator's config. Arming is redone on every `session_start`, whether the config or a remote caller turned it on: a rebuilt session comes with a registry nothing has shadowed, and a listening port says nothing about the registry's state. The arm line names the claimed providers (`takeover armed: 2 provider(s) shadowed (anthropic, openai-codex), …`) — a claim takes a name away from whoever held it and the registry cannot give it back, so that line is the only place the operator can see which names the bridge holds.
+**Who controls it.** `host_llm` in the config decides the startup state (`allow` when unset). At runtime, `POST /host-llm` with `{"enabled": false}` arms the deny and `{"enabled": true}` restores what the takeover snapshotted (the deny API is unregistered, claimed providers restored, the original model row put back, the fetch reference and settings overrides rolled back); the reply is `{enabled, denied, degraded}`. Same Bearer token as everything else, and every toggle writes one audit record tagged `tool: "host_llm"` — a refused arming writes one too (`sid: null`, since no caller asked) plus a stderr line, because a toast scrolls away and an audit record does not. The endpoint is deliberately **not** a tool: `tools/list` stays the host registry verbatim. `/a2mcp` shows the live state (`host_llm=deny denied=2`). A toggle never persists — restart returns to the operator's config. Arming is redone on every `session_start`, whether the config or a remote caller turned it on: a rebuilt session comes with a registry nothing has shadowed, and a listening port says nothing about the registry's state. The arm line names the claimed providers (`takeover armed: 2 provider(s) shadowed (anthropic, openai-codex), …`) — a claim takes a name away from whoever held it and the registry cannot give it back, so that line is the only place the operator can see which names the bridge holds.
 
-**Degraded.** A refusal while the switch is on is not the same as a refusal at startup. The switch stays on and the process-global tripwire stays installed, but the session that is live now never got the deny row or the claims — so its two non-fetch lanes are unguarded. The reply carries `degraded: true`, `/a2a` prints `host_llm=deny (tripwire only)`, and stderr plus the audit say so. The refusal check runs before the old session is restored precisely so that a failed re-arm does not also tear down the tripwire on its way out.
+**Degraded.** A refusal while the switch is on is not the same as a refusal at startup. The switch stays on and the process-global tripwire stays installed, but the session that is live now never got the deny row or the claims — so its two non-fetch lanes are unguarded. The reply carries `degraded: true`, `/a2mcp` prints `host_llm=deny (tripwire only)`, and stderr plus the audit say so. The refusal check runs before the old session is restored precisely so that a failed re-arm does not also tear down the tripwire on its way out.
 
 **What it gives up, and what stays outside the promise.**
 
@@ -254,7 +274,7 @@ Files move over plain HTTP: `xfer_share` hands a host path to `dufs` ([sigoden/d
 
 Prerequisites: `dufs` and `cloudflared`. The bridge finds both itself — `PATH` first, and when nothing answers there it fetches a pinned build into `~/.local/bin` and uses that. Both are pinned by version and sha256 in `src/obtain.ts`: `dufs` 0.46.0 and `cloudflared` 2026.10.1, four platform rows each, every hash re-checked against the bytes GitHub actually serves by `bun run test:obtain`. It never asks for `latest`, and it never takes a checksum from the same server that gave it the bytes.
 
-The fetch is one more opinion from a bridge that otherwise forwards: it had already picked `dufs` as the file server, so what it decides here is only where the bytes come from. A path is the exit — write `xfer.dufs` as `"/srv/bin/dufs"` and the bridge uses that file as given and downloads nothing. A bare name is the request to look, and to fetch if looking finds nothing. It will not overwrite a binary it did not install: an existing `~/.local/bin/dufs` that is not the build this bridge wrote is refused, with its own sha256 printed, and the account of what was installed sits in `<agentDir>/a2a-bridge.installs.json`.
+The fetch is one more opinion from a bridge that otherwise forwards: it had already picked `dufs` as the file server, so what it decides here is only where the bytes come from. A path is the exit — write `xfer.dufs` as `"/srv/bin/dufs"` and the bridge uses that file as given and downloads nothing. A bare name is the request to look, and to fetch if looking finds nothing. It will not overwrite a binary it did not install: an existing `~/.local/bin/dufs` that is not the build this bridge wrote is refused, with its own sha256 printed, and the account of what was installed sits in `<agentDir>/a2mcp.installs.json`.
 
 A share that has to fetch waits for the fetch, and says so: the reply carries `installed` with the version pulled (`null` for anything that was already there). Every call is audited as `tool: "xfer"`, one record per call, with `action: install` on the fetches.
 
@@ -293,7 +313,7 @@ The listing is decided by the host at runtime — it depends on which extensions
 - **`POST /host-llm` is the bridge's path that is not a tool.** It reaches into the host session directly — swapping registry rows, overriding settings, replacing the process `fetch` — so the bridge holds an opinion, bypasses the host's tool dispatch, and pays for it with auditing (`tool: "host_llm"`, one record per toggle) and documentation. What it limits is the host's own inference, and it acts only on the word of whoever holds the token. See [Host inference takeover](#host-inference-takeover).
 - Loopback-only by default; if you really do expose it, the firewall is your responsibility.
 - **Sessions are mandatory**: every message except `initialize` must carry `Mcp-Session-Id` (missing → 400, unknown or idle past 24h → 404). At most 64 sessions are tracked, with the least-recently-seen evicted beyond that; every hit refreshes the idle timer.
-- **Audit log**: every remote `tools/call` writes two JSONL records — `{ts,id,sid,phase:"start",tool,args}` at dispatch and `{ts,id,sid,phase:"done",tool,isError,args}` on completion (paired by the same `id`; `sid` is that call's `Mcp-Session-Id`, so under a shared token each call is attributable to a client session; the args summary is truncated to 1KB) — to `~/.omp/agent/a2a-bridge.log`, mode 0600, rotating to `.1` past 512KB. The `id` is a UUID the bridge generates for pairing; the caller's JSON-RPC id is not written, so the log cannot be searched by it. Strings longer than 120 characters in the args are recorded as `<len:N,sha256:first 8>` so the log never holds payloads — at any nesting depth, not just the top levels: the host's `edit` args put the file body at `args.edits[0].oldText`, and a redactor that stops two levels deep writes it out. Nesting past 32 levels is replaced by `<max-depth>` rather than walked. This is the bridge's own log: the host session still sees the args it was handed, and its transcript is the host's to keep. Records reach the disk through one queue per process, because `stat`-then-rotate-then-append is three steps: two calls in flight together both read a size past the cap and both rotate, and the second `rename` overwrites the `.1` the first one just filled. Measured on the unqueued version over six runs: the worst left one record in each of the two files, 570 of the 572 records the test had put on disk being in neither. Audit write failures never affect the call, and they do not pass unnoticed either: the first failure for a log path prints `[a2a-bridge] audit record not written to <path> (<cause>)` to the host's stderr, then every hundredth failure, because a log that cannot be written looks exactly like a bridge that was never called. `start` reaches the disk before the tool runs and `done` before the response goes out, so a 200 means the line is already there and a caller can read the log without polling for it. That was the other way round before — records rode one process-wide queue the caller never waited on — and it showed up only when the disk was slow enough for the queue to matter; measured cost of waiting is ~99 µs per record (`stat` + `appendFile` + `chmod`, serialized), which is nothing against a call that runs a bash command. Unauthorized attempts write nothing here at all — they go to the host's stderr, first one and then every 50th — since handing pre-auth traffic the one lever that ages real records out of a rolling window costs more than the missing line is worth.
+- **Audit log**: every remote `tools/call` writes two JSONL records — `{ts,id,sid,phase:"start",tool,args}` at dispatch and `{ts,id,sid,phase:"done",tool,isError,args}` on completion (paired by the same `id`; `sid` is that call's `Mcp-Session-Id`, so under a shared token each call is attributable to a client session; the args summary is truncated to 1KB) — to `~/.omp/agent/a2mcp.log`, mode 0600, rotating to `.1` past 512KB. The `id` is a UUID the bridge generates for pairing; the caller's JSON-RPC id is not written, so the log cannot be searched by it. Strings longer than 120 characters in the args are recorded as `<len:N,sha256:first 8>` so the log never holds payloads — at any nesting depth, not just the top levels: the host's `edit` args put the file body at `args.edits[0].oldText`, and a redactor that stops two levels deep writes it out. Nesting past 32 levels is replaced by `<max-depth>` rather than walked. This is the bridge's own log: the host session still sees the args it was handed, and its transcript is the host's to keep. Records reach the disk through one queue per process, because `stat`-then-rotate-then-append is three steps: two calls in flight together both read a size past the cap and both rotate, and the second `rename` overwrites the `.1` the first one just filled. Measured on the unqueued version over six runs: the worst left one record in each of the two files, 570 of the 572 records the test had put on disk being in neither. Audit write failures never affect the call, and they do not pass unnoticed either: the first failure for a log path prints `[a2mcp] audit record not written to <path> (<cause>)` to the host's stderr, then every hundredth failure, because a log that cannot be written looks exactly like a bridge that was never called. `start` reaches the disk before the tool runs and `done` before the response goes out, so a 200 means the line is already there and a caller can read the log without polling for it. That was the other way round before — records rode one process-wide queue the caller never waited on — and it showed up only when the disk was slow enough for the queue to matter; measured cost of waiting is ~99 µs per record (`stat` + `appendFile` + `chmod`, serialized), which is nothing against a call that runs a bash command. Unauthorized attempts write nothing here at all — they go to the host's stderr, first one and then every 50th — since handing pre-auth traffic the one lever that ages real records out of a rolling window costs more than the missing line is worth.
 - **A `start` with no `done` means the call was dispatched but never completed** (typically: an approval hung for want of a UI). Two catches on reading that signal, both measured: rotation can split one call's pair across `.1` and the current file, so pair by `id` in both files; and only ONE generation is retained, because the next rotation overwrites `.1` — the evidence of a hung call ages out of the log after enough later traffic. Read it while it is still there.
 - If the configured port is busy, the bridge falls back to an ephemeral port and warns (update the port in the remote `mcp.json`).
 
@@ -301,7 +321,7 @@ How this differs from computer use (guessing pixel coordinates on a screenshot) 
 
 The full wire contract — request/response shapes, processing order, session lifecycle and the error-code table — is in [docs/protocol.md](docs/protocol.md).
 
-Online docs (GitHub Pages, published on push): <https://adam-ikari.github.io/pi-a2a-ext/>
+Online docs (GitHub Pages, published on push): <https://adam-ikari.github.io/a2mcp/>
 
 v1 boundaries:
 
@@ -319,18 +339,18 @@ Design trade-off (read this before adding a feature):
 
 ## Troubleshooting
 
-- **401 `unauthorized`**: the token does not match. The remote `mcp.json`'s `Authorization` header must equal the config's `token`; update the remote side after `/a2a rotate`. The host's stderr says `[a2a-bridge] N unauthorized attempt(s)` for the first failure and every 50th after it; those attempts stay out of the audit log on purpose (see the audit bullet under [Security and boundaries](#security-and-boundaries)).
-- **The bridge refuses to start with `field 'token' must be at least 32 characters`**: somebody wrote a short token into `a2a-bridge.json`. Put a real secret there (or delete the field and let the bridge generate and persist one); the bridge will not swap out a token it was handed.
+- **401 `unauthorized`**: the token does not match. The remote `mcp.json`'s `Authorization` header must equal the config's `token`; update the remote side after `/a2mcp rotate`. The host's stderr says `[a2mcp] N unauthorized attempt(s)` for the first failure and every 50th after it; those attempts stay out of the audit log on purpose (see the audit bullet under [Security and boundaries](#security-and-boundaries)).
+- **The bridge refuses to start with `field 'token' must be at least 32 characters`**: somebody wrote a short token into `a2mcp.json`. Put a real secret there (or delete the field and let the bridge generate and persist one); the bridge will not swap out a token it was handed.
 - **The bridge refuses to start with `field 'host_llm' must be 'deny' or 'allow'`**: the field was written with anything else (`"false"`, `"ALLOW"`, a boolean). The value decides the takeover's startup state; a fuzzy one is refused, not guessed (see [Host inference takeover](#host-inference-takeover)).
-- **Takeover fails to arm** (`A2A takeover failed to arm: … transport 'pi-native' …` on `/a2a`, on stderr as `[a2a-bridge] takeover failed to arm: …`, and as one `host_llm` audit record with an `error`): the model configuration contains a `transport` on a provider the deny does not claim, which the bridge cannot honestly intercept, so arming is refused and inference continues under the host's own rules. Remove or reconfigure that provider if deny is required.
+- **Takeover fails to arm** (`a2mcp takeover failed to arm: … transport 'pi-native' …` on `/a2mcp`, on stderr as `[a2mcp] takeover failed to arm: …`, and as one `host_llm` audit record with an `error`): the model configuration contains a `transport` on a provider the deny does not claim, which the bridge cannot honestly intercept, so arming is refused and inference continues under the host's own rules. Remove or reconfigure that provider if deny is required.
 - **`takeover restore left N provider(s) unregistered … restart the host to recover`** on the host's stderr: one of the two claimed providers had been registered at runtime by another extension rather than configured in `models.yml`, and the registry's undo cannot replay somebody else's registration. The deny itself is back in place; only that provider is missing until the host restarts.
-- **No audit records, and no call failed**: the log path is unwritable — `$A2A_BRIDGE_AUDIT` pointing into a directory that does not exist, a permission error, or a full disk. Host stderr carries `[a2a-bridge] audit record not written to <path> (<cause>)`. Fixing the path does not recover what was already lost.
+- **No audit records, and no call failed**: the log path is unwritable — `$A2MCP_AUDIT` pointing into a directory that does not exist, a permission error, or a full disk. Host stderr carries `[a2mcp] audit record not written to <path> (<cause>)`. Fixing the path does not recover what was already lost.
 - **400 `missing mcp-session-id` / 404 `unknown session`**: every message except `initialize` needs the session header. Sessions are in-memory in the host process — they all die when the host restarts and are reclaimed after 24h idle; run `initialize` again for a new session (a well-behaved MCP client library does this automatically).
-- **Cannot connect / wrong port**: if the configured port is busy at host startup, the bridge falls back to a random port and warns in the notification bar — use the actual port shown there or in `/a2a` to update `mcp.json`.
+- **Cannot connect / wrong port**: if the configured port is busy at host startup, the bridge falls back to a random port and warns in the notification bar — use the actual port shown there or in `/a2mcp` to update `mcp.json`.
 - **A call never returns**: the host has no interactive UI and the tool's approval is `prompt` (see [Approval](#approval)) — the command does not execute, but neither does the call return; the caller must impose its own timeout, and the audit log shows a `start` with no `done` for that call (see the audit-log bullet under [Security and boundaries](#security-and-boundaries)).
-- **500 `internal error`**: an internal server fault; the response body is deliberately detail-free (to avoid leaking), and the real cause is in the host's stderr as `[a2a-bridge] internal error: …`.
-- **Config edits do not take effect**: external edits to `a2a-bridge.json` (such as `port`) need a host restart; only `/a2a rotate` applies live at runtime.
-- **`bun test` version guard fails** (development): either the installed `@oh-my-pi/pi-*` is out of sync with the pin/lock (`bun install` restores it), or the local `omp --version` disagrees with the pin (update the two exact versions in `package.json` when you upgrade the host). The host comparison used to warn only, which let the pin drift unnoticed; it fails now, and is skipped only when there is no host on `PATH`. To run against a deliberately different host, set `A2A_SKIP_HOST_VERSION_CHECK=1` — it prints a loud SKIPPED rather than passing silently.
+- **500 `internal error`**: an internal server fault; the response body is deliberately detail-free (to avoid leaking), and the real cause is in the host's stderr as `[a2mcp] internal error: …`.
+- **Config edits do not take effect**: external edits to `a2mcp.json` (such as `port`) need a host restart; only `/a2mcp rotate` applies live at runtime.
+- **`bun test` version guard fails** (development): either the installed `@oh-my-pi/pi-*` is out of sync with the pin/lock (`bun install` restores it), or the local `omp --version` disagrees with the pin (update the two exact versions in `package.json` when you upgrade the host). The host comparison used to warn only, which let the pin drift unnoticed; it fails now, and is skipped only when there is no host on `PATH`. To run against a deliberately different host, set `A2MCP_SKIP_HOST_VERSION_CHECK=1` — it prints a loud SKIPPED rather than passing silently.
 
 ## Development
 
@@ -360,7 +380,7 @@ File layout:
 
 | Path | Responsibility |
 | --- | --- |
-| `extensions/a2a-bridge.ts` | Extension entry point: starts the server on `session_start`, registers `/a2a` |
+| `extensions/a2mcp.ts` | Extension entry point: starts the server on `session_start`, registers `/a2mcp` |
 | `src/server.ts` | `Bun.serve` + JSON-RPC (MCP 2025-11-25, plain JSON responses), sessions and version negotiation |
 | `src/bridge.ts` | Tool catalog and execution (both through the AgentRegistry `Main` session, with the pinned `pi.getAllTools` only as the no-live-Main fallback), exposure-intersection decision |
 | `src/config.ts` | Config load/save, field validation, token generation |

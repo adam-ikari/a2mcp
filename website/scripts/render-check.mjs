@@ -29,7 +29,7 @@ const MIME = {
 	".txt": "text/plain",
 };
 
-// VitePress serves this site at a base path on GitHub Pages (e.g. /pi-a2a-ext/),
+// VitePress serves this site at a base path on GitHub Pages (e.g. /a2mcp/),
 // where every asset URL is prefixed. The probe has to speak whatever base the
 // build used, or the page loads its HTML but 404s on the entry JS and nothing
 // hydrates — which looks exactly like a broken diagram.
@@ -253,7 +253,7 @@ for (const file of ["index.html", "testing.html"]) {
 	let total = 0;
 	const missing = [];
 	for (const href of preloads) {
-		// hrefs are base-prefixed (/pi-a2a-ext/assets/x.js); dist is not.
+		// hrefs are base-prefixed (/a2mcp/assets/x.js); dist is not.
 		const asset = join(DIST, href.replace(/^.*\/assets\//, "assets/"));
 		try {
 			total += statSync(asset).size;

@@ -49,12 +49,23 @@ import { join, resolve } from "node:path";
 
 const REPO = resolve(process.env.REPO ?? join(import.meta.dir, ".."));
 const SCRIPT = join(REPO, "scripts", "bootstrap.sh");
-const PLUGIN = "pi-a2a-ext";
-const README_URL = "https://github.com/adam-ikari/pi-a2a-ext.git";
 
+// Neither identity is typed here. PLUGIN is what the host keys its lock on
+// (package.json:name), README_URL is what a reader is told to run (the install
+// line in README.md) — the script has to agree with both, and a rename that
+// lands on one side only now shows up as a red assertion instead of a probe
+// seeding a name nobody publishes.
 const manifest = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as {
+	name?: string;
 	devDependencies?: Record<string, string>;
 };
+const PLUGIN = manifest.name ?? "";
+const README_URL = readFileSync(join(REPO, "README.md"), "utf8").match(/^omp install (\S+)$/m)?.[1] ?? "";
+// Preconditions, not assertions: an empty derivation means this probe has no
+// name to test with, so it must not run and report a clean sheet.
+if (PLUGIN === "") throw new Error("no name in package.json — cannot derive the plugin name");
+if (README_URL === "") throw new Error("no `omp install <url>` line in README.md — cannot derive the install URL");
+
 const PIN = manifest.devDependencies?.["@oh-my-pi/pi-coding-agent"] ?? "";
 const SPEC = process.env.A2MCP_BOOTSTRAP_SPEC ?? ".";
 

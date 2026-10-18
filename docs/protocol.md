@@ -1,6 +1,6 @@
 # 协议参考
 
-omp A2A Bridge 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable HTTP 子集，所有响应为纯 JSON（无 SSE 流）。权威实现是 [`src/server.ts`](../src/server.ts)；本文与代码冲突时以代码为准。使用侧背景（安装、配置、威胁模型）见 [README](../README.md)。
+a2mcp 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable HTTP 子集，所有响应为纯 JSON（无 SSE 流）。权威实现是 [`src/server.ts`](../src/server.ts)；本文与代码冲突时以代码为准。使用侧背景（安装、配置、威胁模型）见 [README](../README.md)。
 
 ## 传输
 
@@ -46,7 +46,7 @@ omp A2A Bridge 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable
 
 deny 是三层的并集，分工按「每条推理请求最后从哪个口出去」划的，判据读自宿主自己的代码（`pi-ai/src/utils/transport-fetch.ts` 是所有推理请求必经的那一个 fetch）：
 
-- **deny api + 宿主当前持有的模型行。** `a2a-deny` 注册成自定义 api，它的 `streamSimple` 只计数、只失败；`agent.setModel` 把宿主 agent 手里那一行换成同一行的 deny 副本（agent 持有的是它捕获的 `Model` 对象，不是查表）。宿主自己那一轮因此在建请求之前就被拒：一次尝试，不进重试循环，也不去解析凭据（deny 副本不带 `resolveHeaders`，否则 pi-ai 会在 api 分派之前先跑 provider 的 `!command` 取密钥程序）。返回错误 `a2a-bridge takeover: host inference is disabled in this mode`，这句话不命中宿主的任何重试触发条件，真实宿主上实测被拒的一轮只发起一次、以 `retryable: false` 终止。
+- **deny api + 宿主当前持有的模型行。** `a2mcp-deny` 注册成自定义 api，它的 `streamSimple` 只计数、只失败；`agent.setModel` 把宿主 agent 手里那一行换成同一行的 deny 副本（agent 持有的是它捕获的 `Model` 对象，不是查表）。宿主自己那一轮因此在建请求之前就被拒：一次尝试，不进重试循环，也不去解析凭据（deny 副本不带 `resolveHeaders`，否则 pi-ai 会在 api 分派之前先跑 provider 的 `!command` 取密钥程序）。返回错误 `a2mcp takeover: host inference is disabled in this mode`，这句话不命中宿主的任何重试触发条件，真实宿主上实测被拒的一轮只发起一次、以 `retryable: false` 终止。
 - **目的地绊线。** 包一层宿主进程的 `globalThis.fetch`，URL 主机匹配快照里任一 `baseUrl` 的请求一律拒绝。pi-ai 的取 fetch 顺序是 `options.fetch ?? globalThis.fetch`，取的是全局绑定、每次调用现读，所以这层盖住所有走 fetch 的推理请求——包括自建注册表、不问会话的那类调用者：task 执行器、web 搜索、commit 消息。
 - **注册表影子化，只声明不得不声明的那两个 provider。** 有两条道不是 fetch：cowork 道（`provider: anthropic` + `api: anthropic-messages` 时宿主换一个 `node:https` 直连客户端）和 Codex 的 websocket 道（`api: openai-codex-responses`，且宿主把 `providers.openaiWebsockets` 这个设置逐次转发给 provider 调用，所以是按 api 判、不是按行上的标志判）。这两条道的 provider 名字被重新注册到 deny 后面；默认装法下是 73 个 provider 里的 2 个。
 
@@ -54,9 +54,9 @@ deny 是三层的并集，分工按「每条推理请求最后从哪个口出去
 
 **为什么只声明这两个。** `ModelRegistry.registerProvider(name, …, sourceId)` 会把 `sourceId` 记成这个名字的所有者，而别人已经拥有时它先把在位者的运行期状态清掉再接管（overlay、动态模型管理器、discovery 状态、运行期 api key）；公开 API 里唯一的撤销 `clearSourceRegistrations` 是「这个扩展卸载了」，不是「撤销那一次调用」。所以「把目录里每个 provider 都影子化」等于删掉别的扩展注册过的每一个 provider，一次装配删一次、永不恢复——2026-10-13 在真实注册表上实测：一个扩展注册的两行 provider，一次 arm/restore 之后变成零行。同时那个合成的 source id 会进宿主的 `#registeredProviderSources`，而下一次建 session 时的 `syncExtensionSources(扩展路径表)` 会把它当已卸载的扩展剪掉。于是这张表按「哪条道逼的」来写，能不声明就不声明；`restoreTakeover` 也不再假设撤销一定干净，而是拿快照核对被声明的 provider，逐个点名没回来的。
 
-**启动状态与生命周期。** 配置字段 `host_llm`（`"deny" | "allow"`，缺省 `allow`）只决定启动状态。值为 `deny` 时入口在每次 `session_start` 都装一次：绑定端口之前装（端口开着而注册表没影子，等于给早到的调用方留一个宿主还能自己推理的窗口），会话重建之后也装——revive、ACP、task 子代理都会新建 runner，新的 `Main` 会话带着没被影子化的新注册表，端口在不在状态说明不了注册表的状态。**运行期由远端打开的 deny 同样在每次 `session_start` 重装**：宿主自己的扩展源对账可以把影子剪掉，重装是幂等的（`bun run test:registry` 有一项就盯这个）。切换从不落盘，重启回到操作员写下配置时的状态。装例行会把声明的 provider 名字打出来（`takeover armed: 2 provider(s) shadowed (anthropic, openai-codex), 68 tripwire key(s), model pushed: …`）——声明是把名字从原主人手里拿走，而注册表还不回去，所以操作员看得见的只有这一行，探针也靠它才分得清声明表里那两条道各自在不在。`/a2a` 显示的是运行态：`host_llm=deny denied=2`。
+**启动状态与生命周期。** 配置字段 `host_llm`（`"deny" | "allow"`，缺省 `allow`）只决定启动状态。值为 `deny` 时入口在每次 `session_start` 都装一次：绑定端口之前装（端口开着而注册表没影子，等于给早到的调用方留一个宿主还能自己推理的窗口），会话重建之后也装——revive、ACP、task 子代理都会新建 runner，新的 `Main` 会话带着没被影子化的新注册表，端口在不在状态说明不了注册表的状态。**运行期由远端打开的 deny 同样在每次 `session_start` 重装**：宿主自己的扩展源对账可以把影子剪掉，重装是幂等的（`bun run test:registry` 有一项就盯这个）。切换从不落盘，重启回到操作员写下配置时的状态。装例行会把声明的 provider 名字打出来（`takeover armed: 2 provider(s) shadowed (anthropic, openai-codex), 68 tripwire key(s), model pushed: …`）——声明是把名字从原主人手里拿走，而注册表还不回去，所以操作员看得见的只有这一行，探针也靠它才分得清声明表里那两条道各自在不在。`/a2mcp` 显示的是运行态：`host_llm=deny denied=2`。
 
-**降级状态。** 两种拒绝不能读成同一种。启动时拒绝（什么都没装）→ `enabled: true`，宿主按自己的规则推理，这是诚实的读数。而**开关开着的时候拒绝**（会话重建了，新会话的目录里有拦不住的道）→ 开关仍开着、进程级的绊线仍在，但新会话没拿到 deny 行、也没拿到声明，于是两条非 fetch 道在它上面是裸的。这时回包带 `degraded: true`，`/a2a` 显示 `host_llm=deny (tripwire only)`，stderr 与审计各留一行说明。装配的拒绝检查排在恢复旧会话**之前**就是为了这个：先恢复再拒绝，等于在失败的路上把绊线也拆了，操作员要 deny 得到的却是连绊线都没有。
+**降级状态。** 两种拒绝不能读成同一种。启动时拒绝（什么都没装）→ `enabled: true`，宿主按自己的规则推理，这是诚实的读数。而**开关开着的时候拒绝**（会话重建了，新会话的目录里有拦不住的道）→ 开关仍开着、进程级的绊线仍在，但新会话没拿到 deny 行、也没拿到声明，于是两条非 fetch 道在它上面是裸的。这时回包带 `degraded: true`，`/a2mcp` 显示 `host_llm=deny (tripwire only)`，stderr 与审计各留一行说明。装配的拒绝检查排在恢复旧会话**之前**就是为了这个：先恢复再拒绝，等于在失败的路上把绊线也拆了，操作员要 deny 得到的却是连绊线都没有。
 
 **拒绝情形。** 判定顺序与 MCP 路径一致（方法 → 鉴权 → body → 动作）：
 
@@ -91,8 +91,8 @@ deny 是三层的并集，分工按「每条推理请求最后从哪个口出去
 - 头：`Authorization: Bearer <token>`，scheme 大小写不敏感（`/^Bearer\s+(.+)$/i`）。
 - 比较为常数时间（先比字节长度）；失败返回 `401`，响应体 `{ "jsonrpc": "2.0", "id": null, "error": { "code": -32000, "message": "unauthorized" } }`。
 - 不返回 `WWW-Authenticate` 头。token 来源与轮换见 README「配置」「命令」。
-- token 的强度下限写在配置装载里：`a2a-bridge.json` 里现成的 token 少于 32 个字符，或者含空白，`loadConfig` 按其他字段同样的 fail-closed 处理，抛错，桥不起。这里故意不自愈：换一个更强的 token 会把某人自己写下的那份换掉，远端 `mcp.json` 从此 401，而日志里没有任何一句解释为什么。生成出来的是 43 个字符（32 随机字节，base64url），下限留在 32，拦的是手填的占位值，不是从别处拷来的秘密。
-- 鉴权失败不进审计日志，进宿主 stderr：第一次一条，此后每 50 次一条（`[a2a-bridge] N unauthorized attempt(s)`）。这份日志只保得住一代记录；把写入开放给还没鉴权的流量，等于让任何没有 token 的人用洪水面把真实记录推出窗口。会话错误（缺头 400、未知 404）与 `tools/list` 同样只在响应里体现，不留记录。
+- token 的强度下限写在配置装载里：`a2mcp.json` 里现成的 token 少于 32 个字符，或者含空白，`loadConfig` 按其他字段同样的 fail-closed 处理，抛错，桥不起。这里故意不自愈：换一个更强的 token 会把某人自己写下的那份换掉，远端 `mcp.json` 从此 401，而日志里没有任何一句解释为什么。生成出来的是 43 个字符（32 随机字节，base64url），下限留在 32，拦的是手填的占位值，不是从别处拷来的秘密。
+- 鉴权失败不进审计日志，进宿主 stderr：第一次一条，此后每 50 次一条（`[a2mcp] N unauthorized attempt(s)`）。这份日志只保得住一代记录；把写入开放给还没鉴权的流量，等于让任何没有 token 的人用洪水面把真实记录推出窗口。会话错误（缺头 400、未知 404）与 `tools/list` 同样只在响应里体现，不留记录。
 
 ## 会话生命周期
 
@@ -117,7 +117,7 @@ deny 是三层的并集，分工按「每条推理请求最后从哪个口出去
   "result": {
     "protocolVersion": "2025-11-25",
     "capabilities": { "tools": {} },
-    "serverInfo": { "name": "omp-a2a-bridge", "version": "<package.json 的 version>" }
+    "serverInfo": { "name": "a2mcp", "version": "<package.json 的 version>" }
   }
 }
 ```
@@ -157,7 +157,7 @@ deny 是三层的并集，分工按「每条推理请求最后从哪个口出去
 
 - `url` 带凭据，`host` 不带；`port` 是本地端口，`dufs` 只绑 `127.0.0.1`，公网那一侧由 quick tunnel 转发。字节不经 MCP 通道：`tools/call` 只送一条指令，下行 `curl -u omp:<secret> -O <host>/<name>`、上行 `curl -u omp:<secret> -T <local> <host>/<name>`，Range 续传、目录列表与 WebDAV 客户端都是 `dufs` 的能力。
 - 同一时刻只有一个共享：第二次 `xfer_share` 先关掉前一个，回包 `replaced: true`。
-- 两个二进制由桥自己找齐（`src/obtain.ts`）。配置里的值带 `/` 就按那条路径用，缺了也不下载，这是「这台机器不许下载」的写法；不带 `/` 就扫本机 `PATH`，其次复用桥自己装过的那一份（登记在 `<agentDir>/a2a-bridge.installs.json`），都没有才去下载：版本与 asset 名是代码里的字面量，字节回来先比对同一处钉住的 sha256，再用 `tar` 解到临时目录、检查条目没跑出目录之外，最后以 `0755` 原子写入 `~/.local/bin`。不请求 `latest`，也不向给字节的那台服务器要校验和；升级是改这个仓库的一次提交。桥不会覆盖一个不是自己装的文件，报它的哈希了事。两条都钉死了：`dufs` 0.46.0（Linux 取 musl 静态构建），`cloudflared` 2026.10.1（Linux 是裸 ELF，macOS 是 `.tgz` 里一个 `cloudflared`）。下载有上限，64 MB 与 120 秒墙上时钟，超出即是失败原文；哈希与钉值不符则拒绝安装。`bun run test:obtain` 每轮把钉表里八个 asset 的 URL 全部 `HEAD` 一遍，并把本机这一行真下、真跑。
+- 两个二进制由桥自己找齐（`src/obtain.ts`）。配置里的值带 `/` 就按那条路径用，缺了也不下载，这是「这台机器不许下载」的写法；不带 `/` 就扫本机 `PATH`，其次复用桥自己装过的那一份（登记在 `<agentDir>/a2mcp.installs.json`），都没有才去下载：版本与 asset 名是代码里的字面量，字节回来先比对同一处钉住的 sha256，再用 `tar` 解到临时目录、检查条目没跑出目录之外，最后以 `0755` 原子写入 `~/.local/bin`。不请求 `latest`，也不向给字节的那台服务器要校验和；升级是改这个仓库的一次提交。桥不会覆盖一个不是自己装的文件，报它的哈希了事。两条都钉死了：`dufs` 0.46.0（Linux 取 musl 静态构建），`cloudflared` 2026.10.1（Linux 是裸 ELF，macOS 是 `.tgz` 里一个 `cloudflared`）。下载有上限，64 MB 与 120 秒墙上时钟，超出即是失败原文；哈希与钉值不符则拒绝安装。`bun run test:obtain` 每轮把钉表里八个 asset 的 URL 全部 `HEAD` 一遍，并把本机这一行真下、真跑。
 - 失败一律 `200` + `isError: true`，text 就是原因：缺 `path` 为 `xfer_share needs a 'path' — the file or directory to serve`；路径 `stat` 失败为 `cannot serve <path>: <原因>`；`dufs` 或 `cloudflared` 起不来为子进程/隧道的错误原文。获取二进制失败的另外写一条 `install` 审计，带上是哪个 asset、钉的是哪个哈希；成功的那条同样在 `spawn` 之前落盘。
 
 **`xfer_status`** — 无参数。有共享：`{"serving": true, "path", "port", "url", "host", "startedAt", "expiresAt"}`；没有：`{"serving": false}`。
@@ -243,7 +243,7 @@ sequenceDiagram
 | 400 | -32000 | `missing mcp-session-id` | 非 `initialize` 消息未带会话头（请求与通知同样处理） |
 | 404 | -32000 | `unknown session` | 会话不存在或空闲超 24h（过期条目顺带清理） |
 | 405 | — | （空体） | GET 或非 POST/DELETE 方法 |
-| 500 | -32603 | `internal error` | 服务器内部异常；**响应体固定为该文案**，细节只打到宿主 stderr（`[a2a-bridge] internal error:`） |
+| 500 | -32603 | `internal error` | 服务器内部异常；**响应体固定为该文案**，细节只打到宿主 stderr（`[a2mcp] internal error:`） |
 | 200 | -32601 | `method not found` | 未实现的方法 |
 | 200 | （result） | `isError: true` | 工具侧拒绝 / 未暴露（text 含 `not exposed`） |
 
