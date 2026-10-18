@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-18T01:05:30"
+updated: "2026-10-18T08:19:54"
 ---
 
 <!-- compiled_truth -->
@@ -96,7 +96,7 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 
 ## 安装方式（2026-09-30 更正）
 
-**跨机器安装用 `omp install https://github.com/adam-ikari/pi-a2a-ext.git`**（装到 `~/.omp/plugins/node_modules/pi-a2a-ext`，`omp plugin uninstall pi-a2a-ext` 卸载）；本地开发用 `omp install .`；`scripts/install.sh` 是绕开插件管理器的等效替代。
+**跨机器安装用 `omp install https://github.com/adam-ikari/pi-a2a-ext.git`**（装到 `~/.omp/plugins/node_modules/pi-a2a-ext`，`omp plugin uninstall pi-a2a-ext` 卸载）；本地开发用 `omp install .`，但它是**测试夹具、不是受支持的安装方式**；`scripts/install.sh` 已于 2026-10-02 删除（自己维护一份模块图校验正是它的病灶），不要再当它是等效替代。`scripts/bootstrap.sh`（2026-10-18）是**引导**，不是第二条安装路径：它先按 `package.json` 的 pin 用上游官方安装器（`omp.sh/install`，`--binary --ref v<版本>`）把宿主编上——PATH 上已有 `omp` 就报告版本不动它——最后执行的就是上面那条 git URL 原文，连插件登记好不好都问宿主自己的 `omp plugin doctor`，脚本不重新发明判据。
 
 `omp install` 的 spec 限制（实测）：接受**本地目录或 git URL**，**不接受 `.tgz`**（报 `ENOTDIR: ... .tgz/package.json`）；GitHub `owner/repo` 简写被当作非法包名（`Invalid package name`），必须用完整 `https://….git` URL。装的是**远端代码**，所以本地提交未推送时，装到的是旧版本——2026-09-30 就因此先装到 `@undefined` 再重装才拿到 `0.1.0`。
 
@@ -116,7 +116,7 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 
 ### 更正二：单文件软链不构成障碍（曾误判）
 
-扩展入口 import 的是 `../src/*.ts`，但 Bun 解析相对导入前先 `realpath` 软链，因此软链能正确落到仓库的 `src/`（实测宿主正常起桥）。曾误判此处会断链，**靠实际安装 + 启动宿主才确认可用**。`scripts/install.sh` 保留模块齐备检查只作纵深防御。
+扩展入口 import 的是 `../src/*.ts`，但 Bun 解析相对导入前先 `realpath` 软链，因此软链能正确落到仓库的 `src/`（实测宿主正常起桥）。曾误判此处会断链，**靠实际安装 + 启动宿主才确认可用**。`scripts/install.sh` 连同它那份模块齐备检查已于 2026-10-02 删掉，齐备性由 `test:install` 走相对 import 图守着。
 
 脚本自身的两个非显然细节：`--status` 判活必须用 `readlink` 原始目标 + `[ -e ]`，**不能用 `readlink -f`**——后者对悬空软链输出空串并非零退出，会让断链显示成「已安装」。安装目标若是真实文件（用户自己的扩展）一律拒绝覆盖。
 ## 守卫失效的两种形态（2026-10-01）
@@ -857,4 +857,16 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "两个二进制都缺那条端到端从一次性脚本升格为提交里的核验：test/install-probe.ts 第五组（13 项，整个探针 35 → 48）。维护者批准的成本是每轮 CI 约 46 MB 出网。形状是硬证据的边界所在——test:obtain 里 cloudflared 走写明路径那一侧，bun test 把获取整个 stub 掉，「一次 xfer_share 拉两个」谁都没管。硬的是文件/登记/审计三样（dufs 先解析再起服务，cloudflared 先解析再开洞，隧道成不成都该在），共享本身与 GET 只报告，与 quick tunnel 那条既有定性一致。反证两遍：下载上限 64MB → 1024B 红五项其余全绿；往削过的 PATH 塞 stub dufs 整组跳过。顺带修探针两处「把红报成炸」（登记缺席 readFileSync 抛异常；失败回包是 JSON 字符串，parse 得动而 port 是 undefined）。"
   source: "bun run test:install 48/48 2026-10-18；变异两遍见 CHANGELOG 2026-10-18"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-18T08:19:39
+  kind: decision
+  summary: "安装方式一节里两条关于 scripts/install.sh 的过期结论改掉（那句「等效替代」和那句「保留模块齐备检查作纵深防御」）：该脚本 2026-10-02 已删，齐备性由 test:install 走 import 图守。新增 scripts/bootstrap.sh 的定位一并写进去——它是引导（把宿主编上再执行那条唯一路径），不是第二条安装路径；代价是多一个脚本、多一个探针（test:bootstrap 28 项）、README 中英多一段，以及宿主那一支在开发机上永远走不到、要靠 stub 覆盖加一行诚实的边界说明。"
+  source: "2026-10-18 bootstrap.sh + pin 18.12.1 这轮；判据沿用 2026-10-02 删 install.sh 那条决定"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-18T08:19:54
+  kind: evidence
+  summary: "宿主 omp 18.12.1（2026-10-18，宿主自己从 18.11.0 升上来的，pin 与 bun.lock 跟着同步；版本守卫按设计红两条之后修对）。中间跨四个版本，两处 breaking 实测与本仓库无关：18.11.3 改的是 ui.approve() 宿主收到可选 session 标签并回 once/session/deny 而不是布尔，桥从不自己调 approve，审批探针仍是 VERDICT: B（挂起 >=90031ms、不是 isError）；18.12.1 去掉的是 eval 的 display()。~/.omp/plugins 跟随 HOME 这件事在 18.12.1 上重测仍是同一种行为——test:install 48 项与 test:bootstrap 第五组都在临时 HOME 里真装真登记跑绿。真实注册表行数 5490 -> 5497（registry 探针 28 项全过，装配 15.4ms），这是这台机器配置的数，不是产品的数。takeover 34 项 64.0 秒（推理 POST 1、元数据 1）、smoke 22 tools、hardening 34 项、scenario 41 步 0 失败、obtain 31 项 PASS（公网那半程仍是本机网络对代理域名重签 TLS，量不了）。"
+  source: "18.12.1 上全量重跑（bun test 186/186 + 九个宿主侧核验），日志 /tmp/18121-*.log"
   affects: [a2a-mcp-bridge]
