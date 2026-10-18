@@ -7,7 +7,7 @@
  * 405 semantics, the `sid` attribution, and the error path being a record
  * rather than a missing line.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { auditStart } from "../src/audit.ts";
@@ -235,4 +235,11 @@ describe("POST /host-llm route dispatch", () => {
 			s.stop();
 		}
 	});
+});
+
+// The audit file lives in a directory named after this process, so nothing else can
+// clean it up: without this hook every `bun test` run left one /tmp dir behind.
+afterAll(() => {
+	rmSync(dir, { recursive: true, force: true });
+	expect(existsSync(dir)).toBe(false);
 });
