@@ -13,6 +13,12 @@
  * is not declared. Then that `omp install` links the bridge where the host looks
  * for it, and that the bridge comes up and serves MCP from a real host.
  *
+ * The last group is the other machine-shaped failure: a host whose PATH answers
+ * to neither `dufs` nor `cloudflared`, asked to share a file. It is the only
+ * group that leaves the network (~46 MB of pinned release assets), and it
+ * installs into its own throwaway HOME — the operator's `~/.local/bin` is read
+ * before and after, never written.
+ *
  * ## On plugin discovery and HOME
  *
  * Measured twice on two host versions, and the answer moved, so the version is
@@ -47,11 +53,21 @@
  *                     names what was actually checked (default: origin git URL)
  */
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-
-import { seedModels } from "./harness";
+import { dirname, join, resolve } from "node:path";
+import { pinsFor, targetKey } from "../src/obtain.ts";
+import { linkExtension, seedModels } from "./harness";
 
 const REPO = resolve(import.meta.dir, "..");
 const SPEC = process.env.A2A_INSTALL_SPEC ?? "https://github.com/adam-ikari/pi-a2a-ext.git";
@@ -418,6 +434,277 @@ try {
 } finally {
 	host.kill("SIGTERM");
 	rmSync(e2eHome, { recursive: true, force: true });
+}
+
+// --- 5. a host that has to fetch both external binaries ----------------------
+
+// `bun run test:obtain` drives `xfer_share` with cloudflared named as a path, and
+// `bun test` stubs the fetch whole. So the shape the feature actually needs — one
+// tool call, nothing on PATH, the bridge fetching *both* pinned builds — was
+// demonstrated once by a throwaway script and by nothing that gets committed. This
+// is that script, promoted.
+//
+// The PATH handed to this host is the directory `omp` lives in plus the system
+// bins, and the first checks assert neither name answers from it. That assertion is
+// the group's whole meaning: without it, "the bridge installed dufs" would just as
+// likely mean "dufs was already there".
+//
+// What is hard, and what is only reported:
+//
+//   HARD   both pinned binaries in the host's own HOME at 0755, the ledger carrying
+//          one row per name with the pinned version, and two `install` audit
+//          records. dufs is resolved and started before cloudflared is resolved, and
+//          cloudflared is resolved before the tunnel is opened, so all three hold
+//          whether or not the tunnel comes up.
+//   REPORTED  the share itself and the GET that follows it. A quick tunnel needs
+//          Cloudflare's edge, and this repository already decided (test/obtain-probe.ts)
+//          that an outage there is not evidence about this code. When the tool answers
+//          an error after installing both, the reason is printed, not asserted.
+//
+// The fetch-failure check *is* hard in both outcomes: it asks that whatever the tool
+// answered, the answer was not about fetching — so a regression in `src/obtain.ts`
+// reddens this group even when Cloudflare is the thing that stopped the share.
+const xferHome = mkdtempSync(join(tmpdir(), "install-xfer-"));
+const xferAgent = join(xferHome, ".omp", "agent");
+const xferAudit = join(xferHome, "xfer-audit.log");
+const xferBinDir = join(xferHome, ".local", "bin");
+const xferShareDir = join(xferHome, "shared");
+console.log(`\n--- a host with nothing to answer for either binary ---`);
+// This host runs in its own HOME, so it gets the extension the same way the other
+// host probes do — a symlink under `agent/extensions/`, which the host resolves
+// against HOME (see the header). Sections 1-4 install with `omp install .` because
+// the install itself is what they are checking; here it is not.
+linkExtension(xferAgent);
+seedModels(xferAgent);
+mkdirSync(xferShareDir, { recursive: true });
+const xferPayload = "install-probe-payload\n";
+writeFileSync(join(xferShareDir, "file.txt"), xferPayload);
+
+// Not `OMP_BIN`: the rest of this probe runs `omp install` and a host against the
+// same binary on PATH, and this group is the same host. One rule for the whole file.
+const ompBin = Bun.which("omp");
+if (!ompBin) fail("section 5 needs `omp` on PATH");
+// Whatever `omp` resolves to on this machine, it is usually a launcher whose script
+// runs `#!/usr/bin/env bun`, so the tight PATH needs the interpreter's directory too
+// or the host dies before the bridge loads. Both are read from what this run has.
+const ompReal = realpathSync(ompBin);
+const bunDir = Bun.which("bun") ? dirname(Bun.which("bun") as string) : "/usr/local/bin";
+const tightDirs = [...new Set([dirname(ompReal), bunDir, "/usr/bin", "/bin"])];
+const tightPath = tightDirs.join(":");
+// If either name answers from that PATH this group can mean nothing here, so the whole
+// of it is skipped rather than failed — and each line says which name is the reason.
+const answers = (b: string) => tightDirs.filter((d) => existsSync(join(d, b)));
+const answeredFor = answers("dufs").length > 0 || answers("cloudflared").length > 0;
+for (const b of ["dufs", "cloudflared"] as const) {
+	const found = answers(b);
+	check(
+		answeredFor || found.length === 0,
+		`the stripped PATH answers to nothing for ${b}`,
+		found.length
+			? `this machine cannot show a fetch: ${found.join(", ")} has ${b}`
+			: answeredFor
+				? `no ${b} on it, but the group is skipped for the other name`
+				: `searched ${tightPath}`,
+	);
+}
+// Snapshotted rather than asserted false: a machine that already keeps a dufs in the
+// operator's HOME is not a machine where the bridge did something wrong.
+const realDufsBefore = existsSync(join(process.env.HOME ?? "", ".local", "bin", "dufs"));
+
+const xferHost = answeredFor
+	? null
+	: spawn(ompReal, ["--mode", "rpc"], {
+			env: { ...process.env, HOME: xferHome, PATH: tightPath, A2A_BRIDGE_AUDIT: xferAudit },
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+let xferOut = "";
+let xferErrText = "";
+xferHost?.stdout?.on("data", (d) => (xferOut += d));
+xferHost?.stderr?.on("data", (d) => (xferErrText += d));
+
+try {
+	// When the tight PATH answers for a binary there is no host and nothing to assert:
+	// that is a fact about this machine, not a failure of the bridge, and the two
+	// checks above already said it in their details.
+	if (!xferHost) {
+		console.log("info: the fetch group is skipped here — nothing was left for the bridge to install");
+	} else {
+		const deadline = Date.now() + 120_000;
+		while (Date.now() < deadline && !xferOut.includes("A2A bridge listening")) {
+			xferHost.stdin.write("");
+			await Bun.sleep(300);
+		}
+		const announced = xferOut.match(/A2A bridge listening on (http:\/\/127\.0\.0\.1:(\d+)\/)/);
+		check(
+			!!announced,
+			"the host comes up on a PATH that names neither binary",
+			announced?.[1] ??
+				[...`${xferOut}\n${xferErrText}`.split("\n")]
+					.filter((l) => l.length > 0 && l.length < 200)
+					.slice(-3)
+					.join(" | "),
+		);
+
+		if (announced) {
+			const url = announced[1];
+			const xferToken = JSON.parse(readFileSync(join(xferAgent, "a2a-bridge.json"), "utf8")).token as string;
+			const call = async (method: string, params: unknown, sid?: string, ms = 300_000) => {
+				const r = await fetch(url, {
+					signal: AbortSignal.timeout(ms),
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						authorization: `Bearer ${xferToken}`,
+						...(sid ? { "mcp-session-id": sid } : {}),
+					},
+					body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+				});
+				return (await r.json()) as {
+					result?: { content?: { text?: string }[]; isError?: boolean; tools?: { name: string }[] };
+				};
+			};
+			const init = await fetch(url, {
+				signal: AbortSignal.timeout(30_000),
+				method: "POST",
+				headers: { "content-type": "application/json", authorization: `Bearer ${xferToken}` },
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 1,
+					method: "initialize",
+					params: { protocolVersion: "2025-11-25" },
+				}),
+			});
+			const sid = init.headers.get("mcp-session-id") ?? "";
+
+			const shareText = (
+				(await call("tools/call", { name: "xfer_share", arguments: { path: xferShareDir, ttlSeconds: 300 } }, sid))
+					.result?.content ?? []
+			)
+				.map((c) => c.text ?? "")
+				.join("");
+			const fetchFailed = /cannot fetch|sha256|larger than the|timed out|no pinned|not an executable/.test(shareText);
+			// The share answer carries the basic-auth secret twice — inline in the URL and
+			// in its own field — so neither reaches the log, and the newlines are flattened
+			// to keep this probe one line per check.
+			const redacted = shareText
+				.replace(/:[^:@/\s]+@/g, ":***@")
+				.replace(/("secret"\s*:\s*)"[^"]*"/g, '$1"***"')
+				.replace(/\s+/g, " ");
+			check(!fetchFailed, "nothing about the fetch is what stopped this share", redacted.slice(0, 200));
+
+			const target = targetKey();
+			const wantDufs = pinsFor("dufs")[target]?.version ?? "";
+			const wantCf = pinsFor("cloudflared")[target]?.version ?? "";
+			for (const [b, want] of [
+				["dufs", wantDufs],
+				["cloudflared", wantCf],
+			] as const) {
+				const p = join(xferBinDir, b);
+				const there = existsSync(p);
+				check(
+					there && (statSync(p).mode & 0o777) === 0o755,
+					`the bridge fetched ${b} into its own HOME at 0755`,
+					there ? `${(statSync(p).size / 1048576).toFixed(1)} MB, pinned ${want}` : `${p} is missing`,
+				);
+			}
+
+			// Both files are read through a presence check: a bridge that never got as far
+			// as writing them has to answer with FAIL lines here, not with an exception from
+			// `readFileSync` that ends the group and hides the checks after it.
+			const ledgerPath = join(xferAgent, "a2a-bridge.installs.json");
+			const rows = existsSync(ledgerPath)
+				? Object.values(
+						JSON.parse(readFileSync(ledgerPath, "utf8")) as Record<string, { version: string; target: string }>,
+					)
+				: [];
+			check(
+				rows.length === 2 &&
+					rows.every((r) => r.target === target) &&
+					rows.some((r) => r.version === wantDufs) &&
+					rows.some((r) => r.version === wantCf),
+				"the ledger carries one row per binary, at the pinned version",
+				`${ledgerPath}: ${rows.length ? rows.map((r) => `${r.version}/${r.target}`).join(" ") : "no rows"}`,
+			);
+
+			const installs = (existsSync(xferAudit) ? readFileSync(xferAudit, "utf8") : "")
+				.split("\n")
+				.filter((l) => l.length > 0)
+				.map((l) => JSON.parse(l) as { tool: string; isError: boolean; args: string })
+				.filter((r) => r.tool === "xfer" && JSON.parse(r.args).action === "install");
+			check(
+				installs.length === 2 &&
+					installs.every((r) => !r.isError) &&
+					installs.some((r) => JSON.parse(r.args).version === wantDufs) &&
+					installs.some((r) => JSON.parse(r.args).version === wantCf),
+				"the audit holds one successful install record per binary",
+				installs
+					.map((r) => `${JSON.parse(r.args).name} ${JSON.parse(r.args).version}${r.isError ? " (isError)" : ""}`)
+					.join(" "),
+			);
+
+			// Parsed defensively for the same reason the two files above are read through a
+			// presence check: a tool that answered with prose (a tunnel that never came up)
+			// should skip the byte checks, not throw here and skip the checks after them.
+			// A failed share answers with a JSON *string*, which parses without complaint, so
+			// what decides whether there is a share to hit is the shape: a numeric port.
+			const parsed: unknown = (() => {
+				try {
+					return JSON.parse(shareText);
+				} catch {
+					return null;
+				}
+			})();
+			const info =
+				parsed !== null && typeof parsed === "object" && typeof (parsed as { port?: unknown }).port === "number"
+					? (parsed as {
+							port: number;
+							user: string;
+							secret: string;
+							installed?: Record<string, string | null>;
+						})
+					: null;
+			if (!info) console.log("info: the share never came up, so the byte checks below are skipped");
+			if (info) {
+				check(
+					info.installed?.dufs === wantDufs && info.installed?.cloudflared === wantCf,
+					"one tool call reports it fetched both, and names both versions",
+					JSON.stringify(info.installed),
+				);
+				const auth = btoa(`${info.user}:${info.secret}`);
+				const got = await fetch(`http://127.0.0.1:${info.port}/file.txt`, {
+					signal: AbortSignal.timeout(15_000),
+					headers: { authorization: `Basic ${auth}` },
+				});
+				check(
+					got.status === 200 && (await got.text()) === xferPayload,
+					"the served bytes are the file the tool was given",
+					`HTTP ${got.status}`,
+				);
+				const wrong = await fetch(`http://127.0.0.1:${info.port}/file.txt`, {
+					signal: AbortSignal.timeout(15_000),
+					headers: { authorization: `Basic ${btoa("x:not-the-secret")}` },
+				});
+				check(wrong.status === 401, "a wrong password is refused", `got ${wrong.status}`);
+				await call("tools/call", { name: "xfer_stop", arguments: {} }, sid, 60_000);
+				await Bun.sleep(400);
+				const stillUp = await fetch(`http://127.0.0.1:${info.port}/`, { signal: AbortSignal.timeout(3_000) })
+					.then(() => true)
+					.catch(() => false);
+				check(!stillUp, "stop releases the port", stillUp ? "still answering" : "nothing listening");
+			}
+		}
+	}
+
+	check(
+		existsSync(join(process.env.HOME ?? "", ".local", "bin", "dufs")) === realDufsBefore,
+		"the operator's own ~/.local/bin is exactly as it was",
+		`before: ${realDufsBefore ? "a dufs was there" : "no dufs"}, after: ${
+			existsSync(join(process.env.HOME ?? "", ".local", "bin", "dufs")) ? "a dufs is there" : "no dufs"
+		}`,
+	);
+} finally {
+	xferHost?.kill("SIGTERM");
+	rmSync(xferHome, { recursive: true, force: true });
 }
 
 rmSync(stage, { recursive: true, force: true });

@@ -108,6 +108,10 @@ jobs:
       # deliberately broken bridge — see docs/testing.md.
       - name: test:scenario — end-to-end scenarios, verified off-channel
         run: bun run test:scenario
+      # The fifth group is the half that has to leave the network: a host whose PATH
+      # answers to neither binary fetches both pinned builds and serves a file from
+      # them. ~46 MB of egress per run, and it lands in that host's own throwaway
+      # HOME — see test/install-probe.ts.
       - name: test:install — package self-containment and a real host over MCP
         run: bun run test:install
       - name: test:approval — approval boundary (expects VERDICT B)
