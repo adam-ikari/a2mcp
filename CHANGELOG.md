@@ -1,6 +1,6 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**不发布到 npm** —— 安装方式只有 `omp install <git-url>` 一条，见 README。可安装的 Release 现在是 `v0.3.0`（2026-10-18）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），四个 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**不发布到 npm** —— 安装方式只有 `omp install <git-url>` 一条，见 README。可安装的 Release 现在是 `v0.4.0`（2026-10-18）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
@@ -87,6 +87,21 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.4.0 — 名字改到机制上：a2mcp
+
+**这一版动的只有名字：包名、入口文件、三个磁盘文件名、环境变量前缀、命令、日志前缀、`serverInfo.name` 整套换成 `a2mcp`，旧名字一处都不读。** 机制没变：传输还是 MCP Streamable HTTP `2025-11-25`，`tools/list` 还是宿主注册表逐字加上那三个 `xfer_*`，调用还是跑在活的 `Main` 会话里，还是单 Bearer token、默认回环。
+
+旧名字里的 A2A 是隔壁那个协议。A2A 的调用单位是 intent 加 task：对端发一张 agent card，任务有自己的状态机，`contextId` 与 `taskId` 跟着走，结果可以流式回推、可以挂 webhook。这些本仓库一个都没实现，初始设计稿的非目标第一条就写着「不是 A2A/Agent2Agent 协议实现」（`docs/superpowers/specs/2026-09-10-a2a-mcp-bridge-design.md:201`）。名字说的是协议 A2A，跑的是 MCP，两边对不上；叫法不改，下一条来问「agent card 在哪」的人就按 A2A 的形状要东西。新名字讲的是实际做的事：**a2mcp**，Agent2MCP，一个 agent 的工具面通过 HTTP 交给另一个 agent 用。
+
+- rename: **加载链那一跳先走。** 入口 `extensions/a2a-bridge.ts` → `extensions/a2mcp.ts`，`package.json` 的 `pi.extensions` 同一提交里跟上（那是宿主的加载开关）；包名 `pi-a2a-ext` → `a2mcp`，仓库 `adam-ikari/pi-a2a-ext` → `adam-ikari/a2mcp`；三个磁盘文件名跟着换：配置 `~/.omp/agent/a2mcp.json`、审计 `a2mcp.log`、安装账本 `a2mcp.installs.json`。`bun.lock` 由 `bun install` 重写，不手改。
+- rename: **运行时那一跳。** 环境变量九个换前缀：用户可见的 `A2MCP_CONFIG` / `A2MCP_AUDIT` / `A2MCP_INSTALLS`，加上 `A2MCP_PROBE_REAL_MODELS` / `A2MCP_INSTALL_SPEC` / `A2MCP_BOOTSTRAP_SPEC` / `A2MCP_BOOTSTRAP_OMP_BIN` / `A2MCP_OBTAIN_TARGET` / `A2MCP_SKIP_HOST_VERSION_CHECK`。日志前缀 `[a2mcp]`；TUI 文案从「A2A bridge: http://…」换成「a2mcp listening on …」；命令 `/a2a` → `/a2mcp`（子命令 `rotate`、`token` 不变）；`initialize` 回包的 `serverInfo.name` 从 `omp-a2a-bridge` 变成 `a2mcp`；takeover 的三个内部标识一起换（source `a2mcp`、deny provider `a2mcp-deny`、拒绝文案里那句 `a2mcp takeover: …`）；临时目录前缀 `a2a-*` → `a2mcp-*`。
+- 代价: **无兼容，token 直接换代。** 装着 v0.3.0 的机器上，`~/.omp/agent/a2a-bridge.json` 里那个 token 不再被读，桥在新文件名里生成一份新的，远程侧要重新抄一次 announce 或者跑 `/a2mcp`。`a2a-bridge.log` 与 `a2a-bridge.installs.json` 留在原地不动，新账本另起一代。残留的 `A2A_BRIDGE_*` 变成没人读取的普通环境变量，桥按默认路径重新生成配置。选无兼容是因为那份配置本来就要人手工抄一次，改名同时换 token 多出来的成本接近零。
+- 已知边界: **插件 lock 按 `package.json:name` 记账**，装了新 URL 又没卸载旧的，机器上会同时挂着 `pi-a2a-ext` 和 `a2mcp` 两份登记：两个端口、两个 token、两条命令，两次 takeover 装载而 `TAKEOVER_SOURCE` 不同，第二次的快照盖掉第一个的影子，`restoreTakeover` 再也拿不回它认领的那个 provider 名。这轮的处理在文档层：README 与 Release 正文把 `omp plugin uninstall pi-a2a-ext` 写成前置命令，不加检测代码。「发现兄弟插件就往 stderr 打一行警告」要读宿主的 lock，是新行为，按 AGENTS.md「Don't grow a second system」得 maintainer 点头。
+- test: 新增 `test/naming.test.ts`（6 项，不起宿主）。扫活表面按**形态**匹配，不 blanket ban 字符串 `a2a`：拦 `a2a-bridge`、`pi-a2a-ext`、`A2A_` 前缀、`/a2a` 命令、`a2a_` 开头的工具名；`docs/protocol.md` 把 A2A 当外部协议名比较的那句是合法用法，全文禁掉就成了撒谎。历史与生成物按路径豁免（`CHANGELOG.md`、`brain/**`、`docs/superpowers/**`、站点的 `dist` 与 `content`）；豁免表本身每一条都得被真命中一次，给了没用等于文档在骗人，那条测试红。另两条结构断言把身份钉在一处：`pi.extensions` 声明的每个路径都得存在且 `extensions/` 里不许有它没声明的文件，包名、命令名、`serverInfo.name`、协议页样例里的名字必须是同一个词。
+- test: 名字在仓库里只留一处真相。`test/harness.ts` 的 `linkExtension()` 从 `package.json` 的 `pi.extensions` 读入口路径，`test/bootstrap-probe.ts` 的插件名读 `manifest.name`、安装 URL 从 README 那行 `omp install <url>` 解析。读不到就抛，不安静退化成默认值。文件名换了以后，探针一直在 seed 一个没人读的文件而所有断言照样绿，是这轮改名最该防的事，所以补了一条与文件名无关的核对：从桥自己那行 announce 里解析端口与配置路径，把 token 从那个文件读回来，跟 `/a2mcp` 的输出比对。
+- docs: README 中英、`docs/protocol.md`、`docs/testing.md`、站点配置与 `scripts/bootstrap.sh`（`PLUGIN`、默认 spec、打印出来的配置路径）全部跟上。`docs/protocol.md` 开头那句自我命名重写。站点 `base` 由 `GITHUB_REPOSITORY` 推得，仓库改名即换路径，新的在 `https://adam-ikari.github.io/a2mcp/`。
+- 回归（发版前在 18.12.1 上重跑的一遍）：`lint` / `tsc` 干净，`bun test` 194/194（15 文件、550 个 expect）；`tree` 形状 OK、`registry` 28 项（本机注册表 5497 行、装配 14.6ms）、`SMOKE OK`（`tools/list` 22 个）、`HARDEN OK` 34 项、`PACKAGE OK` 48 项（23 秒，含两个二进制自装 6.4 MB 与 38.4 MB）、`SCENARIOS: 41 steps, 0 failed`（40.4 秒）、`takeover` 34 项 64.6 秒（推理 POST 1、元数据非 POST 1）、审批 `VERDICT: B`（挂起 ≥90027ms，不是 `isError`，bash 审计 `start=1 done=0`）、`obtain` 31 项 PASS、`bootstrap` 28 项 `BOOTSTRAP OK`（9.1 秒）；站点 `build` + `check` 56 项全过。两处变异照做：把 `src/config.ts` 的默认文件名改错一个字母，配置那一跳红；把入口 `getTools` 里追加的三个自有工具摘掉，`install` 探针那句 `the installed copy appends the tools the bridge owns (0 of 3)` 红、脚本退出码 1。改名专属的三条实测：临时 `HOME` 里 `ls` 出来只有 `a2mcp.json` / `a2mcp.log` / `a2mcp.installs.json`，一个 `a2a` 拼写的文件都没有；`initialize` 回 `serverInfo.name == "a2mcp"`；宿主 rpc 命令表里 advertise 的是 `/a2mcp`。quick tunnel 公网那半程还是量不了，本机网络对代理域名重签 TLS，照旧只 `info:` 报告。
 
 ## v0.3.0 — 传文件交给桥自己的三个工具，缺的外部二进制按钉值自装，机器上没有 omp 时有一条引导
 
