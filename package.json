@@ -41,14 +41,15 @@
     "test:tree": "bun test/tree-probe.ts",
     "test:approval": "bun test/approval-probe.ts",
     "test:install": "bun test/install-probe.ts",
+    "test:bootstrap": "bun test/bootstrap-probe.ts",
     "test:obtain": "bun test/obtain-probe.ts",
     "test:scenario": "bun test/scenario.ts",
     "website": "cd website && bun run start"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
-    "@oh-my-pi/pi-ai": "18.11.0",
-    "@oh-my-pi/pi-coding-agent": "18.11.0",
+    "@oh-my-pi/pi-ai": "18.12.1",
+    "@oh-my-pi/pi-coding-agent": "18.12.1",
     "@types/bun": "^1.4.2",
     "typescript": "5.9.3"
   }

@@ -90,11 +90,12 @@ jobs:
         run: bun run test:smoke
       - name: test:hardening — auth, sessions, audit
         run: bun run test:hardening
-      # This one installs for real: it runs `omp install .` itself, then starts a
-      # host and drives the bridge over MCP. Plugin discovery reads
-      # ~/.omp/plugins independently of HOME and no env var redirects it, so
-      # that half of the probe runs against the real plugin directory — which is
-      # why it works here at all.
+      # The bootstrap script is the README's install path with the host layer under
+      # it. Groups 1-4 drive it against a recording stub `omp`, and the last group
+      # runs it against the omp installed above, in a throwaway HOME. No network:
+      # the host-install half only ever comes out as a printed plan.
+      - name: test:bootstrap — the one-shot host + extension installer
+        run: bun run test:bootstrap
       # The bridge fetches a missing dufs or cloudflared by itself, pinned by version
       # and sha256. Those pins are only worth what the build has been measured to do,
       # so this probe downloads for real, HEADs every pinned asset for a target it
@@ -108,6 +109,10 @@ jobs:
       # deliberately broken bridge — see docs/testing.md.
       - name: test:scenario — end-to-end scenarios, verified off-channel
         run: bun run test:scenario
+      # This one installs for real: it runs `omp install .` itself, then starts a
+      # host and drives the bridge over MCP. As of host 18.11.0 `~/.omp/plugins`
+      # follows HOME, so both halves run inside a throwaway HOME and leave nothing
+      # registered on the runner.
       # The fifth group is the half that has to leave the network: a host whose PATH
       # answers to neither binary fetches both pinned builds and serves a file from
       # them. ~46 MB of egress per run, and it lands in that host's own throwaway
