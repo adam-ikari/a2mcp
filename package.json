@@ -1,6 +1,6 @@
 {
   "name": "pi-a2a-ext",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Expose a running omp session's tools over MCP (Streamable HTTP), plus file transfer over HTTP through a quick tunnel",
   "license": "MIT",
   "type": "module",

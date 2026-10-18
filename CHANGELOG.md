@@ -1,6 +1,6 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**不发布到 npm** —— 安装方式只有 `omp install <git-url>` 一条，见 README。可安装的 Release 现在只有 `v0.2.1`：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，tag 全部保留（见当日一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**不发布到 npm** —— 安装方式只有 `omp install <git-url>` 一条，见 README。可安装的 Release 现在是 `v0.3.0`（2026-10-18）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），四个 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
@@ -87,6 +87,18 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.3.0 — 传文件交给桥自己的三个工具，缺的外部二进制按钉值自装，机器上没有 omp 时有一条引导
+
+**这一版对远程调用方改变的是三件事：字节不再走 JSON-RPC、桥上那个缺的 `dufs` 会自己装好、新机器多了一条把宿主也一并编上的路。** 安装方式一个字没变，仍然是 `omp install https://github.com/adam-ikari/pi-a2a-ext.git`；旧版在用的先 `omp plugin uninstall pi-a2a-ext` 再装一次即可。`initialize` 实测回 `{"name":"omp-a2a-bridge","version":"0.3.0"}`（版本号读自 `package.json`，装上去的那份就是这一行）。
+
+- feat: **`xfer_share` / `xfer_status` / `xfer_stop` 三个桥自己的工具，`/blob` 撤掉。** 工具只交出一条路径，字节走普通 HTTP：dufs 在服务那侧，外面套一条 cloudflared quick tunnel。这三个工具由桥自己实现，因此绕开宿主的审批门——代价照 v0.2.0 那条例外一样的形状付掉：审计一条一次调用（`tool: "xfer"`），文档写清，不长出自己的沙箱。桥的原始面现在只剩 `POST /host-llm`
+- feat: **PATH 上不应答的那个外部二进制，桥按钉值自己拉**（`src/obtain.ts`）。出口顺序是死的：配置里的值含 `/` 就原样用、**绝不下载**（这是「这台机器永远不许下载」的唯一出口，裸写 `"dufs"` 不是出口）→ `PATH` 上逐段找可执行文件（不起 shell、不 `which`，机器有就别抢）→ `~/.local/bin/<name>` 等于登记里桥为这一条写下的那一行才复用 → 才下载。钉的是版本加**归档** sha256（dufs 0.46.0、cloudflared 2026.10.1，各四个平台行），不请求 `latest`，不向发字节的同一台服务器要校验和，不覆盖不是桥装的文件，下载有界（64 MB / 120 秒），安装排在审计之后。发布前这一遍实测重跑到：`PATH` 上两个都不应答的宿主里，一次 `xfer_share` 把 6.4 MB 与 38.4 MB 都装进桥自己的 `HOME`（`0755`），登记两行、审计两条 `install` 且不是 `isError`，操作者真正的 `~/.local/bin` 前后一样
+- feat: `scripts/bootstrap.sh`——**引导，不是第二条安装路径**。PATH 上没有 `omp` 就跑上游官方安装器（`--binary --ref v<pin>`，它自己核 sha256），已有宿主它不动（`--upgrade` 才重装）；然后执行且只执行 README 那条 git URL；最后用宿主自己的 `omp plugin doctor` 自检，脚本不重新发明判据。`--dry-run` 一个字都不写，`--uninstall` 只收登记、留着 token 与审计日志。2026-10-02 删掉 `scripts/install.sh` 那条决定没有翻面：那次错在自己维护一份模块图校验
+- chore: `@oh-my-pi/pi-coding-agent` 与 `@oh-my-pi/pi-ai` 的 pin 走到 **18.12.1**（宿主自己升的，版本守卫如期红两条之后同步）。跨的四个版本里两处 breaking 实测到不了桥：18.11.3 改的是 `ui.approve()` 宿主收到可选 `session` 标签并回 `once`/`session`/`deny` 而不是布尔，而桥从不自己调 approve；18.12.1 去掉的是 `eval` 的 `display()`。宿主默认开机自更新，所以「装上时与钉值一致」不等于「一直停在钉值」
+- docs: README 中英各加「机器上还没有 omp？」一段与给远程 agent 的提示词修订；`docs/testing.md` 加 `test:bootstrap`（28 项）与 `test:obtain`（31 项）两节，`test:install` 那一节补第五组；插件目录跟随 `HOME` 那张表按 18.10.4 / 18.11.0 / 18.12.1 三个宿主版本各记一次实测
+- 回归（发版前在 18.12.1 上重跑的一遍）：`lint` / `tsc` 干净，`bun test` 186/186（14 文件）；`tree` 形状 OK、`registry` 28 项（本机注册表 5497 行、装配 15.3ms）、`SMOKE OK`（`tools/list` 22 个）、`HARDEN OK` 34 项、`PACKAGE OK` 48 项（含上面那次两个二进制自装）、`SCENARIOS: 41 steps, 0 failed`、`takeover` 34 项 64.4 秒（推理 POST 1、元数据 1）、审批 `VERDICT: B`（挂起 ≥90030ms，不是 `isError`）、`obtain` 31 项 PASS、`bootstrap` 28 项 `BOOTSTRAP OK`；站点 `build` + `check` 全过。quick tunnel 的公网那半程仍然量不了——本机网络对代理域名重签 TLS，这条按既有定性只 `info:` 报告
+
 
 ## v0.2.1 — 修：换机器装不上
 
