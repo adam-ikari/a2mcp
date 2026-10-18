@@ -13,16 +13,16 @@
 | `cd website && bun run check` | 站点渲染与 SEO 核验，56 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:takeover` | 宿主推理 deny/restore 核验，34 项，约 65 秒 | 是 | `takeover probe: all assertions met` |
-| `bun run test:install` | 发布包自包含 + 端到端，35 项 | 是 | `PACKAGE OK` |
+| `bun run test:install` | 发布包自包含 + 端到端，48 项 | 是 | `PACKAGE OK` |
 | `bun run test:scenario` | 端到端场景，8 个叙事 / 41 步，约 45 秒 | 是 | `SCENARIOS: 41 steps, 0 failed` |
 
-统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主 18.11.0 按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2a-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2A_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主 18.11.0 按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的第五组是这趟里唯一真出网的一支：`PATH` 上什么都不留，让桥自己把两个二进制拉下来，约 46 MB，落点仍是它自己那个临时 `HOME`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2a-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
 六个宿主核验、`test:obtain` 与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
-## `test:install` — 发布包自包含核验 + 端到端（35 项）
+## `test:install` — 发布包自包含核验 + 端到端（48 项）
 
-**核验发布的 tarball 装得上去、装完就能加载、起宿主能通。** 四组：
+**核验发布的 tarball 装得上去、装完就能加载、起宿主能通。** 五组：
 
 | 组 | 项数 | 断言 |
 | --- | --- | --- |
@@ -30,12 +30,19 @@
 | 打包 | 3 | `npm pack` 出 tarball；体积 < 500KB（不含 `node_modules`）；解开是 `package/` 根 |
 | 内容 | 15 | 入口 `extensions/a2a-bridge.ts` 与 `src/` 下每一个 `*.ts` 都在 tarball 里（清单由 `readdirSync(src)` 现读，新增模块不需要改探针，`src/obtain.ts`、`src/tunnel.ts`、`src/xfer.ts` 就是这样自己进的名）；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块，当前 10）；整包除 `@oh-my-pi/pi-coding-agent` 之外不引任何宿主包，而这一项确实读到了 import（不是空过） |
 | 端到端 | 11 | 每次先卸载再 `omp install .`——装的是链接，所以宿主加载的就是工作区；断言该路径不是实体拷贝；桥被发现并广播监听地址；首次启动只写 `host`/`host_llm`/`port`/`token` 加一个 `xfer`（里面是两个二进制名，没有路径也没有沙箱字段）；`initialize` 返回协议版本；`tools/list` 非空且无 `a2a_*`（不断言具体数量——宿主装几个扩展就变几个，写死会静默过期）；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
+| 两个二进制都由一次 `xfer_share` 拉下来 | 13 | 给这个宿主削过的 `PATH`（`omp` 所在目录 + bun + `/usr/bin` + `/bin`）上 `dufs` 与 `cloudflared` 都不应答——这两条不成立就整组跳过并说明原因，这台机器证不了不等于桥错了；宿主照样起；`xfer_share` 的答复里没有一句是关于获取的；两个文件都在桥自己的 `HOME` 里且是 `0755`（6.4 MB 与 38.4 MB）；登记两个版本各一行、`target` 是本机平台；审计两条 `install` 且不是 `isError`；回包 `installed` 同时点名两个版本；loopback GET 字节一致、错密码 401、`xfer_stop` 后端口释放；操作者真正的 `~/.local/bin` 前后一样 |
 
 第三组是关键：入口 import 的是 `../src/*.ts`，`files[]` 漏掉任何一个都会**装得上、加载时才炸**。逐个断言文件名会被新增的模块绕过，走 import 图才抓得到。
 
 端到端这组**每次都先卸载再装**。原先是「已装就跳过」，那是个洞：git URL 装出来的是**实体拷贝**，冻结在装的那一刻，于是改坏工作区的 `src/bridge.ts` 之后端到端那 11 项全绿——它验的是那份旧拷贝。实测过：破坏工作区、旧版核验报 `PACKAGE OK`。现在每次重装，且断言插件目录**解析到工作区，不是拷贝**，破坏工作区会如实变红并点名那个文件。
 
 装法用 `omp install .`（链接）而不是 README 那个 git URL（拷贝）：链接指向工作区，宿主加载的就是当前代码。**本地安装在这里是测试夹具，不是受支持的安装方式**——受支持的只有 git URL 一条，见 README。
+
+第五组是那天那遍端到端的提交版。它盯的形状此前谁都没覆盖：`test:obtain` 里 cloudflared 是写明路径那一侧，`bun test` 把获取整个 stub 掉，于是「一次 `xfer_share`、`PATH` 上什么都没有、两个二进制都自己拉」只被一个用完即删的脚本证明过。代价是每轮 CI 多出约 46 MB 出网（6.4 与 38.4），跑顺时整个探针 23 秒。
+
+这一组硬的是安装那三样——文件、登记、审计。`xfer_share` 先解析 dufs 再起服务，起好了才解析 cloudflared，再开洞，所以隧道成不成它们都该成立。共享本身和它后面那个 GET 只报告不硬：quick tunnel 要 Cloudflare 的边缘，而本仓库早就定过（`test/obtain-probe.ts`）那一边断了不算这个代码的证据。「答复里没有一句是关于获取的」这一条例外——它问的是工具回了什么，不是有没有回成功，所以获取一旦回归，隧道那边正断着它也照样红。
+
+反证跑过两遍。把 `src/obtain.ts` 的下载上限从 64 MB 改成 1024 字节：这一组红五项（获取那条点名截断、两个文件缺失、登记无行、审计那条带 `isError`），其余四组全绿；往削过的 `PATH` 里塞一个 stub `dufs`：整组如实跳过，并在两项的括号里说清这台机器证不了。第一遍还顺手暴露了探针自己的一个毛病——登记文件不存在时 `readFileSync` 抛异常，后面的审计项与「操作者 `HOME` 没被动过」就此不跑，红是红了，报的是一处而不是全部；现在两处外部文件都先查在不在，共享回包也要先看形状（失败时工具回的是一个 JSON 字符串，`JSON.parse` 它 parse 得动）。
 
 ## 插件发现与 HOME：实测结论
 
@@ -75,7 +82,7 @@
 | 钉表每一行的 URL | 8 | 两个二进制 × 四个平台，每个 asset 的 URL `HEAD` 一次要回 200。本机跑不了的那三个平台的行，单测只核对 URL 拼法，是否存在只有这里能说 |
 | 审计 | 3 | 日志里两个版本各一条 `install`，`share` 记录在 |
 
-这组核验里 cloudflared 走的是**写明路径**那一侧，所以「两个二进制都由一次 `xfer_share` 拉下来」这条它没有覆盖，单测也没有（单测把获取整个 stub 掉）。那一条要靠真宿主的端到端：隔离 `HOME`、`PATH` 削到只剩宿主自己，远程调 `xfer_share`。2026-10-17 跑绿的那一遍 14.0 秒返回，`installed` 是 `{"dufs":"0.46.0","cloudflared":"2026.10.1"}`，两个文件都落在桥自己的 `HOME` 里（6.4 MB 与 38.4 MB，`0755`），登记各一行，审计是 `install` 两条加 `share`、`stop` 各一条，loopback GET 字节一致、PUT 201 落盘、错密码 401、`xfer_stop` 后端口释放，操作者真正的 `~/.local/bin` 里依然没有 `dufs`。同一趟在出网差的时候也真跑过另一遍：dufs 装成功，cloudflared 那 40 MB 在流里停住，120 秒到点回 `isError` 带失败原文，共享没开成、dufs 服务被收走、没有孤儿进程，整趟 229 秒——冷装两个二进制最坏就是两个 120 秒加握手，这两遍合起来把上限与正常值都量到了。全绿的那一遍还没拿到，卡在出网：本机对 GitHub 的 TLS 今天反复 `unknown certificate verification error`，同一时刻同一个 URL 有时 200 有时超时。
+这组核验里 cloudflared 走的是**写明路径**那一侧，所以「两个二进制都由一次 `xfer_share` 拉下来」这条它没有覆盖，单测也没有（单测把获取整个 stub 掉）。那一条要靠真宿主的端到端：隔离 `HOME`、`PATH` 削到只剩宿主自己，远程调 `xfer_share`。2026-10-17 头一遍跑绿是拿用完即删的脚本量的：14.0 秒返回，`installed` 是 `{"dufs":"0.46.0","cloudflared":"2026.10.1"}`，两个文件都落在桥自己的 `HOME` 里（6.4 MB 与 38.4 MB，`0755`），登记各一行，审计是 `install` 两条加 `share`、`stop` 各一条，loopback GET 字节一致、PUT 201 落盘、错密码 401、`xfer_stop` 后端口释放，操作者真正的 `~/.local/bin` 里依然没有 `dufs`。同一趟在出网差的时候也真跑过另一遍：dufs 装成功，cloudflared 那 40 MB 在流里停住，120 秒到点回 `isError` 带失败原文，共享没开成、dufs 服务被收走、没有孤儿进程，整趟 229 秒——冷装两个二进制最坏就是两个 120 秒加握手，这两遍合起来把上限与正常值都量到了。第二天这一遍升格成 `test:install` 的第五组（见上一节），从此它是提交里的核验，脚本不再是唯一证人。
 
 真隧道单列，只 `info:` 报告不断言：拿第一节下载并验过哈希的那份 cloudflared 起一次真 quick tunnel，主机名确实 announce 出来了，但从发布它的那台机器 curl 回去报证书错误——本机网络对代理域名重签 TLS。于是断言那一路用注入的开洞器，硬检查一律打在 `127.0.0.1:<port>` 上。还有一处现象记在 `test/obtain-probe.ts` 的文件头而没有归因：探针自己同时握住真 cloudflared 与那次公网取回时，两次都是本地各项全过、然后不再返回。它留在文件头，是因为没归因的事既不能写成结论，也不能写成断言。
 
