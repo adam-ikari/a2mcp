@@ -28,10 +28,10 @@ const _REPO = resolve(process.env.REPO ?? join(import.meta.dir, ".."));
 const tmp = mkdtempSync(join(tmpdir(), "a2a-apv2-"));
 const agentDir = join(tmp, ".omp", "agent");
 const _extDir = join(agentDir, "extensions");
-const cfgPath = join(agentDir, "a2a-bridge.json");
+const cfgPath = join(agentDir, "a2mcp.json");
 const outLog = join(tmp, "omp.out.log");
 const errLog = join(tmp, "omp.err.log");
-const auditPath = join(agentDir, "a2a-bridge.log");
+const auditPath = join(agentDir, "a2mcp.log");
 const sideEffect = join(tmp, "SIDE-EFFECT-HAPPENED");
 
 linkExtension(agentDir);

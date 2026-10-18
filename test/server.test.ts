@@ -133,7 +133,7 @@ describe("server protocol", () => {
 		// page, and nothing compared them: 0.2.0 answered `initialize` with "0.1.0"
 		// while the page quoted that response. This reads the entry's own source and
 		// the page's own line, because both are what a reader would copy.
-		const entry = readFileSync(join(root, "extensions", "a2a-bridge.ts"), "utf8");
+		const entry = readFileSync(join(root, "extensions", "a2mcp.ts"), "utf8");
 		expect(entry).toContain("version: BRIDGE_VERSION");
 		// Anchored on `serverInfo` so the comment above it — which quotes the old
 		// literal as the mistake it replaced — is not itself the match. A regex over

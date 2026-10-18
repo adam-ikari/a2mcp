@@ -1,5 +1,5 @@
 {
-  "name": "pi-a2a-ext",
+  "name": "a2mcp",
   "version": "0.3.0",
   "description": "Expose a running omp session's tools over MCP (Streamable HTTP), plus file transfer over HTTP through a quick tunnel",
   "license": "MIT",
@@ -10,20 +10,20 @@
     "oh-my-pi",
     "omp",
     "mcp",
-    "a2a",
+    "agent2mcp",
     "extension"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/adam-ikari/pi-a2a-ext.git"
+    "url": "git+https://github.com/adam-ikari/a2mcp.git"
   },
-  "homepage": "https://github.com/adam-ikari/pi-a2a-ext#readme",
+  "homepage": "https://github.com/adam-ikari/a2mcp#readme",
   "bugs": {
-    "url": "https://github.com/adam-ikari/pi-a2a-ext/issues"
+    "url": "https://github.com/adam-ikari/a2mcp/issues"
   },
   "pi": {
     "extensions": [
-      "./extensions/a2a-bridge.ts"
+      "./extensions/a2mcp.ts"
     ]
   },
   "files": [

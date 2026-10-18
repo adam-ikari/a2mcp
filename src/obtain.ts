@@ -200,7 +200,7 @@ export interface ObtainDeps {
 	env?: NodeJS.ProcessEnv;
 	/** Where to install. Default `~/.local/bin`, the same place cloudflared lives. */
 	binDir?: string;
-	/** Ledger of what this bridge installed. Default `<agentDir>/a2a-bridge.installs.json`. */
+	/** Ledger of what this bridge installed. Default `<agentDir>/a2mcp.installs.json`. */
 	ledger?: string;
 	/** Test seam: a local server standing in for the release host. */
 	fetchImpl?: typeof fetch;
@@ -297,7 +297,7 @@ function ledgerPath(deps: ObtainDeps, env: NodeJS.ProcessEnv): string {
  * later: the binary is in `~/.local/bin`, the account of it is here.
  */
 export function obtainLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
-	return env.A2A_BRIDGE_INSTALLS ?? join(getAgentDir(), "a2a-bridge.installs.json");
+	return env.A2A_BRIDGE_INSTALLS ?? join(getAgentDir(), "a2mcp.installs.json");
 }
 
 async function readLedger(file: string): Promise<Ledger> {

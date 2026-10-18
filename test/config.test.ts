@@ -19,7 +19,7 @@ const VALID: BridgeConfig = {
 
 beforeAll(async () => {
 	dir = await mkdtemp(join(tmpdir(), "a2a-cfg-"));
-	file = join(dir, "a2a-bridge.json");
+	file = join(dir, "a2mcp.json");
 	env = { A2A_BRIDGE_CONFIG: file };
 });
 

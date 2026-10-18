@@ -115,7 +115,7 @@ if [ "$DO_UNINSTALL" -eq 1 ]; then
 	"$OMP_CMD" plugin uninstall "$PLUGIN"
 	echo
 	echo "Registration removed. The bridge writes its own config, port and token to"
-	echo "  $HOME/.omp/agent/a2a-bridge.json"
+	echo "  $HOME/.omp/agent/a2mcp.json"
 	echo "and its audit log beside it; both are left alone, which is what the README says"
 	echo "uninstall does."
 	exit 0
@@ -255,7 +255,7 @@ fi
 echo "  * The host needs model credentials before any session exists at all; without"
 echo "    them there is nothing for the bridge to serve."
 echo "  * On the first session_start the bridge writes its own config to"
-echo "    $HOME/.omp/agent/a2a-bridge.json — random port, 43-character token."
+echo "    $HOME/.omp/agent/a2mcp.json — random port, 43-character token."
 echo "    Don't create that file by hand."
 echo "  * The host announces the endpoint in its notification bar; point an MCP client"
 echo "    at it from there."

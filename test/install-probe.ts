@@ -160,7 +160,7 @@ check(existsSync(join(pkgRoot, "package.json")), "tarball unpacks to a package/ 
 // instead, and the check becomes "every module in src/ ships", which cannot fall
 // behind the code.
 const shipped = [
-	"extensions/a2a-bridge.ts",
+	"extensions/a2mcp.ts",
 	...readdirSync(join(REPO, "src"))
 		.filter((f) => f.endsWith(".ts"))
 		.sort()
@@ -176,7 +176,7 @@ check(shipped.length > 1, "the shipped-module list was derived, not typed", `${s
 // Walk the relative-import graph from the entry. Anything it reaches has to be
 // in the tarball; a module that only exists in the working tree (a dev-only
 // file, or one dropped from files[]) installs fine and then throws on load.
-const entry = join(pkgRoot, "extensions", "a2a-bridge.ts");
+const entry = join(pkgRoot, "extensions", "a2mcp.ts");
 const seen = new Set<string>();
 const missing: string[] = [];
 const queue = [entry];
@@ -371,7 +371,7 @@ try {
 			"no announcement and no short error line",
 	);
 	baseUrl = announced?.[1] ?? "";
-	const cfg = JSON.parse(readFileSync(join(e2eAgent, "a2a-bridge.json"), "utf8"));
+	const cfg = JSON.parse(readFileSync(join(e2eAgent, "a2mcp.json"), "utf8"));
 	e2eToken = cfg.token as string;
 	check(
 		Object.keys(cfg).sort().join(",") === "host,host_llm,port,token,xfer",
@@ -546,7 +546,7 @@ try {
 
 		if (announced) {
 			const url = announced[1];
-			const xferToken = JSON.parse(readFileSync(join(xferAgent, "a2a-bridge.json"), "utf8")).token as string;
+			const xferToken = JSON.parse(readFileSync(join(xferAgent, "a2mcp.json"), "utf8")).token as string;
 			const call = async (method: string, params: unknown, sid?: string, ms = 300_000) => {
 				const r = await fetch(url, {
 					signal: AbortSignal.timeout(ms),
@@ -610,7 +610,7 @@ try {
 			// Both files are read through a presence check: a bridge that never got as far
 			// as writing them has to answer with FAIL lines here, not with an exception from
 			// `readFileSync` that ends the group and hides the checks after it.
-			const ledgerPath = join(xferAgent, "a2a-bridge.installs.json");
+			const ledgerPath = join(xferAgent, "a2mcp.installs.json");
 			const rows = existsSync(ledgerPath)
 				? Object.values(
 						JSON.parse(readFileSync(ledgerPath, "utf8")) as Record<string, { version: string; target: string }>,

@@ -115,8 +115,8 @@ type BootOpts = {
 async function boot(label: string, opts: BootOpts = {}): Promise<Host> {
 	const home = join(tmp, label);
 	const agentDir = join(home, ".omp", "agent");
-	const cfgPath = join(agentDir, "a2a-bridge.json");
-	const auditPath = join(agentDir, "a2a-bridge.log");
+	const cfgPath = join(agentDir, "a2mcp.json");
+	const auditPath = join(agentDir, "a2mcp.log");
 	const outLog = join(home, "omp.out.log");
 	const errLog = join(home, "omp.err.log");
 
@@ -440,11 +440,11 @@ await scenario("a malformed config stops the bridge from coming up, and says why
 	step(host.child.exitCode === null, "the host itself keeps running", `exit=${host.child.exitCode}`);
 	const noise = `${host.out()}\n${host.err()}`;
 	step(
-		/a2a-bridge\.json/.test(noise) && /port/.test(noise),
+		/a2mcp\.json/.test(noise) && /port/.test(noise),
 		"the failure names the file and the field",
 		noise
 			.split("\n")
-			.filter((l) => /a2a-bridge|port/i.test(l))
+			.filter((l) => /a2mcp|port/i.test(l))
 			.slice(0, 2)
 			.join(" | ")
 			.slice(0, 200),

@@ -18,12 +18,12 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry, type ExtensionAPI, type ExtensionContext, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent";
-import a2aBridge from "../extensions/a2a-bridge.ts";
+import a2aBridge from "../extensions/a2mcp.ts";
 import { configPath } from "../src/config.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "a2a-entry-"));
 const savedEnv = { ...process.env };
-process.env.A2A_BRIDGE_CONFIG = join(dir, "a2a-bridge.json");
+process.env.A2A_BRIDGE_CONFIG = join(dir, "a2mcp.json");
 process.env.A2A_BRIDGE_AUDIT = join(dir, "audit.log");
 // A 0700 dir, not the default 0755 temp dir: the read-only-file test needs the
 // non-root owner to be refused, and a group/other-writable dir would let the write

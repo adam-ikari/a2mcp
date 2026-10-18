@@ -17,9 +17,9 @@
  * If you have a real models.yml and prefer it (e.g. to exercise against a real
  * host config), set A2A_PROBE_REAL_MODELS=1.
  */
-import { copyFileSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 /** Unreachable on purpose — see the note above. */
 const FAKE_MODELS_YML = `providers:
@@ -67,7 +67,19 @@ export function seedModels(agentDir: string): string {
  */
 export function linkExtension(agentDir: string): void {
 	const REPO = resolve(import.meta.dir, "..");
+	// The entry filename comes from `pi.extensions` — the host's own load switch —
+	// rather than from a second copy of the name here. A hardcoded filename is a
+	// rename waiting to go half-done: package.json would point at the new file while
+	// every real-host probe kept linking the old one, and both would load.
+	const entry = (
+		JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as {
+			pi?: { extensions?: string[] };
+		}
+	).pi?.extensions?.[0];
+	if (!entry) throw new Error("package.json: pi.extensions[0] is missing");
+	const src = resolve(REPO, entry);
+	if (!existsSync(src)) throw new Error(`package.json: pi.extensions[0] does not exist (${entry})`);
 	const extDir = join(agentDir, "extensions");
 	mkdirSync(extDir, { recursive: true });
-	symlinkSync(resolve(REPO, "extensions", "a2a-bridge.ts"), join(extDir, "a2a-bridge.ts"));
+	symlinkSync(src, join(extDir, basename(src)));
 }

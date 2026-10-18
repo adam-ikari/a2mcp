@@ -336,7 +336,7 @@ describe("the table production actually uses", () => {
 	});
 
 	test("the ledger lives where the docs say it does", () => {
-		expect(obtainLedgerPath({})).toMatch(/a2a-bridge\.installs\.json$/);
+		expect(obtainLedgerPath({})).toMatch(/a2mcp\.installs\.json$/);
 		expect(obtainLedgerPath({ A2A_BRIDGE_INSTALLS: join(work, "elsewhere.json") })).toBe(join(work, "elsewhere.json"));
 	});
 

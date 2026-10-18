@@ -16,8 +16,8 @@ const _REPO = resolve(process.env.REPO ?? join(import.meta.dir, ".."));
 const tmp = mkdtempSync(join(tmpdir(), "a2a-harden-"));
 const agentDir = join(tmp, ".omp", "agent");
 const _extDir = join(agentDir, "extensions");
-const cfgPath = join(agentDir, "a2a-bridge.json");
-const auditPath = join(agentDir, "a2a-bridge.log");
+const cfgPath = join(agentDir, "a2mcp.json");
+const auditPath = join(agentDir, "a2mcp.log");
 const outLog = join(tmp, "omp.out.log");
 const errLog = join(tmp, "omp.err.log");
 const dataFile = join(tmp, "payload.txt");
@@ -262,7 +262,7 @@ try {
 	 *   host calls.
 	 * - **The live file is not a complete ledger on its own.** Pairing and hang
 	 *   detection both need `<path>.1` too, so a caller that reads only
-	 *   `a2a-bridge.log` sees `done` records whose `start` sits in the other file. The
+	 *   `a2mcp.log` sees `done` records whose `start` sits in the other file. The
 	 *   approval probe reads an unpaired `start` as a hang, so pairing and hang
 	 *   detection both have to look at both files. That is reported here and
 	 *   documented in docs/protocol.md rather than asserted, because the bridge writes

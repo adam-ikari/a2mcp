@@ -8,9 +8,9 @@ const MAX_ARGS_CHARS = 1024;
 /** Args values longer than this are payloads (base64 file bytes), not intent. */
 const MAX_VALUE_CHARS = 120;
 
-/** Audit log path: `$A2A_BRIDGE_AUDIT` or `<agentDir>/a2a-bridge.log`. */
+/** Audit log path: `$A2A_BRIDGE_AUDIT` or `<agentDir>/a2mcp.log`. */
 export function auditLogPath(env: NodeJS.ProcessEnv = process.env): string {
-	return env.A2A_BRIDGE_AUDIT || join(getAgentDir(), "a2a-bridge.log");
+	return env.A2A_BRIDGE_AUDIT || join(getAgentDir(), "a2mcp.log");
 }
 
 function digest(value: string): string {

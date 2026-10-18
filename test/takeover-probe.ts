@@ -48,8 +48,8 @@ import { linkExtension } from "./harness.ts";
 const TOKEN = "takeover-probe-token-0123456789abcdef";
 const tmp = mkdtempSync("/tmp/a2a-takeover-XXXXXX");
 const agentDir = join(tmp, ".omp", "agent");
-const cfgPath = join(agentDir, "a2a-bridge.json");
-const auditPath = join(agentDir, "a2a-bridge.log");
+const cfgPath = join(agentDir, "a2mcp.json");
+const auditPath = join(agentDir, "a2mcp.log");
 
 const t0 = Date.now();
 const stage = (msg: string) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);

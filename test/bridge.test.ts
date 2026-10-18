@@ -30,7 +30,7 @@ const extCtx = {} as ExtensionContext;
 // Sandbox the audit log for the WHOLE file, not just the audit test: every
 // buildCallTool path (including the exposure-gate rejections) appends, and
 // without this the fire-and-forget writes would land in the real
-// ~/.omp/agent/a2a-bridge.log of whoever runs the tests.
+// ~/.omp/agent/a2mcp.log of whoever runs the tests.
 const savedEnv = { ...process.env };
 let auditDir: string;
 
