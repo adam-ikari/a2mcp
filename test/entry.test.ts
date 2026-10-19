@@ -121,7 +121,10 @@ function mountMain(): void {
 		id: MAIN_AGENT_ID,
 		displayName: "fake-main",
 		kind: "main",
-		session: { getToolByName: () => undefined } as never,
+		// A model on the fake, because these tests are about a configured host: the
+		// placeholder in src/auto-model.ts must stay out of the way when the session
+		// already has one, and an empty slot here would notify into these notes.
+		session: { getToolByName: () => undefined, model: { id: "fake-model" } } as never,
 	});
 }
 

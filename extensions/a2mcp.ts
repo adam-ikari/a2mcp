@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { auditHostLlm } from "../src/audit.ts";
+import { ensurePlaceholderOnMainSession } from "../src/auto-model.ts";
 import { buildCallTool, buildToolCatalog, hasMainSession } from "../src/bridge.ts";
 import type { BridgeConfig } from "../src/config.ts";
 import { configPath, generateToken, loadConfig, saveConfig } from "../src/config.ts";
@@ -92,6 +93,20 @@ function reportArmFailure(ctx: ExtensionContext, e: unknown): void {
 
 export default function a2mcpExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_ev, ctx) => {
+		// A machine with no model configuration opens sessions that cannot take a
+		// prompt ("No model selected"), even though the bridge itself binds fine —
+		// so fill the empty slot with an unreachable placeholder before anything
+		// else reads the session. It never touches a slot that already has a
+		// model in it (see src/auto-model.ts).
+		try {
+			if (ensurePlaceholderOnMainSession()) {
+				ctx.ui.notify(
+					"a2mcp: no model configured — selected unreachable placeholder a2mcp/offline; /login or /model for real inference",
+				);
+			}
+		} catch (e) {
+			ctx.ui.notify(`a2mcp placeholder model failed: ${(e as Error)?.message ?? String(e)}`, "error");
+		}
 		// Re-arm whenever the switch is on, not only when the config says so: the
 		// config only decides the *startup* state, while a runtime-armed takeover has
 		// to survive a rebuilt Main session (fresh registry, nothing denied) and a
