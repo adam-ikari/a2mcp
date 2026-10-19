@@ -59,7 +59,7 @@ const PAGE_DESCRIPTIONS = {
 	"protocol.md":
 		"桥实现的 MCP 2025-11-25 Streamable HTTP 子集：处理顺序、会话生命周期、错误码总表、桥自己的 xfer_* 三个工具与那条 quick tunnel、POST /host-llm 的宿主推理切换，以及它放弃的东西。",
 	"testing.md":
-		"核验矩阵：3 项仓库形状（无依赖，排在 bun test 之前）、226 单测含 6 项命名守卫、8 项占位模型与 13 项 PowerShell 字面核对、28 项真实模型注册表（不起宿主）、34 项加固、48 项发布包与端到端（PATH 上两个二进制都缺时真下载）、37 项外部二进制获取（Windows 那两行按字节读）、34 项宿主推理 deny/restore、46 项一键脚本（其中一支把自装宿主的下载换成假 curl，走全播种分支）、8 个端到端场景，另有审批边界判别。顺手量的还有审计轮转与逐层脱敏；插件发现与 HOME 的实测结论在正文。",
+		"核验矩阵：仓库形状、226 项单测（含命名守卫、占位模型、PowerShell 字面核对）、真实模型注册表、加固、发布包端到端、外部二进制获取、宿主推理 deny/restore、一键脚本、端到端场景与审批边界。各项的判据、实测数字与变异记录在正文。",
 	"computer-use.md":
 		"computer use 让模型看屏幕猜坐标去点按，本桥让调用方按名字调工具。执行走的是本机工具自己的实现，目录由 tools/list 一条条给出名字和参数。",
 };
@@ -154,13 +154,13 @@ features:
     details: DAP 调试器（xd://debug）、LSP（xd://lsp）这类设备不进工具目录，远程 agent 用 read/write 的 path 参数就能读写和执行。有什么设备，跟着本机 omp 装了哪些扩展走。
     link: /intro#设备
   - title: 传文件走普通 HTTP
-    details: xfer_share 收一条宿主路径，交给 dufs 服务，外面套一条 cloudflared quick tunnel，回来的 URL 内嵌 basic auth 凭据；字节不经过 JSON-RPC。前置的两个二进制 PATH 上找不到，桥按钉死的版本加归档 sha256 拉一份装进自己的安装目录（POSIX 是 ~/.local/bin，Windows 是 LOCALAPPDATA 下的 a2mcp\\bin，两边都钉了五个平台）。那个 URL 就是一份能力：拿着它的人能读能写那条路径，直到共享关掉。
+    details: xfer_share 收一条宿主路径，交给 dufs 服务，外面套一条 cloudflared quick tunnel，回来的 URL 内嵌 basic auth；字节不经过 JSON-RPC。前置的两个二进制 PATH 上找不到，桥按钉死的版本加归档 sha256 拉一份装进自己的目录。那个 URL 就是一份能力：拿着它的人能读能写那条路径，直到共享关掉。
     link: /intro#传文件
   - title: 宿主推理可以整体关掉
     details: 远程调用可能唤醒宿主自己的 agent，花宿主的 token。host_llm 配置与 POST /host-llm 把这件事变成开关：deny 在位时宿主的会话发不出任何模型请求，核验探针对着一个真在听的计数 sink 数过——零是数出来的。
     link: /intro#宿主推理接管
   - title: 装它分两条路
-    details: 机器上已经有 omp，就那一条 omp install <git-url>；新机器多一条一键脚本，它管的是宿主那一层——外加一份只在它自装宿主时才写的占位 models.yml——扩展那一半执行的还是同一条命令。POSIX 是 bootstrap.sh，可以不克隆、从管道进去跑；Windows 有 bootstrap.ps1，但那一支一次都没被执行过，站上来的只有十三项字面核对。
+    details: 机器上已经有 omp，就那一条 omp install <git-url>；新机器一条脚本管宿主那一层，扩展仍然按同一条命令装。bootstrap.sh 可以不克隆、从管道进去跑；bootstrap.ps1 也照样不落盘直接跑，2026-10-19 在真 Windows 上跑通第一次（宿主已在的分支），自装宿主并写占位 models.yml 那半还没有真机执行。
     link: /intro#安装
   - title: 接上远程 agent
     details: 本机 omp 首次启动时广播接口地址并生成 token，抄进远程客户端的 mcp.json 就连上。默认只监听 127.0.0.1，跨机器走 SSH 端口转发。
@@ -172,7 +172,7 @@ features:
     details: 客户端要实现的全部约定：处理顺序、会话生命周期、错误码总表。
     link: /protocol
   - title: 测试与核验
-    details: 226 项单测之外，六个核验全都拉起真实的 omp 跑完整流程；宿主推理那一个让宿主真连进计数 sink，零是数出来的；发布包那一个装回去跑通才算过，PATH 上两个二进制都不应答时它当场拉 6.4 MB 与 38.4 MB 下来；第七个把接管架在宿主真实的模型注册表上跑，连宿主都不用起。各项覆盖什么、怎么判读，测试页写着。
+    details: 226 项单测之外，七个核验大多拉起真实的 omp 跑完整流程：deny 那一个对着真在听的计数 sink 数出零，发布包那一个装回去跑通才算过。各项覆盖什么、怎么判读，测试页写着。
     link: /testing
 ---
 `;

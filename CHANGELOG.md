@@ -4,6 +4,15 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## 2026-10-19 — `bootstrap.ps1` 真机首跑；README 的 Windows 装法不落盘；站文压缩一轮
+
+维护者在真 Windows 机器上跑了 `bootstrap.ps1` 的第一遍：DryRun 打出计划，真跑走完——`PATH` 上已有 `omp 18.12.2`、扩展已登记，脚本问宿主、宿主答 `✔ plugin:a2mcp: v0.4.0`。这一遍过的是「已有宿主」那一支；官方安装器那一次调用与占位 `models.yml` 那一次播种仍然没有任何地方执行过。控制台里的 `鈼?`/`鉁?` 是宿主自己的输出字形被 GBK 码页读串，不是脚本的字节——脚本照旧纯 ASCII，`chcp 65001` 后原样显示。所有「没有一行被解释过」的句子（两份 README、`docs/testing.md`、脚本头注释、站点卡）都按这次首跑的实际范围改窄，改成支级别的边界。
+
+- docs: README 的 Windows 指令从 `iwr ... -OutFile bootstrap.ps1` 改成了不落盘的 `& ([scriptblock]::Create((iwr -UseBasicParsing <raw-url>).Content)) -DryRun`（维护者：「不要保存安装脚本」）。这不是脚本机制的变更，是文档补上脚本一直支持的形态：`$PSCommandPath` 为空时它跳过旁边的 `package.json`、只在 `PATH` 上没有宿主时才去 spec 仓库读 raw pin，两条都成立才需要落盘。
+- docs: 安装一节按维护者要求重排成「omp 安装命令 + 一键安装命令，分 Linux / macOS / Windows」——正文只留命令与一句级的提醒（旧名迁移与 `mcp.json` 重抄、URL 形态、开关一行、占位 `models.yml` 的 create-only 条件）。被删掉的段落都有别的家：迁移细节在下面的改名一节，核验边界在 `docs/testing.md` 与脚本头注释，首跑事实就在本节上面。`test/naming.test.ts` 的 allowance 表跟着缩——README 不再念旧配置文件名，六条白名单成了空开的洞，删。
+- site: 「网站太啰嗦了」一轮——首页 install/xfer/testing 三张卡、testing 页描述、中英 README 的一键安装与 Windows 两节全部收紧，量砍了约四成；被守的事实一个字没丢（git URL 原文、pin 语义、create-only 条件、46/226/十三这些数字、每处诚实边界）。
+- 回归: `bun test` 226/226（项数未动，ps1 头注释改写字面仍过十三项）、`lint` / `tsc` 干净、站点 `build` + `check` 全过。
+
 ## 2026-10-19 — 零模型配置的机器：桥自己填占位模型，引导脚本给无头启动补 `models.yml`
 
 Windows 宿主来的第一条真实反馈是这句报错：`Error: No model selected. Use /login, set an API key environment variable, or create C:\Users\user\.omp\agent\agent.db. Then use /model to select a model.` 第一轮只把它写进故障排查（手工放一份占位 `models.yml`），随后在钉住的宿主 18.12.1 上把两条启动路各量了一遍，判据翻了面：**交互式 TUI 在零配置机器上照样创建 session**，那句报错是提示时刻的闸门（`agent-session.ts` 的 `if (!this.model) throw`），拦的是操作者的 prompt，桥那时已经在广播——临时 `HOME` 实测 `initialize` 回 200；**无头启动起不来**，`omp --mode rpc` 死在 `createAgentSession > resolveModelDiscoveryFallback`，扩展代码一行都没跑过，磁盘上有模型配置才救得了它。原先那句「宿主没有模型配置就不创建 session」因此是半句对的：它对 rpc 成立，对 TUI 不成立。自动化据此分两半，范围由维护者确认「两半都做」。
@@ -14,7 +23,7 @@ Windows 宿主来的第一条真实反馈是这句报错：`Error: No model sele
 - fix: `test/entry.test.ts` 的假 `Main` 会话补上 `model` 字段。占位接线进 `session_start` 后，那两只没有模型的假会话第一次真把桥的兜底路径走了一遍：两项红，红的是提示文本挤掉了它们数通知的断言。修夹具不修判据——那两组测的是已配置宿主的行为，未配置那半由 `test/auto-model.test.ts` 八项守。
 - test: `bun test` 214 → 226 项（16 → 17 文件）。新增 `test/auto-model.test.ts` 八项（有模型 → 零调用；空槽 → 恰好一次注册一次选中；行的字面值、sourceId 与接管名的不等、选中的是注册表自己的行、剪枝后逐次重放、注册表不吐行就抛错）；`test/bootstrap-ps1.test.ts` 九项 → 十三项（播种正文逐行相等、`InstalledHost` 各只赋值一次且紧跟「No omp on PATH」、两边 create-only 且落在各自 profile 路径、dry-run 同一句计划）。`test:bootstrap` 39 → 46 项：第七组把自装宿主那条分支从头走到尾——假 `curl` 顶掉安装器那一次下载，二进制预先躺在 `PI_INSTALL_DIR`，于是文件写出、字节、`Wrote` 回声、已有文件不动、dry-run 只打计划、已有宿主不写，全都有了一条断言。变异五道：删「有模型就不动」守卫 → 单项红二；sourceId 写成 `a2mcp` → 红一；删 `.sh` 的 create-only 守卫 → 探针红一（`exit 0: claimed a write`）；删 `.ps1` 的 `Test-Path` 守卫 → 红一；把 `$InstalledHost = $true` 写两处 → 红一。
 - docs: 中英 README 的故障排查条目重写成两条门的分法（桥自动补位；无头靠脚本那份文件；更早宿主报的 `No models available` 也点名），一键安装一节补「安装器之外它只写一个文件」一段；`docs/protocol.md` 新增「占位模型」一节（形状、三条线、与 deny 同场、无头为什么救不了、那份 YAML 全文）；`docs/testing.md` 按实测改 226/46/十三，播种组与 pty 实测记录各成一小节，「宿主没有模型配置就不创建 session」那句旧判据就地改对。站点三处数字跟着 sync.mjs 改。
-- 边界：Windows 一侧两半都没执行过——没有 PowerShell、没有 Windows，`.ps1` 的播种只有那四条字面核对；Linux 侧的运行态是 pty 真量，磁盘侧是探针真跑（下载除外）。占位模型把「这台机器没配模型」从启动期硬报错变成运行期连接失败，它不产生推理，也不该被当成能用的模型。
+- 边界（写于本节发布时，当天下午被下一节改窄）：Windows 一侧两半都没执行过——没有 PowerShell、没有 Windows，`.ps1` 的播种只有那四条字面核对；Linux 侧的运行态是 pty 真量，磁盘侧是探针真跑（下载除外）。占位模型把「这台机器没配模型」从启动期硬报错变成运行期连接失败，它不产生推理，也不该被当成能用的模型。
 - 回归: `lint` / `tsc` 干净、`bun test` 226/226（17 文件）、`test:bootstrap` 46 项 `BOOTSTRAP OK`、`test:takeover` 34 项全绿、pty 真宿主一遍、站点 `build` + `check` 全过。数字全出自这一遍。
 
 ## 2026-10-19 — 安装一节分成两条路：omp 安装与一键安装
