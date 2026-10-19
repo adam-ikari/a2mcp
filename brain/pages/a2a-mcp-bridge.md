@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-19T15:06:12"
+updated: "2026-10-19T16:37:51"
 ---
 
 <!-- compiled_truth -->
@@ -945,4 +945,9 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
 - time: 2026-10-19T15:06:12
   kind: reversal
   summary: "bootstrap.ps1「没有一行被解释过」翻面：2026-10-19 真 Windows 首跑已过已有宿主分支，安装器与播种两支仍未真跑"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-19T16:37:51
+  kind: decision
+  summary: "/a2mcp tunnel (2026-10-19): the bridge may hold a public listener, as the operators fourth opinion path. Operator-only host-session command (never a tool, never an HTTP route) piping openQuickTunnel + resolveBinary onto server.port; runtime state like the takeover switch (no config, no restart survival); idempotent reuse on second call, deliberately NOT xfer_shares replace semantics; torn down with the port so a trycloudflare hostname cannot outlive the bridge; audited as tool tunnel with sid null; the Bearer token is the only gate and the docs say so in the notification itself."
   affects: [a2a-mcp-bridge]
