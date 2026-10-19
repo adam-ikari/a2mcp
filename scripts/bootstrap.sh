@@ -249,6 +249,10 @@ fi
 # host commands are printed under the plain name.
 OMP_LABEL=${OMP_CMD:-omp}
 
+# Set when the seeding below actually writes the file; the closing notes speak
+# from this flag, so a machine the script did not seed is not told it was.
+SEEDED_YML=""
+
 # --- placeholder model for the host this script just installed ---
 # A machine with no model configuration at all cannot boot the host headless:
 # `omp --mode rpc` stops inside createAgentSession, before any extension code
@@ -292,6 +296,7 @@ EOF
 	echo "Wrote $MODELS_YML — an unreachable placeholder provider so the host"
 	echo "  boots headless too; it is create-only, and the bridge selects the same"
 	echo "  row at session_start even without this file (interactive starts)."
+	SEEDED_YML="$MODELS_YML"
 }
 
 seed_placeholder_models
@@ -347,8 +352,14 @@ echo "  * With no model configured the bridge still comes up: at session_start i
 echo "    selects an unreachable placeholder (a2mcp/offline), so the host's own"
 echo "    prompts fail as connection errors instead of stopping everything. Real"
 echo "    inference needs /login or /model. Headless (--mode rpc) starts cannot get"
-echo "    that far without a models.yml: this script wrote one when it installed"
-echo "    the host, and the README's troubleshooting section has the shape."
+if [ -n "$SEEDED_YML" ]; then
+	echo "    that far without a models.yml: this script wrote one at $SEEDED_YML."
+	echo "    The README's troubleshooting section has the shape."
+else
+	echo "    that far without a models.yml. This script wrote no such file here - it"
+	echo "    writes one only when it installs the host itself on a machine with none."
+	echo "    The README's troubleshooting section has the shape."
+fi
 echo "  * On the first session_start the bridge writes its own config to"
 echo "    $HOME/.omp/agent/a2mcp.json — random port, 43-character token."
 echo "    Don't create that file by hand."

@@ -33,6 +33,9 @@
   First run on a real Windows machine: 2026-10-19, omp 18.12.2 already on PATH
   and a2mcp already registered. DryRun printed the plan and wrote nothing; the
   real run left the host alone and ended on the host's own plugin doctor tick.
+  Same day, the in-memory usage line above was proven on that machine too: the
+  -DryRun plan came out of the raw URL with nothing saved to disk, in clean
+  ASCII -- the closing notes are this script's own bytes, not the host's.
   That exercised the already-installed-host branch. The installer call and the
   models.yml seeding have still never run anywhere. Thirteen items in bun test
   read this file as text against bootstrap.sh; the boundary they set is
@@ -299,6 +302,9 @@ $OmpLabel = if ($Omp) { $Omp } else { "omp" }
 if (-not $DryRun -and -not $Omp) { Fail "omp on PATH" "nothing answering for omp in PATH" }
 
 # --- placeholder model for the host this script just installed ---
+# Set when the seeding below actually writes the file; the closing notes speak
+# from this flag, so a machine the script did not seed is not told it was.
+$script:SeededModels = $null
 # A machine with no model configuration at all cannot boot the host headless:
 # `omp --mode rpc` stops inside createAgentSession, before any extension code
 # ever runs. The interactive TUI does come up there, and the bridge fills the
@@ -344,6 +350,7 @@ providers:
     Write-Host "Wrote $ModelsYml -- an unreachable placeholder provider so the host"
     Write-Host "  boots headless too; it is create-only, and the bridge selects the same"
     Write-Host "  row at session_start even without this file (interactive starts)."
+    $script:SeededModels = $ModelsYml
 }
 
 Seed-PlaceholderModels
@@ -422,8 +429,14 @@ Write-Host "  * With no model configured the bridge still comes up: at session_s
 Write-Host "    selects an unreachable placeholder ($Plugin/offline), so the host's own"
 Write-Host "    prompts fail as connection errors instead of stopping everything. Real"
 Write-Host "    inference needs /login or /model. Headless (--mode rpc) starts cannot get"
-Write-Host "    that far without a models.yml: this script wrote one when it installed"
-Write-Host "    the host, and the README's troubleshooting section has the shape."
+if ($script:SeededModels) {
+    Write-Host "    that far without a models.yml: this script wrote one at"
+    Write-Host "    $($script:SeededModels). The README's troubleshooting section has the shape."
+} else {
+    Write-Host "    that far without a models.yml. This script wrote no such file here - it"
+    Write-Host "    writes one only when it installs the host itself on a machine with none."
+    Write-Host "    The README's troubleshooting section has the shape."
+}
 Write-Host "  * On the first session_start the bridge writes its own config to"
 Write-Host "    $env:USERPROFILE\.omp\agent\a2mcp.json - random port, 43-character token."
 Write-Host "    Don't create that file by hand."
