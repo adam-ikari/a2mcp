@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-19T14:34:13"
+updated: "2026-10-19T15:06:12"
 ---
 
 <!-- compiled_truth -->
@@ -157,7 +157,7 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 
 **钉表按上游 asset 的形状增删，不按对称增删**：`win32-arm64` 不建行，因为 dufs 发 aarch64 的 Windows 构建而 cloudflared 不发 arm64 的 exe；一次 `xfer_share` 要两个二进制，补一半就是造一台装到一半的机器。那句既有的「no pinned build for `<target>`」是这件事的正确说法，代码不替上游的 release 列表编理由。
 
-**没执行过的那一半必须自己站出来**：win32-x64 那两行钉值是 2026-10-19 在这台 Linux 机器上整包下载、本地算 sha256 写下的（dufs 不发校验和，那一行只有本机复算这一个来源；cloudflared 在 release 正文里给 digest，复算与它相等——是「自己算完对上了」，不是「抄来了」；两行都拿 release API 报的 `size` 对过字节数）。`test:obtain` 里四项把它们当字节读（zip 哈希对上、`readZipEntry` 找得到那 4 721 664 字节的 `dufs.exe`、`.exe` 前两个字节是 `4d5a`、总长在 64 MB 之内），可这台机器跑不了 Windows 二进制，所以桥在 win32 上的第一次 `xfer_share` 会发生在别人的机器上。同一形状的第二份是 `scripts/bootstrap.ps1`：写它的机器上没有 PowerShell，脚本里没有一行被解释过，`bun test` 那十三项只把它当文本读、与 `.sh` 对字面值；文件头、README、`docs/testing.md` 三处都写着「这一支未执行」，以及那句更硬的：往里放一个语法错误，十三项照样全绿。
+**没执行过的那一半必须自己站出来**：win32-x64 那两行钉值是 2026-10-19 在这台 Linux 机器上整包下载、本地算 sha256 写下的（dufs 不发校验和，那一行只有本机复算这一个来源；cloudflared 在 release 正文里给 digest，复算与它相等——是「自己算完对上了」，不是「抄来了」；两行都拿 release API 报的 `size` 对过字节数）。`test:obtain` 里四项把它们当字节读（zip 哈希对上、`readZipEntry` 找得到那 4 721 664 字节的 `dufs.exe`、`.exe` 前两个字节是 `4d5a`、总长在 64 MB 之内），可这台机器跑不了 Windows 二进制，所以桥在 win32 上的第一次 `xfer_share` 会发生在别人的机器上。同一形状的第二份是 `scripts/bootstrap.ps1`：2026-10-19 真 Windows 机器头一遍跑了它——`PATH` 上已有宿主那一支，DryRun 与真跑都走完，真跑停在宿主自己的 `plugin doctor` 回 `✔ plugin:a2mcp: v0.4.0`。支级别的边界随之写进文件头、README、`docs/testing.md`：官方安装器那一次调用与占位 `models.yml` 那一次播种至今没有任何地方执行过；`bun test` 那十三项仍只把它当文本读、与 `.sh` 对字面值，真机那遍是手工一次性、不在 CI 里，往里放一个语法错误，十三项照样全绿。
 
 ## 零模型配置的机器：桥填占位模型，磁盘那半归引导脚本（2026-10-19 决定）
 
@@ -165,7 +165,7 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 
 baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.1:1`：deny 绊线的键集来自快照里各 provider 的 `baseUrl`，loopback 进键等于把桥自己监听地址也放进去。inline `apiKey: not-a-real-key` 算 concrete auth，过了 `getApiKey` 那道第二闸门——pty 真发 prompt 证的（18.12.1）：报错是 `Couldn't connect to a2mcp.invalid (connection refused)`，不是 `No API key found`，transcript 里 `provider=a2mcp model=offline stopReason=error`。与 deny 的同场也测了：`host_llm: "deny"` 且占位行在位时 `test:takeover` 照样全绿——占位行不带 `transport`，不触发那条「拒绝装配」判据。
 
-它翻的是报错的硬度，不是能力：占位模型不产生推理，操作者的 prompt 从提示时刻的硬报错变成连接被拒的软失败，文档按这个措辞写。救不了的那条道是无头启动——扩展代码根本没跑，桥做什么都晚，那一半归 `bootstrap.sh` / `bootstrap.ps1` 的 create-only 占位 `models.yml`（只在脚本自装宿主的分支写）。这推翻了「bootstrap 除调用安装器与宿主自己的命令外不写文件」的定位，timeline 记了 reversal。Windows 一侧两半都未执行：占位模型的运行时形状在本机 Linux 宿主 18.12.1 实测，ps1 的播种那半只有十三项字面核对。
+它翻的是报错的硬度，不是能力：占位模型不产生推理，操作者的 prompt 从提示时刻的硬报错变成连接被拒的软失败，文档按这个措辞写。救不了的那条道是无头启动——扩展代码根本没跑，桥做什么都晚，那一半归 `bootstrap.sh` / `bootstrap.ps1` 的 create-only 占位 `models.yml`（只在脚本自装宿主的分支写）。这推翻了「bootstrap 除调用安装器与宿主自己的命令外不写文件」的定位，timeline 记了 reversal。Windows 一侧的播种未执行：占位模型的运行时形状在本机 Linux 宿主 18.12.1 实测，ps1 真机首跑（2026-10-19）过的只有「已有宿主」那一支，播种那半仍只有十三项字面核对。
 
 
 ## Timeline
@@ -934,4 +934,15 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   kind: reversal
   summary: "翻面：bootstrap 脚本「不写宿主配置文件」的定位（2026-10-18 立的规矩，删 install.sh 后连插件登记都只问宿主）。2026-10-19 起两个脚本各写一个文件：占位 models.yml，条件只有两条——这一趟真的由脚本装了宿主，且该文件不存在（create-only，存在就一个字不碰）；PATH 上已有宿主的机器不写。动机是实测分工：交互式 TUI 下桥自己能在 session_start 填占位模型（运行态），无头 --mode rpc 死在扩展代码之前、只有启动前磁盘上已有的模型配置救得了，而写文件这件事在扩展一侧没有任何授权形状，所以归引导分支。探针补齐：test:bootstrap 39→46 项（自装分支用假 curl 替换下载驱动出来），ps1 字面核对 9→13 项；反向变异去掉 create-only 守卫，探针如实红。同场修正：「宿主没有模型配置就不创建 session、桥永不广播」这条旧结论只对无头成立，TUI 实测创建 session 且桥照常广播，No model selected 是提示时刻闸门。"
   source: "零模型配置占位模型这一轮（plan winter-heath-falcon）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-19T15:06:01
+  kind: decision
+  summary: "bootstrap.ps1 真机首跑（2026-10-19，已有宿主分支）改写未执行边界：安装器调用与 models.yml 播种仍未真跑，十三项仍是字面核对"
+  source: brain update-truth
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-19T15:06:12
+  kind: reversal
+  summary: "bootstrap.ps1「没有一行被解释过」翻面：2026-10-19 真 Windows 首跑已过已有宿主分支，安装器与播种两支仍未真跑"
   affects: [a2a-mcp-bridge]
