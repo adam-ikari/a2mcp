@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-18T15:30:49"
+updated: "2026-10-19T14:34:13"
 ---
 
 <!-- compiled_truth -->
@@ -96,13 +96,13 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 
 ## 安装方式（2026-09-30 更正）
 
-**跨机器安装用 `omp install https://github.com/adam-ikari/pi-a2a-ext.git`**（装到 `~/.omp/plugins/node_modules/pi-a2a-ext`，`omp plugin uninstall pi-a2a-ext` 卸载）；本地开发用 `omp install .`，但它是**测试夹具、不是受支持的安装方式**；`scripts/install.sh` 已于 2026-10-02 删除（自己维护一份模块图校验正是它的病灶），不要再当它是等效替代。`scripts/bootstrap.sh`（2026-10-18）是**引导**，不是第二条安装路径：它先按 `package.json` 的 pin 用上游官方安装器（`omp.sh/install`，`--binary --ref v<版本>`）把宿主编上——PATH 上已有 `omp` 就报告版本不动它——最后执行的就是上面那条 git URL 原文，连插件登记好不好都问宿主自己的 `omp plugin doctor`，脚本不重新发明判据。
+**跨机器安装用 `omp install https://github.com/adam-ikari/pi-a2a-ext.git`**（装到 `~/.omp/plugins/node_modules/pi-a2a-ext`，`omp plugin uninstall pi-a2a-ext` 卸载）；本地开发用 `omp install .`，但它是**测试夹具、不是受支持的安装方式**；`scripts/install.sh` 已于 2026-10-02 删除（自己维护一份模块图校验正是它的病灶），不要再当它是等效替代。`scripts/bootstrap.sh`（2026-10-18）是**引导**，不是第二条安装路径：它先按 `package.json` 的 pin 用上游官方安装器（`omp.sh/install`，`--binary --ref v<版本>`）把宿主编上——PATH 上已有 `omp` 就报告版本不动它——最后执行的就是上面那条 git URL 原文，连插件登记好不好都问宿主自己的 `omp plugin doctor`，脚本不重新发明判据。2026-10-19 起它有一个写在安装器之外的例外，条件压得很窄：只有这一趟真的由脚本装了宿主、且 `<HOME>/.omp/agent/models.yml` 不存在，才写那份占位文件（create-only，见「零模型配置的机器」一节）；PATH 上已有 `omp` 的机器一个字都不碰。
 
 `omp install` 的 spec 限制（实测）：接受**本地目录或 git URL**，**不接受 `.tgz`**（报 `ENOTDIR: ... .tgz/package.json`）；GitHub `owner/repo` 简写被当作非法包名（`Invalid package name`），必须用完整 `https://….git` URL。装的是**远端代码**，所以本地提交未推送时，装到的是旧版本——2026-09-30 就因此先装到 `@undefined` 再重装才拿到 `0.1.0`。
 
 **包必须自包含才能跨机器安装**：`package.json` 需要 `version`（缺了 `npm pack` 直接失败、`omp plugins list` 显示 `@undefined`）、`pi.extensions`（加载开关）、`files: ["extensions/", "src/"]`（入口 import 的是 `../src/*.ts`，两者缺一则装上也起不来）。不需要打包 `node_modules`：`@oh-my-pi/*` 由宿主 `omp:legacy-pi-shim` 在运行时重定向到宿主内嵌副本。tarball 实测 12 文件 25.8kB。
 
-**验证方式**：用独立 `HOME`（无 config/token/沙箱）+ 复制一份 `models.yml` 模拟另一台机器，装完启动宿主确认起桥并自建独立 token 与沙箱。中途发现 omp 在无模型配置时会**先退出、根本不加载扩展**，故模拟机必须给 `models.yml` 才能测到扩展加载。（`--status` / `--uninstall`，`OMP_AGENT_DIR` 可改位置）。
+**验证方式**：用独立 `HOME`（无 config/token/沙箱）+ 复制一份 `models.yml` 模拟另一台机器，装完启动宿主确认起桥并自建独立 token 与沙箱。（`--status` / `--uninstall`，`OMP_AGENT_DIR` 可改位置）。原句「omp 在无模型配置时会先退出、根本不加载扩展」2026-10-19 在 18.12.1 上重测（临时 HOME、无 `models.yml`、无 `agent.db`），只对一半：**无头 `--mode rpc`** 确实在扩展代码之前就死在 `resolveModelDiscoveryFallback`，磁盘上没有模型配置救不了它；**交互式 TUI** 照样创建 session、扩展照常加载、桥照常广播，那句 `No model selected` 是提示时刻的闸门（agent-session 的 `if (!this.model) throw`），拦的是操作者自己的 prompt。探针照常给 `models.yml`（harness 播种不可达 provider）；必须给文件才测得到的是无头那半程。
 
 **此前 README 的 `ln -s "$PWD/extensions/a2a-bridge.ts" ...` 是错的**：该写法依赖调用者的 `$PWD` 恰为仓库根目录，换个目录执行就会链到不存在的路径（实测 `cd /tmp` 后链成 `/tmp/extensions/a2a-bridge.ts`），宿主加载失败但**没有任何用户可见报错**——桥只是永远不出现。**教训：文档里给出的命令若隐含「你得先 cd 到某处」这个前提而不校验，用户会踩到静默失败；安装脚本应自己推导路径并在结束时校验。**
 
@@ -145,15 +145,27 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 
 
 
-## 传文件的两个外部二进制：从「只命名」改为「缺的自己按钉值拉」（2026-10-17 修订）
+## 传文件的两个外部二进制：从「只命名」改为「缺的自己按钉值拉」（2026-10-17 修订，2026-10-19 补上 win32）
 
 `xfer_share` / `xfer_status` / `xfer_stop`（`src/xfer.ts`）由桥自己服务，追加在宿主注册表之后，因此绕过宿主审批门；字节走普通 HTTP——dufs 在 `127.0.0.1` 上以随机端口和随机 basic auth 起服务，cloudflared quick tunnel 给它一个公网主机名。
 
-这条 2026-10-17 翻了面：原先的契约是「二进制只命名、不内置、也不下载」，现在是**缺的那一个由桥自己拉到 `~/.local/bin`**（操作者定死，dufs 与 cloudflared 都要，触发点是首次 `xfer_share`）。解析顺序四步：配置里的值含 `/` 就原样用且**绝不下载**（这是「这台机器永远不许下载」的唯一出口，裸写 `"dufs"` 不是出口）→ 在 `PATH` 上逐段找可执行文件（不起 shell、不 `which`，机器有就别抢）→ `~/.local/bin/<name>` 已存在、且它自己的 sha256 等于登记里桥为这一条写下的那一行，就复用 → 下载。
+这条 2026-10-17 翻了面：原先的契约是「二进制只命名、不内置、也不下载」，现在是**缺的那一个由桥自己拉进它自己的安装目录**：POSIX 是 `~/.local/bin`，Windows 是 `%LOCALAPPDATA%\a2mcp\bin`。unix 那一支一个字没改，因为它是文档写死的位置、也是 `test:obtain` 断言的一部分；Windows 选 `LOCALAPPDATA` 而不是 `USERPROFILE\.local\bin`，因为那才是 Windows 上放东西的地方，而且与官方安装器写宿主的 `%LOCALAPPDATA%\omp` 同处。（操作者定死，dufs 与 cloudflared 都要，触发点是首次 `xfer_share`）。解析顺序四步：配置里的值含 `/` **或 `\`** 就原样用且**绝不下载**（这是「这台机器永远不许下载」的唯一出口，裸写 `"dufs"` 不是出口；只认 `/` 的那一版会把 `C:\tools\dufs.exe` 当裸名字送去查 PATH，等于把一句「不许下载」读成「去下载」）→ 在 `PATH` 上逐段找可执行文件（不起 shell、不 `which`，机器有就别抢；Windows 按 `PATHEXT` 的后缀逐个试，取不到就用 `.EXE;.CMD;.BAT;.COM`）→ 安装目录里那个文件（Windows 上叫 `<name>.exe`）已存在、且它自己的 sha256 等于登记里桥为这一条写下的那一行，就复用 → 下载。
 
-钉的是版本 + **归档** sha256 的字面量表（GitHub release 资产 `digest` 是归档的哈希，不是解出来那个文件的；对完归档才解包，解出来那份自己的 sha256 另写进登记，所以「哈希等于钉值」这种说法本身是错的，两个哈希不同名）（`src/obtain.ts`，键 `${platform}-${arch}`）：dufs 0.46.0 与 cloudflared 2026.10.1 各四行（linux-x64 / linux-arm64 / darwin-x64 / darwin-arm64），哈希取自 GitHub release 资产的 `digest`；cloudflared 那四行是 2026-10-17 出网恢复之后才读回来的，四个 asset 都真下载、哈希对着从头到尾的字节复算过。**没读到的哈希不写进表**这条仍然照着办：那天之前表里那一半是空的，桥对 cloudflared 就还是只认 PATH。形状差别记在 `kind`：dufs 四行都是归档，cloudflared 的 Linux 是裸 ELF、macOS 是里面只有一个 `cloudflared` 的 `.tgz`，取的都是普通构建不是 `-fips`。不变的约束：不请求 `latest`，不向发字节的同一台服务器要校验和，不覆盖别人的文件（目标已存在、它的 sha256 与登记那一行不等就拒绝，并把文件自己的哈希与钉值一起打印），下载有界（64 MB、120 秒，上限按钉表里最大的 asset——cloudflared 的 Linux 构建 40 MB——留出升级余量），同一 name 并发单飞，解包只进新建的临时目录并 realpath 断言包含性，安装排在审计之后（`tool: "xfer"`，`action: "install"`，遵守 2026-10-10 那条「唯一痕迹不能排在可能抛错的步骤后面」），每次安装另记一行 `<agentDir>/a2a-bridge.installs.json`，复用看的是它。回包多一个 `installed: {dufs, cloudflared}`，让调用方知道自己为什么多等了几秒；下载就地等完，没有「正在装，稍后再来」的中间态。
+钉的是版本 + **归档** sha256 的字面量表（GitHub release 资产 `digest` 是归档的哈希，不是解出来那个文件的；对完归档才解包，解出来那份自己的 sha256 另写进登记，所以「哈希等于钉值」这种说法本身是错的，两个哈希不同名）（`src/obtain.ts`，键 `${platform}-${arch}`）：dufs 0.46.0 与 cloudflared 2026.10.1 各**五**行（linux-x64 / linux-arm64 / darwin-x64 / darwin-arm64 / win32-x64）。前四行的哈希取自 GitHub release 资产的 `digest`（cloudflared 那四行是 2026-10-17 出网恢复之后才读回来的，四个 asset 都真下载、哈希对着从头到尾的字节复算过）；**没读到的哈希不写进表**这条仍然照着办：那天之前表里那一半是空的，桥对 cloudflared 就还是只认 PATH。win32-x64 那两行的来历见本节末。形状差别记在 `kind`：dufs 的 unix 四行是 `.tar.gz`、Windows 那行是 zip 里唯一的 `dufs.exe`；cloudflared 的 Linux 是裸 ELF、macOS 是里面只有一个 `cloudflared` 的 `.tgz`、Windows 是裸 `.exe`；取的都是普通构建不是 `-fips`。不变的约束：不请求 `latest`，不向发字节的同一台服务器要校验和，不覆盖别人的文件（目标已存在、它的 sha256 与登记那一行不等就拒绝，并把文件自己的哈希与钉值一起打印），下载有界（64 MB、120 秒。上限按钉表里最大的 asset 留余量这条没变，变的是那个最大的 asset——2026-10-19 之前是 cloudflared 的 Linux 构建 40 MB，之后是 Windows 那个 52.7 MB 的 `.exe`，余量剩 11.7 MB；120 秒没有在它身上重测过，那是本机手跑 Linux 构建 rounded up 来的墙上时钟，53 MB 要在里面走完约需 450 KB/s，Windows 主机网络差就得到一条超时审计而不是一次慢共享。），同一 name 并发单飞，解包分两条：`.tar.gz` 只进新建的临时目录并 realpath 断言包含性，`.zip` 由本仓库自己的读取器（`readZipEntry`）在内存里取出那一个条目、一个字节都不落盘——条目名不参与拼路径，于是 tar 那套越界检查对它不是放松，是问题消失了；代价是自己防 zip 炸弹（方法只收 0 与 8，条目声明的长度与 inflate 出来的实际长度都对着上限过，zip64 与带加密位的条目直接拒），不复算 CRC，因为整包 sha256 已经比对过、那里没有第二个信任源。这一条的由来是判据不是偏好：本机的 GNU tar 打不开 zip，Windows 自带的 bsdtar 读得动，却是这台机器一次也执行不了的调用——把一个本仓库永远走不到的分支写进安全检查里，正是「校验看着在、其实没人跑过」那种洞。安装排在审计之后（`tool: "xfer"`，`action: "install"`，遵守 2026-10-10 那条「唯一痕迹不能排在可能抛错的步骤后面」），每次安装另记一行 `<agentDir>/a2mcp.installs.json`，复用看的是它。平台不由函数自己去读 `process.platform`，而是从 `ObtainDeps.platform` 注入（与 `target`/`pins`/`env`/`binDir` 同一个性质），为的是这台 Linux 机器能把 win32 那几处分支测到；写文件的 `mode: 0o755` 留在原处，它在 Windows 上是 no-op（NTFS 上没有执行位），注释里标明它是 POSIX 位。回包多一个 `installed: {dufs, cloudflared}`，让调用方知道自己为什么多等了几秒；下载就地等完，没有「正在装，稍后再来」的中间态。
 
 判据写在 AGENTS.md 的例外清单里（现在三条），形状与 `POST /host-llm` 一样：桥已经替宿主决定了用 dufs，这次只多一个意见——字节从哪来——而不是多一个权威。代价如实是审计、文档，和那个只有显式路径才成立的出口。升级钉版本就是改这个仓库的一次带哈希的提交，这是刻意的：不要无感漂移。
+
+**钉表按上游 asset 的形状增删，不按对称增删**：`win32-arm64` 不建行，因为 dufs 发 aarch64 的 Windows 构建而 cloudflared 不发 arm64 的 exe；一次 `xfer_share` 要两个二进制，补一半就是造一台装到一半的机器。那句既有的「no pinned build for `<target>`」是这件事的正确说法，代码不替上游的 release 列表编理由。
+
+**没执行过的那一半必须自己站出来**：win32-x64 那两行钉值是 2026-10-19 在这台 Linux 机器上整包下载、本地算 sha256 写下的（dufs 不发校验和，那一行只有本机复算这一个来源；cloudflared 在 release 正文里给 digest，复算与它相等——是「自己算完对上了」，不是「抄来了」；两行都拿 release API 报的 `size` 对过字节数）。`test:obtain` 里四项把它们当字节读（zip 哈希对上、`readZipEntry` 找得到那 4 721 664 字节的 `dufs.exe`、`.exe` 前两个字节是 `4d5a`、总长在 64 MB 之内），可这台机器跑不了 Windows 二进制，所以桥在 win32 上的第一次 `xfer_share` 会发生在别人的机器上。同一形状的第二份是 `scripts/bootstrap.ps1`：写它的机器上没有 PowerShell，脚本里没有一行被解释过，`bun test` 那十三项只把它当文本读、与 `.sh` 对字面值；文件头、README、`docs/testing.md` 三处都写着「这一支未执行」，以及那句更硬的：往里放一个语法错误，十三项照样全绿。
+
+## 零模型配置的机器：桥填占位模型，磁盘那半归引导脚本（2026-10-19 决定）
+
+`src/auto-model.ts`：每个 `session_start` 上，Main 会话的 `session.model` 是空的，就注册一行占位 provider `a2mcp` / 模型 `offline` 并 `agent.setModel` 选它。三条线是这个决定的形状：**只填空位**——宿主已有模型时零动作，不覆盖操作者的选择；**纯运行态**——不写 `agent.db`、不 override settings、一个字节的文件都不写，与 takeover 的 setModel 同性质；**sourceId 是 `a2mcp-auto-model`，不能等于 takeover 的 `a2mcp`**（`TAKEOVER_SOURCE`），否则 restore 的 `clearSourceRegistrations` 会把占位行一并拔走。宿主的 `syncExtensionSources` 每次新建 session 都剪扩展来源的注册，所以这件事每个 `session_start` 重放一次，幂等形状与启动装 deny 的 rearm 同款。
+
+baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.1:1`：deny 绊线的键集来自快照里各 provider 的 `baseUrl`，loopback 进键等于把桥自己监听地址也放进去。inline `apiKey: not-a-real-key` 算 concrete auth，过了 `getApiKey` 那道第二闸门——pty 真发 prompt 证的（18.12.1）：报错是 `Couldn't connect to a2mcp.invalid (connection refused)`，不是 `No API key found`，transcript 里 `provider=a2mcp model=offline stopReason=error`。与 deny 的同场也测了：`host_llm: "deny"` 且占位行在位时 `test:takeover` 照样全绿——占位行不带 `transport`，不触发那条「拒绝装配」判据。
+
+它翻的是报错的硬度，不是能力：占位模型不产生推理，操作者的 prompt 从提示时刻的硬报错变成连接被拒的软失败，文档按这个措辞写。救不了的那条道是无头启动——扩展代码根本没跑，桥做什么都晚，那一半归 `bootstrap.sh` / `bootstrap.ps1` 的 create-only 占位 `models.yml`（只在脚本自装宿主的分支写）。这推翻了「bootstrap 除调用安装器与宿主自己的命令外不写文件」的定位，timeline 记了 reversal。Windows 一侧两半都未执行：占位模型的运行时形状在本机 Linux 宿主 18.12.1 实测，ps1 的播种那半只有十三项字面核对。
 
 
 ## Timeline
@@ -887,4 +899,39 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
   kind: decision
   summary: "无兼容的代价是 token 直接换代，接受它：配置本来就要人手工抄一次 announce，改名同时换 token 多出来的成本接近零。装着 v0.3.0 的机器上，旧 a2a-bridge.json 里那个 token 不再被读，桥在 a2mcp.json 里生成一份新的，远程侧要重看 announce 或在宿主里跑 /a2mcp；旧 a2a-bridge.log 与旧 a2a-bridge.installs.json 留在原地不动、桥不读它们，新审计与新账本另起一代；还留在 shell 里的 A2A_BRIDGE_* 变成没人读取的普通变量。双登记那条边界定在文档层：插件 lock 按 package.json:name 记账，只装新 URL 而没卸载旧的，机器上会同时挂着 pi-a2a-ext 与 a2mcp 两份登记——两个端口、两个 token、两条命令、两次 takeover 装载而 TAKEOVER_SOURCE 不同，第二次的快照盖掉第一个的影子，restoreTakeover 拿不回它认领的那个 provider 名。处理是 README 与 Release 正文把 omp plugin uninstall pi-a2a-ext 写成前置命令，不加检测代码。「发现兄弟插件就往 stderr 打一行警告」要读宿主的 lock，是新行为，按 AGENTS.md「Don't grow a second system」需要 maintainer 点头，这轮不做。"
   source: "2026-10-18 改名这轮 maintainer 选的「全改、无需兼容」；v0.4.0 的 Release 正文就是那条迁移指令"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-19T10:33:53
+  kind: decision
+  summary: "引导脚本可以不带仓库跑：脚本单独一份（curl | sh）且 PATH 上没有宿主时，钉值从 --spec 指向的那个仓库的 package.json 读（github.com 形状派生 raw.githubusercontent.com/<owner>/<repo>/HEAD/package.json，一次 GET，--max-time 20）；取不到就装 latest 并说清是哪一种（无 curl / 里面没有那一行 / spec 不是 github.com）。判据：钉值存在的理由是「本仓库核验最后跑绿的那个宿主版本」，而无克隆是最可能被新机器用上的路，掉钉值等于这条路上脚本的第一个决定就是错的。代价接受：raw 不可达时装的是未钉宿主，宁可输出里多一行 warn 也不让一条 one-liner 卡在取版本上——要自己定版本的人有 --host-version。同时定下：给了 --host-version 或 PATH 上已有宿主就不发这次请求（不装东西就没有要钉的版本），这一条由假 curl 记 argv 的探针守着，因为它的失败模式是一次无害的 GET，看不出来。"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-19T11:26:46
+  kind: decision
+  summary: "把「传文件的两个外部二进制」那一节改到 win32 落地后的形状：安装目录分 POSIX 与 Windows 两套、逃生门认两种分隔符、PATH 扫描按 PATHEXT、钉表五行并注明 win32 那两行的哈希来历、zip 改由内存读取并注明为什么不用 tar、上限余量与 120 秒的未重测状态、以及两条新的判据（钉表按上游 asset 形状增删；未执行的那一半必须在文件头、README、测试文档三处标注）"
+  source: "2026-10-19：Windows 引导脚本与 xfer 的 win32 支持"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-19T11:26:46
+  kind: decision
+  summary: "上游 omp.sh/install.ps1 的陷阱记一条： 单独给会被翻成 bun 源码构建，一个开关都不给时机器上有 bun 也走源码，所以钉版本的调用必须每次都带 （读的是安装器自己的主块，2026-10-19）。同族决定：Windows 主机上  原先为什么拒绝下载（钉表只有四个 unix 平台， 查不到行），现在从哪取字节（GitHub release 的两个 Windows asset，本机整包下载复算 sha256 写进表）；以及  为什么留空——dufs 发那个构建而 cloudflared 不发，补一半就是造一台装到一半的机器。"
+  source: "2026-10-19 Windows 轮次"
+  affects: [obtain, bootstrap]
+
+- time: 2026-10-19T11:27:12
+  kind: note
+  summary: "上一条 decision 被 shell 咬掉了一部分：那段文字里用反引号包住的 token 全被当成命令替换执行掉了，所以它读起来缺主语缺宾语。这里补完整的三条，内容不变。其一，上游 omp.sh/install.ps1 的陷阱：-Ref 单独给会被翻成 bun 源码构建，一个开关都不给时机器上装了 bun 也走源码，所以钉版本的调用必须每次都带 -Binary（这一条读的是安装器自己的主块，2026-10-19，不在它的文档里）。其二，Windows 主机上 xfer_share 原先为什么拒绝下载：src/obtain.ts 的钉表只有四个 unix 平台，win32-x64 查不到行就直接抛 no pinned build；现在那两个字节从 GitHub release 的两个 Windows asset 来，本机整包下载、算 sha256 写进表。其三，win32-arm64 为什么留空：dufs 发 aarch64 的 Windows 构建而 cloudflared 不发 arm64 的 exe，一次 xfer_share 要两个二进制，补一半就是造一台装到一半的机器。"
+  source: "2026-10-19 Windows 轮次（对同一条 11:26 的 decision 的订正）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-19T14:34:06
+  kind: decision
+  summary: "compiled_truth 增一节「零模型配置的机器」：占位模型的三条线（只填空位、纯运行态、sourceId 区别于 takeover）、a2mcp.invalid 的绊线键理由、getApiKey 二闸实测与 deny 同场；修正「omp 无模型配置先退出」为两条道（rpc 死在扩展前、TUI 是提示时刻闸门）；bootstrap 定位补上 create-only 播种例外；ps1 字面核对九项改十三项"
+  source: brain update-truth
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-19T14:34:13
+  kind: reversal
+  summary: "翻面：bootstrap 脚本「不写宿主配置文件」的定位（2026-10-18 立的规矩，删 install.sh 后连插件登记都只问宿主）。2026-10-19 起两个脚本各写一个文件：占位 models.yml，条件只有两条——这一趟真的由脚本装了宿主，且该文件不存在（create-only，存在就一个字不碰）；PATH 上已有宿主的机器不写。动机是实测分工：交互式 TUI 下桥自己能在 session_start 填占位模型（运行态），无头 --mode rpc 死在扩展代码之前、只有启动前磁盘上已有的模型配置救得了，而写文件这件事在扩展一侧没有任何授权形状，所以归引导分支。探针补齐：test:bootstrap 39→46 项（自装分支用假 curl 替换下载驱动出来），ps1 字面核对 9→13 项；反向变异去掉 create-only 守卫，探针如实红。同场修正：「宿主没有模型配置就不创建 session、桥永不广播」这条旧结论只对无头成立，TUI 实测创建 session 且桥照常广播，No model selected 是提示时刻闸门。"
+  source: "零模型配置占位模型这一轮（plan winter-heath-falcon）"
   affects: [a2a-mcp-bridge]
