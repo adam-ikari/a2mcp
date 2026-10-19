@@ -33,7 +33,7 @@ The test for a proposed change: does it make the bridge more transparent, or doe
 
 ## The exceptions on record
 
-Three paths give the bridge an opinion it does not otherwise have, and all three are
+Four paths give the bridge an opinion it does not otherwise have, and all four are
 paid for with auditing and documentation:
 
 - `POST /host-llm` reaches into the host session directly: shadowing registry rows,
@@ -62,6 +62,14 @@ paid for with auditing and documentation:
   and its bytes were hashed, not because a platform looked missing — `win32-arm64` has no
   row because cloudflared ships no Windows ARM64 executable, and the bridge says so rather
   than installing half a pair.
+- `/a2mcp tunnel` puts a public hostname in front of the bridge's own MCP port. It is the
+  operator's command in the host session — not a tool, not an HTTP endpoint — and it runs
+  the same `resolveBinary` + `openQuickTunnel` machinery `xfer_share` uses against
+  `server.port`, which makes the Bearer token the only gate between the Cloudflare edge
+  and the host's tools. Runtime state like the takeover switch: never in the config, torn
+  down with the port so a public hostname cannot outlive the bridge. Paid for with one
+  `tool: "tunnel"` audit record per open and close and the 跨机转发 / 操作员的隧道 sections
+  in the README and `docs/protocol.md`.
 
 Everything else here still decides.
 

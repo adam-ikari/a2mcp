@@ -190,6 +190,17 @@ providers:
 
 **URL 是能力**：谁拿到它，谁就能读、能写那条路径，直到共享关闭。
 
+### 操作员的隧道：`/a2mcp tunnel`
+
+宿主会话里的命令，不是 MCP 方法也不是 HTTP 端点：它出现在 `tools/list` 之外的唯一理由是它根本不在协议面上——持 token 的远程调用方打不开它，只有坐在宿主会话里的操作员能。它做的事是把 `openQuickTunnel`（`src/tunnel.ts`）与 `resolveBinary`（`src/obtain.ts`）这两个 `xfer_share` 已经在用的部件，指向桥自己的 MCP 端口：一条随机 `https://<随机>.trycloudflare.com` 主机名，公网那一侧到此为止，`Authorization` 头之后才是宿主工具。
+
+- **运行态**。与 takeover 开关同款：不落盘、不进配置、重启即无。每进程一条（`server` 每进程一条），第二次 `/a2mcp tunnel` 复用已开的那条并重报 URL，不另起子进程——这与 `xfer_share` 的「第二次顶掉第一次」刻意相反，因为这里没有「该换哪条」的语义。两个命令同时在途由在途保护合并成一个 spawn（与 `bringingUp` 之于绑定同一条规则）。
+- **生命周期**。`/a2mcp tunnel stop` 关闭；`session_shutdown` 释放端口时一并拆（SIGTERM，两秒不退补 SIGKILL），公网主机名不活得比开它的桥久。
+- **审计**。开与关各一条 `tool: "tunnel"`（`phase: "done"`，`sid: null`——操作员发起，没有调用方会话可归属），`args.action` 为 `start` / `stop`，带 `url` 与本地 `port`；打开失败的记录带 `error` 原文。token 不进记录，主机名本身不是秘密。
+- **cloudflared 从哪来**。与「传文件」那一节完全同一套：`xfer.cloudflared` 带 `/` 或 `\` 就按路径用（不许下载的那台机器的写法），否则 PATH、桥装登记、钉版本+sha256 拉取；安装另记一条 `install`。
+
+边界同 `xfer_share`：隧道的可用性取决于 Cloudflare 边缘，30 秒内等不到主机名就报错了事；本机网络对 `*.trycloudflare.com` 重签 TLS，公网半程的回环验证只能算人工证据（见 `docs/testing.md`）。
+
 ### `tools/call`
 
 ```json

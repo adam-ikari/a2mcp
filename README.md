@@ -166,9 +166,11 @@ Config edits take effect on the **next host restart**; to change only the token 
 
 Inside a host session:
 
-- `/a2mcp` — show the current listen address, port and token prefix
+- `/a2mcp` — show the current listen address, port and token prefix (the line carries the tunnel URL while one is open)
 - `/a2mcp rotate` — rotate the token (update the remote `mcp.json` afterwards)
 - `/a2mcp token` — print the full token (the status line only shows a prefix)
+- `/a2mcp tunnel` — open a cloudflared quick tunnel in front of the MCP endpoint and print its public URL (`https://<random>.trycloudflare.com`). Runtime state, never in the config; see [Cross-machine forwarding](#cross-machine-forwarding)
+- `/a2mcp tunnel stop` — close the tunnel
 
 ## Remote connection example
 
@@ -211,6 +213,8 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 ```
 
 Then set `mcp.json`'s `url` to `http://127.0.0.1:<localport>/`.
+
+The second form is a tunnel, run from the host session: `/a2mcp tunnel` starts a cloudflared, points a random `https://<random>.trycloudflare.com` hostname at the bridge's port and prints the URL, which the remote side writes straight into `mcp.json`'s `url`. The shape to state plainly: with the tunnel open the endpoint is on the public internet and the Bearer token is the only gate. It is runtime state, the same class as the takeover switch: nothing is persisted, a restart clears it; `/a2mcp tunnel stop` closes it, and the bridge tears it down when the port goes away (no Main session left), so a public hostname never outlives the bridge that opened it. A `cloudflared` missing from PATH is fetched by the pinned version and sha256 in `xfer.cloudflared`, the exact same rules as [Moving files](#moving-files). Each open and close writes one audit record (`tool: "tunnel"`); the token never enters the record.
 
 ## Approval
 
@@ -316,7 +320,7 @@ bun install
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
 bun run test:tree     # repo shape: no symlink points off this machine, 3 checks, no deps, no local omp (runs before bun test on purpose)
-bun test              # unit tests: test/*.test.ts (226: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
+bun test              # unit tests: test/*.test.ts (231: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
 bun run test:obtain   # the pinned binaries: fetches both for this platform, HEADs all ten asset URLs, reads the two Windows rows as bytes, 37 checks (needs no local omp; writes only inside its own /tmp directory)
 bun run test:registry # drive the takeover against the host's real model registry, 28 checks, seconds (needs no local omp, no credentials)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)

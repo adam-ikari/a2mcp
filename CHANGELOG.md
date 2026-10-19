@@ -4,6 +4,18 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## 2026-10-19 — `/a2mcp tunnel`：一条命令把公网 URL 架在桥的端口上
+
+维护者的需求是一句话：「需要有一个命令启动隧道 并且显示公网 url」。跨机访问此前只有 SSH 端口转发一条路，而隧道那套机器其实早就在仓库里——`src/tunnel.ts` 抓 `*.trycloudflare.com` 主机名，`src/obtain.ts` 按钉值找 `cloudflared`——只是它们一直只被 `xfer_share` 用在文件共享那一侧。这一轮把它们接到桥自己的 MCP 端口上，新立的是第四条给桥加主意的路径（AGENTS.md 例外清单同步改成 four paths）：隧道一开，Bearer token 就是这个端点对公网的唯一闸门。
+
+- feat: `extensions/a2mcp.ts` 的 `a2mcp` 命令加 `tunnel` 与 `tunnel stop` 两个分支。形状三条线：**操作员专属**——它是宿主会话里的命令，不进 `tools/list`、不是 HTTP 端点，持 token 的远程调用方打不开它；**纯运行态**——与 takeover 开关同款，不落盘、不进配置、重启即无，`session_shutdown` 拆端口时子进程一起收（SIGTERM→2s→SIGKILL），公网主机名不活得比开它的桥久；**幂等**——第二次 `tunnel` 复用已开的那条并重报 URL，不顶掉、不再 spawn，两个命令同时在途由在途保护（`tunnelOpening`，镜像 `bringingUp` 的规则）合并成一个子进程。状态行在隧道开着时追加 ` tunnel=<url>`。
+- feat: `src/audit.ts` 的 `auditTunnel`——开与关各一条 `tool: "tunnel"` 记录，`sid: null`（操作员发起，没有调用方会话可归属，同启动期 host_llm 记录的先例），`args` 带 `action`、公网 URL 与本地端口，token 不进记录。
+- test: `bun test` 226 → 231（`test/entry.test.ts` 19 → 23、`test/audit.test.ts` +1 形状项并把 `auditTunnel` 挂进「每个入口都返回队列尾巴」那组）。四项对着假 cloudflared 跑：配置的 `xfer.cloudflared` 写绝对路径走 obtain 逃生门（不查 PATH、零下载），脚本 announce 固定主机名并把 spawn/SIGTERM 各记一行——「一个子进程而不是两个」「子进程随桥而死」数这些行。手工一遍里撞出夹具的一处真问题：入口的 `ping` 之前不带 `connection: close`，把桥的非强制 `stop()` 不关空闲 keep-alive 这条已知偏差（`docs/protocol.md`「一个进程，一套端口」末条）用成了假 200——夹具改为每次新建连接，断言的才是「监听」本身。
+- 真宿主一遍（omp 18.12.1 TUI，临时 HOME，真 `cloudflared` 来自钉值安装目录）：`/a2mcp tunnel` 公告 URL 与「token 是唯一闸门」；二次打开回 `already open` 且只有一个子进程；**公网半程这次真回来了**——经隧道 `initialize` 得 200（此前记录的 TLS 重签没有拦住这一趟，按实测记）；`/a2mcp tunnel stop` 后同一 URL 得 530（边缘没了 origin）；审计落 start/stop 两条、`sid` 为 null；kill 宿主后子进程随 `session_shutdown` 收掉。
+- docs: 两份 README 的命令节加两条 bullet、「跨机转发」加第二种形态一段（面貌写在脸上：公网、token 唯一闸门、运行态、随桥拆）；`docs/protocol.md` 新增「操作员的隧道：`/a2mcp tunnel`」小节（与 xfer 共用机器、各自的家、幂等为什么与 `xfer_share` 的顶替刻意相反）；`docs/testing.md` 改 231/23 并记假二进制那套判据；站点 sync.mjs 两处计数。
+- 边界：隧道可用性取决于 Cloudflare 边缘，30 秒等不到 announce 即报错；Windows 一侧，`cloudflared` 此前「验到字节没验到执行」，本功能把它第一次推到桥自己真 spawn 的分支上——那条支级的真执行仍未在 Windows 机器上验过。
+- 回归: `bun test` 231/231（17 文件）、`tsc` / `lint` 干净（1 info 基线）、站点 `build` + `check` 全过、真宿主一遍如上。
+
 ## 2026-10-19 — 指南原位瘦身：README 把机制细节交还给 docs
 
 维护者的判据是「指南应该是简单的」。刀法选了原位瘦身：/intro 仍是一页，每个机制段收到「是什么、怎么用」几句为止，展开的细节交还给 `docs/protocol.md` 与 `docs/testing.md`。中文版从 367 行到 326 行，「宿主推理接管」一节从 3139 字到 1352 字；英文版同形镜像。守住不动的东西：mermaid 图逐字节、JSON 样例、H2 锚点名（站点卡的四个链接依赖它们）、`^omp install <url>$` 那行（两份探针测试拿它当安装 URL 的读取点），以及全部受守事实——18.12.1 的连接被拒实测、≥90s 审批挂起、300s 转后台、512KB/0600/一代轮转、`<len,sha256 前 8>` 不分层、2026-10-13 注册表实测、win32 验到字节没验到执行、`test:obtain` 37 项。

@@ -141,9 +141,11 @@ a2mcp listening on http://127.0.0.1:<port> (token <前6字符>…)
 
 宿主会话内：
 
-- `/a2mcp` — 显示当前监听地址、端口与 token 前缀
+- `/a2mcp` — 显示当前监听地址、端口与 token 前缀（隧道开着时行尾会带上它的 URL）
 - `/a2mcp rotate` — 轮换 token（写完配置后需同步更新远程 `mcp.json`）
 - `/a2mcp token` — 打印完整 token（状态行只显示前缀）
+- `/a2mcp tunnel` — 在 MCP 端点前面起一条 cloudflared 快速隧道，打印公网 URL（`https://<随机>.trycloudflare.com`）。运行态，不落配置，见「跨机转发」
+- `/a2mcp tunnel stop` — 关闭隧道
 
 ## 远程连接示例
 
@@ -186,6 +188,8 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 ```
 
 `mcp.json` 的 `url` 写 `http://127.0.0.1:<localport>/`。
+
+第二种形态是隧道，命令在宿主会话里：`/a2mcp tunnel` 起一个 cloudflared，把一个随机 `https://<随机>.trycloudflare.com` 主机名指到桥的端口并把 URL 打出来，远程侧直接把它写进 `mcp.json` 的 `url`。要说清的面貌：隧道一开，这个端点就暴露在公网，Bearer token 是唯一闸门。它是运行态，与 takeover 开关同款：不落盘、重启即无；`/a2mcp tunnel stop` 可关，桥拆端口时（宿主没有 Main 会话了）也一并拆掉，公网主机名不会活得比开它的桥久。`cloudflared` 不在 PATH 时按配置 `xfer.cloudflared` 的钉值加 sha256 拉取，规则与「传文件」完全同一套。开关各记一条审计（`tool: "tunnel"`），token 不进记录。
 
 ## 审批
 
@@ -290,7 +294,7 @@ bun install
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
-bun test              # 单测：test/*.test.ts（226 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
+bun test              # 单测：test/*.test.ts（231 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
 bun run test:obtain   # 钉死的两个二进制：本机这一行真下载、钉表十个 asset 全 HEAD、Windows 那两行按字节读，37 项（不需要本机 omp；只往它自己那个 /tmp 目录里写）
 bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）

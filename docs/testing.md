@@ -5,7 +5,7 @@
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
 | `bun run test:tree` | 仓库形状核验，3 项，无依赖 | 否 | `tree-probe: repo shape OK` |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 226 pass / 0 fail（17 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 231 pass / 0 fail（17 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
 | `bun run test:obtain` | 外部二进制获取核验，37 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
@@ -266,7 +266,7 @@
 
 顺带一处过期维护：那条保留测试里每 20 对让路的理由在串行之后不成立了，注释按新的行为改写，让路本身去掉。
 
-## 入口那一层（`test/entry.test.ts`，19 项）
+## 入口那一层（`test/entry.test.ts`，23 项）
 
 `extensions/a2mcp.ts` 此前没有任何单测能引到它——不起了宿主就摸不到，而它管的是这台服务器的生死。它现在被直接 import：`$A2MCP_CONFIG` 指到临时文件，端口写 `0`，`Main` 会话是真注册进 `AgentRegistry.global()` 的假货。不 mock 任何模块：入口的每个决定最后都要落到一个能被连接的端口上，所以断言一律是「从广播里解析出那个端口，然后去连它」。连不上就是没在服务，200 就是在服务——这比数调用次数结实，而 `mock.module` 在本机还有个硬伤：Bun 的模块 mock 是进程级的，`test/config.test.ts` 的 `loadConfig` 会被同一进程里的 mock 换掉，一次 `bun test` 就绿不回来了。
 
@@ -288,6 +288,9 @@
 | `Main` 槽位还在但 `session` 是 `null`（宿主的 parked/aborted）：端口照样释放 | 1 |
 | 子代理结束端口仍在；`Main` 没了端口才释放；释放后新的 `session_start` 重绑 | 3 |
 | `/a2mcp`：注册名、rotate 先落盘再生效、落盘失败则运行中的仍是旧 token、`token` 出全串而 status 只出前缀、未运行时三个子命令都拒绝 | 5 |
+| `/a2mcp tunnel`：打开并报 URL 与「token 是唯一闸门」、start 落审计；二次打开幂等（一个子进程、一条审计）；`tunnel stop` 关子进程并落 stop 审计、再 stop 报 none open；端口释放时子进程同行 | 4 |
+
+最后四项对着假 cloudflared 跑：配置的 `xfer.cloudflared` 写绝对路径，走的是 obtain 的逃生门（不查 PATH、零下载），脚本 announce 一个固定的 `trycloudflare.com` 主机名并把 spawn/SIGTERM 各记一行——「一个子进程而不是两个」「子进程随桥而死」就数这些行，不碰 pid。真隧道的公网半程在这里仍然不是证据：本机网络对 `*.trycloudflare.com` 重签 TLS，回环 curl 只算人工核验（`bun run test:obtain` 那一节的判样直接沿用）。审计侧 `test/audit.test.ts` 补一条记录形状（`tool: "tunnel"`、`sid: null`、error 截 200），并把 `auditTunnel` 挂进「每个入口都返回队列尾巴」那组签名断言。
 
 变异核验十项：去掉 `hasMainSession()` 那道闸、把 `rotate` 的赋值挪回写盘之前、启动失败的 catch 里不再 `stop()`、catch 里什么都不清、`hasMainSession()` 恒真与恒假、去掉在途那道闸（红的正是并发那条）、去掉绑完之后的那次复查（红的正是绑定中途结束那条）、把 `hasMainSession()` 的比较换回 `!== undefined`（红的正是 parked 那两条），各红自己那一两条。只有把广播里的端口换成配置值而不是实际绑上的那个，红了七条：端口报错了，所有「去连它」的断言一起塌。这正是把断言写成真连接的代价与好处，它不给你留「实现错了但计数对得上」的余地。
 
