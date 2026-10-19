@@ -7,8 +7,16 @@
 # host's own `omp plugin doctor`, because a second module-graph validator is
 # exactly what got deleted from this repo once already.
 #
-# Usage: sh bootstrap.sh [--dry-run] [--uninstall] [--reinstall] [--upgrade]
-# [--host-version <version>|latest] [--spec <git-url>]
+# One file is written outside the installer, under a deliberately narrow
+# condition: when this script installed the host itself AND
+# $HOME/.omp/agent/models.yml does not exist, it creates that file with one
+# unreachable placeholder provider (create-only — an existing models.yml is
+# never read or touched, and a machine that already had omp gets nothing). The
+# host refuses to boot headless with no model configuration at all, and no
+# extension code runs before that boot, so a disk file is the only thing that
+# can be there in time.
+#
+# Options: run with --help.
 set -eu
 
 PLUGIN="a2mcp"
@@ -26,6 +34,7 @@ DO_UPGRADE=0
 HOST_VERSION=""
 SPEC="$DEFAULT_SPEC"
 SKIP_INSTALL=0
+INSTALLED_HOST=0
 
 fail() {
 	printf 'FAIL\n  wanted: %s\n  got:    %s\n' "$1" "$2" >&2
@@ -59,8 +68,13 @@ run() {
 	fi
 }
 
+# The option list lives in usage() and nowhere else: `curl … | sh` leaves $0
+# pointing at the shell, so printing the file header would read a binary.
 usage() {
-	sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+	cat <<'EOF'
+Usage: sh bootstrap.sh [--dry-run] [--uninstall] [--reinstall] [--upgrade]
+       [--host-version <version>|latest] [--spec <git-url>]
+EOF
 }
 
 while [ $# -gt 0 ]; do
@@ -87,6 +101,19 @@ while [ $# -gt 0 ]; do
 	esac
 	shift
 done
+
+# --- where the host pin can be read from when no repo sits beside this script ---
+# Run through a pipe there is no ../package.json, and the pin that decides the host
+# version has to come from the same place the plugin will be cloned from. Only the
+# github.com shape is derived: guessing at another host's layout is a second system
+# nobody maintains. HEAD is what raw.githubusercontent.com resolves for the default
+# branch, so this keeps working if that branch is ever renamed.
+RAW_PKG=""
+case "$SPEC" in
+https://github.com/*)
+	RAW_PKG=$(printf '%s' "${SPEC%.git}" | sed -nE 's|^https://github\.com/([^/]+)/([^/]+)/?$|https://raw.githubusercontent.com/\1/\2/HEAD/package.json|p')
+	;;
+esac
 
 # --- prerequisites ---
 [ -n "${HOME:-}" ] || fail "HOME pointing at a directory" "HOME empty"
@@ -135,6 +162,22 @@ elif [ -n "$HOST_VERSION" ]; then
 elif [ -f "$PKG_JSON" ]; then
 	PIN_SOURCE="$PKG_JSON"
 	PIN=$(sed -n "s|.*\"$PIN_PACKAGE\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*|\1|p" "$PKG_JSON" | head -1)
+elif [ -z "$OMP_CMD" ] && [ -n "$RAW_PKG" ]; then
+	# Only when the host is actually going to be installed: with a host already on
+	# PATH nothing here needs a version to fetch.
+	PIN_SOURCE="$RAW_PKG"
+	if has curl; then
+		# The body lands in a variable before the extraction runs, because in a
+		# pipeline curl's exit status is sed's and `set -e` would not see a failed
+		# fetch. No temp file: --dry-run has to keep leaving HOME untouched.
+		PIN_BODY=$(curl -fsSL --max-time 20 "$RAW_PKG" 2>/dev/null) || PIN_BODY=""
+		PIN=$(printf '%s\n' "$PIN_BODY" | sed -n "s|.*\"$PIN_PACKAGE\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*|\1|p" | head -1)
+		[ -n "$PIN" ] || warn "no pin readable from $RAW_PKG; pass --host-version <version> to choose the host version yourself"
+	else
+		warn "no curl to read the pin from $RAW_PKG with; pass --host-version <version> to choose the host version yourself"
+	fi
+elif [ -z "$OMP_CMD" ]; then
+	PIN_SOURCE="spec '$SPEC', which is not an https://github.com URL to read a package.json from"
 fi
 if [ -n "$PIN" ] && ! printf '%s' "$PIN" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
 	warn "$PIN_PACKAGE is pinned to '$PIN' in $PIN_SOURCE, which is not an exact version; the host will be installed at latest instead"
@@ -180,6 +223,7 @@ if [ -n "$OMP_CMD" ]; then
 	fi
 else
 	echo "No omp on PATH. Installing the host first, from the official installer."
+	INSTALLED_HOST=1
 	if [ -n "$PIN" ]; then
 		echo "  pinned to v$PIN (read from $PIN_SOURCE)"
 	else
@@ -204,6 +248,53 @@ fi
 # In --dry-run with no host on PATH nothing was installed to point at, so planned
 # host commands are printed under the plain name.
 OMP_LABEL=${OMP_CMD:-omp}
+
+# --- placeholder model for the host this script just installed ---
+# A machine with no model configuration at all cannot boot the host headless:
+# `omp --mode rpc` stops inside createAgentSession, before any extension code
+# ever runs. The interactive TUI does come up there, and the bridge fills the
+# empty model slot with the same unreachable row (src/auto-model.ts) at
+# session_start — but a file is the only thing that can exist before boot. So
+# this writes one, and only on this branch: the host this script installed, on
+# a machine that had none. A machine that already had omp keeps its model
+# configuration alone — create-only, and an existing file is not read, not
+# touched, not mentioned. The bytes are the extension's own placeholder shape:
+# `a2mcp.invalid` is the RFC 6761 reserved domain, nothing under it can resolve
+# and no request ever leaves the machine.
+seed_placeholder_models() {
+	[ "$INSTALLED_HOST" -eq 1 ] || return 0
+	MODELS_YML="$HOME/.omp/agent/models.yml"
+	if [ -e "$MODELS_YML" ]; then
+		return 0
+	fi
+	if [ "$DRY" -eq 1 ]; then
+		plan "write $MODELS_YML (unreachable placeholder provider a2mcp/offline; create-only)"
+		return 0
+	fi
+	mkdir -p "$HOME/.omp/agent"
+	cat >"$MODELS_YML" <<'EOF'
+# Written by a2mcp's bootstrap script. The host refuses to start headless with
+# no model configuration at all, so this file carries one unreachable provider
+# by design: a2mcp.invalid is reserved (RFC 6761), no request ever leaves this
+# machine, and prompts on the host fail as connection errors instead of
+# blocking the bridge from serving its MCP surface at all. When this machine
+# gets real credentials, pick a model with /model or delete this file.
+providers:
+  a2mcp:
+    baseUrl: http://a2mcp.invalid/v1
+    api: anthropic-messages
+    apiKey: not-a-real-key
+    models:
+      - id: offline
+        name: a2mcp placeholder (unreachable)
+        contextWindow: 100000
+EOF
+	echo "Wrote $MODELS_YML — an unreachable placeholder provider so the host"
+	echo "  boots headless too; it is create-only, and the bridge selects the same"
+	echo "  row at session_start even without this file (interactive starts)."
+}
+
+seed_placeholder_models
 
 # --- extension ---
 installed_here() {
@@ -252,8 +343,12 @@ if [ "$DRY" -eq 1 ]; then
 else
 	echo "Done. From here:"
 fi
-echo "  * The host needs model credentials before any session exists at all; without"
-echo "    them there is nothing for the bridge to serve."
+echo "  * With no model configured the bridge still comes up: at session_start it"
+echo "    selects an unreachable placeholder (a2mcp/offline), so the host's own"
+echo "    prompts fail as connection errors instead of stopping everything. Real"
+echo "    inference needs /login or /model. Headless (--mode rpc) starts cannot get"
+echo "    that far without a models.yml: this script wrote one when it installed"
+echo "    the host, and the README's troubleshooting section has the shape."
 echo "  * On the first session_start the bridge writes its own config to"
 echo "    $HOME/.omp/agent/a2mcp.json — random port, 43-character token."
 echo "    Don't create that file by hand."

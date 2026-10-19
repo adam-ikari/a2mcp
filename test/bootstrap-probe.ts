@@ -10,8 +10,21 @@
  * `package.json` rather than out of the script, `--dry-run` touches nothing, a
  * missing prerequisite stops for the reason it names, and the plugin step is the
  * README's one install path run verbatim. Groups 1-4 drive the script against a
- * recording stub `omp` in a throwaway HOME, so nothing real is installed and
- * nothing is downloaded.
+ * recording stub `omp` and, where the pin read is what's under test, a recording
+ * fake `curl`, both in a throwaway HOME, so nothing real is installed and nothing
+ * is downloaded.
+ *
+ * Group 1b runs the script from a copy with no `package.json` above it, which is
+ * the layout `curl … | sh` actually lands in: the pin then comes from the raw
+ * `package.json` of whatever the spec points at, through a fake curl that records
+ * every call — including the runs where the correct answer is that it recorded
+ * nothing. One item in that group asks GitHub itself what the derived URL serves.
+ *
+ * Group 4b hands the script a fake installer that leaves a stub `omp` in
+ * `PI_INSTALL_DIR`, so the fresh-host branch runs end to end for the first time:
+ * that is the branch that seeds `~/.omp/agent/models.yml` with the unreachable
+ * placeholder, and the group checks the bytes, the create-only guard, the
+ * `--dry-run` plan, and that a machine with a host already on PATH gets no file.
  *
  * Group 5 is the one pass with the real host: temp HOME, the script run for
  * real, the registration checked in `omp-plugins.lock.json`, then `--uninstall`
@@ -22,11 +35,13 @@
  *
  * ## The boundary of this coverage
  *
- * The host-install half is never executed here: every group either has a stub
- * `omp` on PATH, so the script refuses to install one, or is a `--dry-run` that
- * only prints the planned installer command. **The first real execution of that
- * branch happens on somebody else's machine.** What this repo can hold it to is
- * the plan it prints, the pin it prints, and the exit codes it takes when a
+ * The official installer itself is never executed here: every group either has a
+ * stub `omp` on PATH, so the script refuses to install one, or is a `--dry-run`
+ * that only prints the planned installer command, or (group 4b) replaces the
+ * download with a fake `curl` while the stub host is already sitting in
+ * `PI_INSTALL_DIR`. **The first real execution of that download happens on
+ * somebody else's machine.** What this repo can hold it to is the plan it prints,
+ * the pin it prints, the file it seeds, and the exit codes it takes when a
  * prerequisite is missing.
  *
  * Env:
@@ -147,9 +162,16 @@ function core(take: string[] = []): string[] {
 }
 
 /** Run the script with nothing inherited: the PATH and HOME are exactly ours. */
-function runBootstrap(dirs: string[], home: string, args: string[], cwd = home) {
-	const res = spawnSync("/bin/sh", [SCRIPT, ...args], {
-		env: { PATH: dirs.join(":"), HOME: home },
+function runBootstrap(
+	dirs: string[],
+	home: string,
+	args: string[],
+	cwd = home,
+	script = SCRIPT,
+	extraEnv: Record<string, string> = {},
+) {
+	const res = spawnSync("/bin/sh", [script, ...args], {
+		env: { PATH: dirs.join(":"), HOME: home, ...extraEnv },
 		cwd,
 		encoding: "utf8",
 	});
@@ -184,6 +206,49 @@ function scriptWithPin(pin: string): { script: string; dir: string } {
 	writeFileSync(script, readFileSync(SCRIPT, "utf8"));
 	return { script, dir };
 }
+
+/** A copy of the script with no package.json anywhere above it — the piped form's layout. */
+function bareScript(): { script: string; dir: string } {
+	const dir = mkdtempSync(join(SCRATCH, "bare-"));
+	mkdirSync(join(dir, "scripts"), { recursive: true });
+	const script = join(dir, "scripts", "bootstrap.sh");
+	writeFileSync(script, readFileSync(SCRIPT, "utf8"));
+	return { script, dir };
+}
+
+/**
+ * A `curl` that answers whatever we decide and records every call it took, so
+ * "no request was sent" is a fact about the log rather than an absence. Only the
+ * pin read reaches it: these runs are --dry-run, so the installer's own curl never fires.
+ */
+function fakeCurl(body: string | null): { dir: string; log: string; calls: () => string[] } {
+	const dir = mkdtempSync(join(SCRATCH, "fakebin-"));
+	const log = join(dir, "urls.log");
+	const fixture = join(dir, "fixture.json");
+	if (body !== null) writeFileSync(fixture, body);
+	const script =
+		body === null
+			? `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexit 22\n`
+			: `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\ncat "${fixture}"\n`;
+	writeFileSync(join(dir, "curl"), script, { mode: 0o755 });
+	return {
+		dir,
+		log,
+		calls: () =>
+			existsSync(log)
+				? readFileSync(log, "utf8")
+						.split("\n")
+						.filter((l) => l.length > 0)
+				: [],
+	};
+}
+
+const fixturePackage = (pin: string): string =>
+	`{\n  "name": "${PLUGIN}",\n  "devDependencies": {\n    "@oh-my-pi/pi-coding-agent": "${pin}"\n  }\n}\n`;
+
+/** The raw URL the script should derive from this repo's own install URL. */
+const RAW_PKG =
+	README_URL.replace(/\.git$/, "").replace("github.com", "raw.githubusercontent.com") + "/HEAD/package.json";
 
 console.log(`script under test: ${SCRIPT}`);
 console.log(`pin in package.json: ${PIN}`);
@@ -247,6 +312,98 @@ console.log("--- the pin the host is installed against ---");
 		"--host-version latest plans an unpinned install",
 		latest.lines.find((l) => l.includes("curl -fsSL")) ?? "no installer line",
 	);
+}
+
+// --- 1b. the same script with no repo beside it (curl | sh) -------------------
+
+console.log("\n--- the pin when the script arrives through a pipe ---");
+{
+	stubHost();
+	const home = tempHome();
+	// No omp on PATH: this is the branch that installs a host, and no package.json
+	// above the script: this is the file layout `curl … | sh` actually runs in.
+	const bare = bareScript();
+
+	const remote = fakeCurl(fixturePackage("9.9.9"));
+	const rRemote = runBootstrap([remote.dir, farm(core(["omp"]))], home, ["--dry-run"], home, bare.script);
+	check(
+		rRemote.out.includes("--binary --ref v9.9.9"),
+		"with no package.json beside it the script reads the pin from the spec's repo",
+		rRemote.lines.find((l) => l.includes("--ref")) ?? "no --ref line",
+	);
+	check(
+		rRemote.out.includes(`pinned to v9.9.9 (read from ${RAW_PKG})`),
+		"the provenance line names the raw URL it fetched from",
+		rRemote.lines.find((l) => l.includes("read from")) ?? "no provenance line",
+	);
+	check(
+		remote.calls().some((c) => c.includes(RAW_PKG)),
+		"that pin came over the wire, not from this checkout",
+		remote.calls().join(" | ") || "the fake curl recorded nothing",
+	);
+
+	const down = fakeCurl(null);
+	const rDown = runBootstrap([down.dir, farm(core(["omp"]))], home, ["--dry-run"], home, bare.script);
+	check(
+		rDown.code === 0 && !rDown.out.includes("--ref") && rDown.out.includes("curl -fsSL https://omp.sh/install | sh\n"),
+		"a failed pin fetch installs latest instead of stopping",
+		`exit ${rDown.code}: ${rDown.lines.find((l) => l.startsWith("warn:")) ?? "no warn line"}`,
+	);
+	check(
+		down.calls().some((c) => c.includes(RAW_PKG)),
+		"and it says which URL it tried to read",
+		rDown.lines.find((l) => l.includes(RAW_PKG)) ?? (down.calls().join(" | ") || "no request recorded"),
+	);
+
+	const other = fakeCurl(fixturePackage("9.9.9"));
+	const rOther = runBootstrap(
+		[other.dir, farm(core(["omp"]))],
+		home,
+		["--dry-run", "--spec", "git@gitlab.example:foo/bar.git"],
+		home,
+		bare.script,
+	);
+	check(
+		other.calls().length === 0 && /not an https:\/\/github\.com URL/.test(rOther.out) && !rOther.out.includes("--ref"),
+		"a spec that is not a github.com URL gets no guess and no request",
+		other.calls().join(" | ") || (rOther.lines.find((l) => l.includes("no pin available")) ?? "no fallback line"),
+	);
+
+	const forced = fakeCurl(fixturePackage("9.9.9"));
+	const rForced = runBootstrap(
+		[forced.dir, farm(core(["omp"]))],
+		home,
+		["--dry-run", "--host-version", "7.7.7"],
+		home,
+		bare.script,
+	);
+	check(
+		forced.calls().length === 0 && rForced.out.includes("--binary --ref v7.7.7"),
+		"--host-version is honoured without a request for the pin",
+		forced.calls().join(" | ") || "the fake curl recorded nothing",
+	);
+
+	const hosted = fakeCurl(fixturePackage("9.9.9"));
+	const rHosted = runBootstrap([hosted.dir, farm(core())], home, ["--dry-run"], home, bare.script);
+	check(
+		hosted.calls().length === 0 && rHosted.out.includes("already on PATH"),
+		"an existing host means no pin request at all: nothing here is going to install one",
+		hosted.calls().join(" | ") || (rHosted.lines.find((l) => l.includes("already on PATH")) ?? "no host line"),
+	);
+
+	// The one item that leaves the machine: does the derivation match what GitHub
+	// actually serves for this repo? Unreachable host is a skip, never a pass.
+	const live = spawnSync("curl", ["-fsSL", "--max-time", "10", RAW_PKG], { encoding: "utf8" });
+	if (live.status !== 0) {
+		console.log(`info: skipped the live derivation check — ${RAW_PKG} not reachable (exit ${live.status})`);
+	} else {
+		const served = live.stdout.match(/"@oh-my-pi\/pi-coding-agent"\s*:\s*"([^"]+)"/)?.[1] ?? "nothing";
+		check(
+			served === PIN,
+			"the URL the script derives serves the same pin this repo carries",
+			`raw serves ${served}, package.json pins ${PIN}`,
+		);
+	}
 }
 
 // --- 2. what the plan says it will do ----------------------------------------
@@ -329,6 +486,31 @@ console.log("\n--- prerequisites ---");
 		"an unknown option stops instead of being ignored",
 		badArg.lines.find((l) => l.includes("wanted")) ?? `exit ${badArg.code}`,
 	);
+
+	// No curl and no repo beside the script: the pin read has to say it could not
+	// happen and still let the installer's own prerequisite be the stop.
+	stubHost();
+	const bareNoCurl = bareScript();
+	const noCurlBare = runBootstrap([farm(core(["curl", "omp"]))], tempHome(), ["--dry-run"], home, bareNoCurl.script);
+	check(
+		/no curl to read the pin from https:\/\/raw\.githubusercontent\.com/.test(noCurlBare.out) &&
+			/wanted: curl on PATH/.test(noCurlBare.out),
+		"with no curl the pin read is a warning and the stop stays at the installer that needs curl",
+		noCurlBare.lines.filter((l) => l.includes("curl")).join(" / ") || `exit ${noCurlBare.code}`,
+	);
+
+	// `curl … | sh` leaves $0 pointing at the shell, so --help cannot read its own file.
+	const pipedHelp = spawnSync("/bin/sh", ["-s", "--", "--help"], {
+		input: readFileSync(SCRIPT, "utf8"),
+		cwd: home,
+		encoding: "utf8",
+	});
+	const pipedHelpText = `${pipedHelp.stdout ?? ""}${pipedHelp.stderr ?? ""}`;
+	check(
+		pipedHelp.status === 0 && pipedHelpText.includes("--host-version") && pipedHelpText.includes("--dry-run"),
+		"--help prints the option list when the script came through a pipe",
+		pipedHelpText.split("\n").find((l) => l.includes("Usage")) ?? `exit ${pipedHelp.status}`,
+	);
 }
 
 // --- 4. a run against the recording host -------------------------------------
@@ -396,6 +578,113 @@ console.log("\n--- the decisions it takes about the registration ---");
 		r.code === 0 && /while this repo pins/.test(r.out),
 		"a host at another version is reported, not stopped at",
 		r.lines.find((l) => l.startsWith("warn:")) ?? `exit ${r.code}`,
+	);
+}
+
+// --- 4b. the placeholder models.yml, and the one branch allowed to write it ---
+
+console.log("\n--- the placeholder models.yml the fresh-host branch seeds ---");
+
+/**
+ * The fresh-host branch with its download replaced, not skipped: a fake `curl`
+ * that answers the installer URL by printing nothing (the real installer would
+ * have written the binary; here it already sits in PI_INSTALL_DIR, a copy of the
+ * recording stub) and refuses every other URL. The script's own resolution then
+ * finds $PI_INSTALL_DIR/omp and the branch runs to its end — seeding included.
+ */
+function freshHostRun(home: string, args: string[]): { r: ReturnType<typeof runBootstrap>; calls: () => string[] } {
+	const piDir = mkdtempSync(join(SCRATCH, "install-dir-"));
+	writeFileSync(join(piDir, "omp"), readFileSync(join(STUB_HOME, "omp"), "utf8"), { mode: 0o755 });
+	const dir = mkdtempSync(join(SCRATCH, "installer-curl-"));
+	const log = join(dir, "urls.log");
+	writeFileSync(
+		join(dir, "curl"),
+		`#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nfor a in "$@"; do\n  case "$a" in\n  *omp.sh/install*) exit 0 ;;\n  esac\ndone\nexit 22\n`,
+		{ mode: 0o755 },
+	);
+	// mkdir belongs to the seeding step, sh to the installer pipe (`curl … | sh`);
+	// omp and curl come from this scene, not PATH.
+	const bins = [...core(["omp", "curl"]), "mkdir", "sh"];
+	const r = runBootstrap([dir, farm(bins)], home, args, home, SCRIPT, { PI_INSTALL_DIR: piDir });
+	return {
+		r,
+		calls: () =>
+			existsSync(log)
+				? readFileSync(log, "utf8")
+						.split("\n")
+						.filter((l) => l.length > 0)
+				: [],
+	};
+}
+
+const modelsPath = (home: string): string => join(home, ".omp", "agent", "models.yml");
+
+{
+	stubHost({ registered: false });
+	const home = tempHome();
+	const { r, calls } = freshHostRun(home, ["--host-version", "9.9.9"]);
+	check(
+		r.code === 0 && existsSync(modelsPath(home)),
+		"the fresh-host run lands and writes ~/.omp/agent/models.yml",
+		`exit ${r.code}${existsSync(modelsPath(home)) ? ", file present" : ", no file"}`,
+	);
+	const body = existsSync(modelsPath(home)) ? readFileSync(modelsPath(home), "utf8") : "";
+	check(
+		[
+			"providers:",
+			"  a2mcp:",
+			"baseUrl: http://a2mcp.invalid/v1",
+			"api: anthropic-messages",
+			"apiKey: not-a-real-key",
+			"- id: offline",
+		].every((line) => body.includes(line)),
+		"the file carries the extension's own placeholder shape",
+		body ? `${body.split("\n").length} line(s)` : "nothing read back",
+	);
+	check(
+		r.out.includes(`Wrote ${modelsPath(home)}`),
+		"the script says which file it wrote",
+		r.lines.find((l) => l.startsWith("Wrote")) ?? "no Wrote line",
+	);
+	check(
+		!calls().some((c) => c.includes("raw.githubusercontent.com")),
+		"with --host-version the only recorded request is the installer",
+		calls().join(" | ") || "the fake curl recorded nothing",
+	);
+}
+{
+	stubHost({ registered: false });
+	const home = tempHome();
+	const sentinel = "providers:\n  - name: mine\n    baseUrl: http://127.0.0.1:9/v1\n";
+	mkdirSync(join(home, ".omp", "agent"), { recursive: true });
+	writeFileSync(modelsPath(home), sentinel);
+	const { r } = freshHostRun(home, ["--host-version", "9.9.9"]);
+	check(
+		r.code === 0 && readFileSync(modelsPath(home), "utf8") === sentinel && !r.out.includes("Wrote"),
+		"an existing models.yml is left byte for byte, and the script does not mention it",
+		`exit ${r.code}: ${r.out.includes("Wrote") ? "claimed a write" : "silent"}`,
+	);
+}
+{
+	stubHost();
+	const home = tempHome();
+	const r = runBootstrap([farm(core(["omp"]))], home, ["--dry-run", "--host-version", "9.9.9"]);
+	check(
+		r.out.includes(`plan: write ${modelsPath(home)} (unreachable placeholder provider a2mcp/offline; create-only)`) &&
+			!existsSync(modelsPath(home)) &&
+			readdirSync(home).length === 0,
+		"--dry-run plans the seeding on the fresh-host branch and leaves HOME empty",
+		r.lines.find((l) => l.includes("plan: write")) ?? "no seeding plan line",
+	);
+}
+{
+	stubHost({ registered: false });
+	const home = tempHome();
+	const r = runBootstrap([farm(core())], home, []);
+	check(
+		r.code === 0 && !existsSync(join(home, ".omp")) && !r.out.includes("Wrote"),
+		"a machine that already had omp gets no models.yml at all",
+		`exit ${r.code}${existsSync(join(home, ".omp")) ? ", but .omp exists" : ""}`,
 	);
 }
 
