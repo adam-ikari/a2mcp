@@ -103,10 +103,12 @@ export function openQuickTunnel(opts: QuickTunnelOptions): Promise<QuickTunnel> 
 				url: m[0],
 				port: opts.port,
 				pid: child.pid,
-				// SIGTERM first: cloudflared takes the hint and closes its edge
+				// SIGTERM first: on unix cloudflared takes the hint and closes its edge
 				// connections, which is what makes the URL stop answering promptly.
 				// SIGKILL follows only if it is still alive a moment later, so a
-				// wedged child cannot hold the hostname open.
+				// wedged child cannot hold the hostname open. Windows has no signal to
+				// take — `kill` there ends the process outright, so the first call is
+				// the last one and the child exits without a graceful close.
 				async stop() {
 					if (child.exitCode !== null || child.signalCode !== null) return;
 					const dead = new Promise<void>((r) => child.once("exit", () => r()));

@@ -15,6 +15,12 @@
  * behaves: GET, a Range request, a PUT that lands on disk, a wrong password, a
  * directory listing, and the port afterwards.
  *
+ * The two Windows rows are read as bytes rather than as a status, because nothing in
+ * this repository runs a Windows binary: the zip is opened by the same reader a
+ * `win32-x64` install calls, and the `.exe` is confirmed as a PE and against the
+ * bridge's own download cap. Bytes that are the right shape are not bytes that run,
+ * and the probe says which of the two it established.
+ *
  * The fetch is driven twice on purpose: once through `resolveBinary` directly, and
  * once through `xfer_share` with nothing on PATH and an empty install dir, which is
  * the only way to say the tool that announces `installed` is the tool that did the
@@ -46,13 +52,14 @@
  *                       never writes into the operator's ~/.local/bin
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { auditStart } from "../src/audit.ts";
-import { pinnedUrl, pinsFor, resolveBinary, targetKey } from "../src/obtain.ts";
+import { pinnedUrl, pinsFor, readZipEntry, resolveBinary, targetKey } from "../src/obtain.ts";
 import type { TunnelOpener } from "../src/tunnel.ts";
 import { createXfer } from "../src/xfer.ts";
 
@@ -68,6 +75,8 @@ function fail(msg: string): never {
 	console.error(`FAIL: ${msg}`);
 	process.exit(1);
 }
+/** Computed here, never taken from the host that serves the bytes. */
+const sha256Of = (b: Buffer): string => createHash("sha256").update(b).digest("hex");
 
 const work = await mkdtemp(join(tmpdir(), "a2mcp-obtain-probe-"));
 const binDir = process.env.A2MCP_OBTAIN_TARGET ?? join(work, "bin");
@@ -248,6 +257,65 @@ const answers = await Promise.all(
 for (let i = 0; i < rows.length; i++) {
 	const [name, t] = rows[i];
 	check(answers[i] === "HTTP 200", `${name} for ${t} answers at its pinned URL`, answers[i]);
+}
+
+// --- 3b. the Windows rows read as bytes, because nothing here runs them ---------
+//
+// A `win32-x64` row pointing at the wrong asset still answers HTTP 200 above, and no
+// check in this repository executes a Windows binary. So the two rows are read the
+// way the host will read them: the zip through the same `readZipEntry` a `win32-x64`
+// install calls, the `.exe` through its first two bytes and the size the release host
+// reports for it. What this cannot say is that the bytes run — only that they are the
+// bytes the table promised, in the shape the code expects.
+{
+	const dufsWin = pinsFor("dufs")["win32-x64"];
+	const cfWin = pinsFor("cloudflared")["win32-x64"];
+	if (!dufsWin || !cfWin) {
+		check(
+			false,
+			"both Windows rows are still in the table",
+			dufsWin ? "cloudflared's row is gone" : "dufs' row is gone",
+		);
+	} else {
+		const zip = Buffer.from(
+			await (await fetch(pinnedUrl("dufs", dufsWin), { signal: AbortSignal.timeout(60_000) })).arrayBuffer(),
+		);
+		const got = sha256Of(zip);
+		check(
+			got === dufsWin.sha256,
+			"the Windows dufs zip hashes on this machine to the pinned value",
+			`got ${got}, pinned ${dufsWin.sha256}`,
+		);
+		let inside = 0;
+		let why = "";
+		try {
+			inside = readZipEntry(zip, "dufs.exe", 64 * 1024 * 1024).length;
+		} catch (e) {
+			why = (e as Error).message;
+		}
+		check(inside > 0, "the reader a win32-x64 host calls finds 'dufs.exe' in that zip", why || `${inside} bytes`);
+
+		const ranged = await fetch(pinnedUrl("cloudflared", cfWin), {
+			headers: { Range: "bytes=0-1" },
+			signal: AbortSignal.timeout(60_000),
+		}).catch((e: Error) => e.message);
+		if (typeof ranged === "string") {
+			check(false, "the Windows cloudflared answer accepts a range request", ranged);
+		} else {
+			const two = Buffer.from(await ranged.arrayBuffer());
+			check(
+				ranged.status === 206 && two.toString("latin1") === "MZ",
+				"the Windows cloudflared row serves a PE executable, not an archive",
+				`HTTP ${ranged.status}, first two bytes ${two.toString("hex")}`,
+			);
+			const total = Number(/\/(\d+)\s*$/.exec(ranged.headers.get("content-range") ?? "")?.[1] ?? 0);
+			check(
+				total > 0 && total < 64 * 1024 * 1024,
+				"that .exe fits under the bridge's own download cap",
+				`${total} bytes reported, cap 67108864`,
+			);
+		}
+	}
 }
 
 // --- 4. the record ------------------------------------------------------------

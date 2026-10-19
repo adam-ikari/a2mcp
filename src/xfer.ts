@@ -28,8 +28,9 @@
  * The binaries are named, and the bridge can go and get them: `xfer.dufs` /
  * `xfer.cloudflared` point at a program, PATH is searched for that name, and when
  * nothing answers, `src/obtain.ts` downloads the pinned build, verifies it against
- * the sha256 pinned beside the version, and installs it to `~/.local/bin`. A value
- * containing a `/` is the operator saying "use exactly this" and is never
+ * the sha256 pinned beside the version, and installs it into the bridge's bin
+ * directory (`~/.local/bin`, or `%LOCALAPPDATA%\a2mcp\bin` on Windows). A value
+ * containing a `/` or a `\` is the operator saying "use exactly this" and is never
  * downloaded for. See `src/obtain.ts` for why that is the shape it is.
  *
  * ## What is deliberately left to the host
@@ -47,7 +48,7 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import { auditXfer } from "./audit.ts";
 import type { XferConfig } from "./config.ts";
-import { type BinaryName, type ObtainDeps, type Resolved, resolveBinary } from "./obtain.ts";
+import { type BinaryName, defaultBinDir, type ObtainDeps, type Resolved, resolveBinary } from "./obtain.ts";
 import type { McpContent, McpTool } from "./server.ts";
 import { openQuickTunnel, type QuickTunnel, type TunnelOpener } from "./tunnel.ts";
 
@@ -222,7 +223,9 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 		// The waiter is registered before the signal is sent, and the two statements
 		// are not separated by an await: the file server answers SIGTERM within a few
 		// milliseconds, and `tunnel.stop()` below is real event-loop time enough for
-		// its exit to be delivered inside that await (test/xfer.test.ts).
+		// its exit to be delivered inside that await (test/xfer.test.ts). On Windows
+		// there is no SIGTERM to answer — `kill` ends the process there — so the exit
+		// arrives even sooner and the 2 s fallback below never fires.
 		const dead = exited(s.server);
 		s.server.kill("SIGTERM");
 		await s.tunnel.stop();
@@ -322,7 +325,7 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 			server.kill("SIGKILL");
 			const missing = /ENOENT|not found|127/.test(`${why}${serverErr}`);
 			const hint = missing
-				? ` — the bridge resolves '${cfg.dufs}' and '${cfg.cloudflared}' itself: PATH first, then a pinned download into ~/.local/bin. A configured value containing '/' is used exactly as given and never fetched`
+				? ` — the bridge resolves '${cfg.dufs}' and '${cfg.cloudflared}' itself: PATH first, then a pinned download into ${defaultBinDir(process.env, process.platform)}. A configured value containing '/' or '\\' is used exactly as given and never fetched`
 				: "";
 			await auditXfer(sid, "share", { path, port }, why);
 			return text(`${why}${hint}`, true);

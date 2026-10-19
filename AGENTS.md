@@ -50,13 +50,18 @@ paid for with auditing and documentation:
   `docs/protocol.md` under 桥自己的工具 (`xfer_*`) and in the README under 传文件.
 - `src/obtain.ts` puts a binary on the host's disk. When a name in the `xfer` block
   answers to nothing on PATH, the bridge downloads the pinned release asset, checks its
-  sha256 against the hash pinned next to the version, and installs it to
-  `~/.local/bin`. This is the smallest possible package manager, and the honest
-  description of what it adds is one opinion rather than a new authority: the bridge
-  already chose `dufs`, so the only question left was where those bytes come from. What
-  bounds it: no `latest`, no checksum taken from the download host, no write to a file
-  it did not install, no fetch at all for a configured value containing `/` (that is the
-  escape hatch), and an `install` audit record beside the `share` one.
+  sha256 against the hash pinned next to the version, and installs it into its own bin
+  directory (`~/.local/bin`, or `%LOCALAPPDATA%\a2mcp\bin` on Windows). This is the
+  smallest possible package manager, and the honest description of what it adds is one
+  opinion rather than a new authority: the bridge already chose `dufs`, so the only
+  question left was where those bytes come from. What bounds it: no `latest`, no
+  checksum taken from the download host, no write to a file it did not install, no fetch
+  at all for a configured value containing `/` or `\` (that is the escape hatch), and an
+  `install` audit record beside the `share` one. The pin table is the other half of the
+  bargain: five targets per binary, each row added because upstream publishes that asset
+  and its bytes were hashed, not because a platform looked missing — `win32-arm64` has no
+  row because cloudflared ships no Windows ARM64 executable, and the bridge says so rather
+  than installing half a pair.
 
 Everything else here still decides.
 

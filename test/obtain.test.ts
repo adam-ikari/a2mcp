@@ -5,7 +5,10 @@
  * test itself made, and the release host is a real local server rather than a stubbed
  * `fetch` (the house rule — this suite does not fake the transport, it moves it to
  * 127.0.0.1). The tarballs are packed by the system `tar` at run time, so the
- * listing-and-extracting path is the same one production takes.
+ * listing-and-extracting path is the same one production takes. The zip is written
+ * field by field by a fixture below, and the Windows branches are reached through the
+ * `platform` seam — this is not a Windows machine, so the file-name shape is asserted,
+ * not executed.
  *
  * What they cannot claim: that the pinned hashes in `src/obtain.ts` are the bytes
  * GitHub actually serves for those assets, dufs or cloudflared. That is real-machine
@@ -17,11 +20,21 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { deflateRawSync } from "node:zlib";
 
 import { auditStart } from "../src/audit.ts";
-import { type ObtainDeps, obtainLedgerPath, type Pin, pinsFor, resolveBinary, targetKey } from "../src/obtain.ts";
+import {
+	defaultBinDir,
+	type ObtainDeps,
+	obtainLedgerPath,
+	type Pin,
+	pinsFor,
+	readZipEntry,
+	resolveBinary,
+	targetKey,
+} from "../src/obtain.ts";
 
 const work = mkdtempSync(join(tmpdir(), "a2mcp-obtain-"));
 const auditFile = join(work, "audit.log");
@@ -46,6 +59,77 @@ function tarball(root: string, entries: string[]): Buffer {
 }
 
 const good = tarball(payloadDir, ["dufs"]);
+
+/**
+ * A single-entry zip, written out field by field.
+ *
+ * Built by hand because the alternative is circular: `unzip` is not a precondition
+ * of this suite the way `tar` is, and a fixture packed by some other tool would
+ * still leave `readZipEntry`'s own offsets unexamined. The layout is the format's —
+ * local header, deflated data, central directory, end record, little-endian
+ * throughout — over bytes `deflateRawSync` produced, with the CRC the format asks
+ * for so the fixture is a legitimate archive rather than one only this reader
+ * tolerates.
+ */
+function zipFixture(name: string, data: Buffer, o: { method?: number; usize?: number } = {}): Buffer {
+	const method = o.method ?? 8;
+	const payload = method === 0 ? data : deflateRawSync(data);
+	const crc = crc32(data);
+	const usize = o.usize ?? data.length;
+	const nm = Buffer.from(name, "utf8");
+
+	const local = Buffer.alloc(30);
+	local.writeUInt32LE(0x04034b50, 0);
+	local.writeUInt16LE(20, 4);
+	local.writeUInt16LE(0, 6);
+	local.writeUInt16LE(method, 8);
+	local.writeUInt16LE(0, 10);
+	local.writeUInt16LE(0, 12);
+	local.writeUInt32LE(crc, 14);
+	local.writeUInt32LE(payload.length, 18);
+	local.writeUInt32LE(usize, 22);
+	local.writeUInt16LE(nm.length, 26);
+	local.writeUInt16LE(0, 28);
+
+	const central = Buffer.alloc(46);
+	central.writeUInt32LE(0x02014b50, 0);
+	central.writeUInt16LE(20, 4);
+	central.writeUInt16LE(20, 6);
+	central.writeUInt16LE(0, 8); // flags: not encrypted
+	central.writeUInt16LE(method, 10);
+	central.writeUInt32LE(crc, 14);
+	central.writeUInt32LE(payload.length, 20);
+	central.writeUInt32LE(usize, 24);
+	central.writeUInt16LE(nm.length, 28);
+	central.writeUInt16LE(0, 30);
+	central.writeUInt16LE(0, 32);
+	central.writeUInt32LE(0, 42); // the entry starts at offset 0
+
+	const eocd = Buffer.alloc(22);
+	eocd.writeUInt32LE(0x06054b50, 0);
+	eocd.writeUInt16LE(1, 8);
+	eocd.writeUInt16LE(1, 10);
+	eocd.writeUInt32LE(46 + nm.length, 12);
+	eocd.writeUInt32LE(30 + nm.length + payload.length, 16);
+
+	return Buffer.concat([local, nm, payload, central, nm, eocd]);
+}
+
+const CRC_TABLE = (() => {
+	const t = new Uint32Array(256);
+	for (let i = 0; i < 256; i++) {
+		let c = i;
+		for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+		t[i] = c >>> 0;
+	}
+	return t;
+})();
+
+function crc32(b: Buffer): number {
+	let c = 0xffffffff;
+	for (const byte of b) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+	return (c ^ 0xffffffff) >>> 0;
+}
 
 // ── the fake release host ────────────────────────────────────────────────────────
 interface Plan {
@@ -305,34 +389,125 @@ describe("what the bridge does not fetch", () => {
 	});
 });
 
+describe("the shape Windows insists on", () => {
+	test("a zip's one entry becomes the installed file, named the way Windows runs it", async () => {
+		const zip = zipFixture("dufs.exe", Buffer.from(PAYLOAD));
+		plan = { bytes: zip };
+		const d = deps({ pin: pin("dufs-9.9.9.zip", zip, "zip"), platform: "win32" });
+		const r = await dufs(d);
+		expect(r.path).toBe(join(d.binDir, "dufs.exe"));
+		expect(readFileSync(r.path)).toEqual(Buffer.from(PAYLOAD));
+	});
+
+	test("readZipEntry returns deflate bytes, and stored bytes when that is how they are kept", () => {
+		const data = Buffer.from("dufs on windows ".repeat(400));
+		expect(readZipEntry(zipFixture("dufs.exe", data), "dufs.exe", 1 << 20)).toEqual(data);
+		expect(readZipEntry(zipFixture("dufs.exe", data, { method: 0 }), "dufs.exe", 1 << 20)).toEqual(data);
+	});
+
+	test("an entry is chosen by its exact name, and a near miss is not close enough", () => {
+		const z = zipFixture("dufs.exe", Buffer.from(PAYLOAD));
+		expect(() => readZipEntry(z, "dufs", 1 << 20)).toThrow(/no 'dufs' entry in the archive/);
+	});
+
+	test("a compression method this reader does not implement is a refusal, not a guess", () => {
+		const z = zipFixture("dufs.exe", Buffer.from(PAYLOAD), { method: 12 });
+		expect(() => readZipEntry(z, "dufs.exe", 1 << 20)).toThrow(
+			/uses compression method 12; only stored \(0\) and deflate \(8\) are read/,
+		);
+	});
+
+	test("an entry declaring more than the cap is refused before a single byte is unpacked", () => {
+		const z = zipFixture("dufs.exe", Buffer.alloc(1000), { usize: 9_999_999 });
+		expect(() => readZipEntry(z, "dufs.exe", 1024)).toThrow(/declares 9999999 bytes, over the 1024 byte cap/);
+	});
+
+	test("output that is not the declared length is a refusal", () => {
+		const z = zipFixture("dufs.exe", Buffer.from(PAYLOAD), { usize: Buffer.byteLength(PAYLOAD) + 7 });
+		expect(() => readZipEntry(z, "dufs.exe", 1 << 20)).toThrow(/came out as \d+ bytes, not the \d+ it declared/);
+	});
+
+	test("bytes that are not a zip have no end record to find", () => {
+		expect(() => readZipEntry(Buffer.from("this is not an archive"), "dufs.exe", 1 << 20)).toThrow(
+			/no end-of-central-directory/,
+		);
+	});
+
+	test("a bare name is found through PATHEXT, without asking the release host", async () => {
+		const dir = join(work, "pathext-bin");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "dufs.EXE"), PAYLOAD, { mode: 0o755 });
+		plan = { status: 404 };
+		const before = hits.length;
+		const d = deps({ pin: pin("dufs-9.9.9.zip", Buffer.from("unused"), "zip"), platform: "win32", env: { PATH: dir } });
+		const r = await dufs(d);
+		expect(r.path).toBe(join(dir, "dufs.EXE"));
+		expect(r.installed).toBe(null);
+		expect(hits.length).toBe(before);
+	});
+
+	test("a backslash is a path on Windows, and a path is never downloaded", async () => {
+		plan = { status: 404 };
+		const before = hits.length;
+		const d = deps({
+			pin: pin("dufs-9.9.9.zip", Buffer.from("unused"), "zip"),
+			platform: "win32",
+			env: { PATH: join(work, "definitely-empty") },
+		});
+		await expect(dufs(d, "C:\\tools\\dufs.exe")).rejects.toThrow(/is not an executable file/);
+		expect(hits.length).toBe(before);
+	});
+
+	test("the Windows install directory is under LOCALAPPDATA, not under a unix home", () => {
+		const appdata = "C:\\Users\\adam\\AppData\\Local";
+		expect(defaultBinDir({ LOCALAPPDATA: appdata }, "win32")).toBe(join(appdata, "a2mcp", "bin"));
+		expect(defaultBinDir({ HOME: "/home/adam" }, "linux")).toBe(join("/home/adam", ".local", "bin"));
+		// Windows with no `LOCALAPPDATA` in the injected env: the profile answers, and
+		// the layout under it is still the bridge's own rather than a unix one.
+		expect(defaultBinDir({}, "win32")).toBe(join(homedir(), "a2mcp", "bin"));
+	});
+});
+
 describe("the table production actually uses", () => {
-	test("every dufs row is a well-formed pin, and the four unix targets are all there", () => {
+	test("every dufs row is a well-formed pin, and the five targets are all there", () => {
 		const rows = pinsFor("dufs");
-		expect(Object.keys(rows).sort()).toEqual(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"]);
+		expect(Object.keys(rows).sort()).toEqual(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64"]);
 		for (const [target, p] of Object.entries(rows)) {
 			// A 63-character literal is a pin that can never match, and reads as a network failure.
 			expect(p.sha256).toMatch(/^[0-9a-f]{64}$/);
 			expect(p.tag).toBe(`v${p.version}`);
 			expect(p.asset).toContain(p.version);
-			expect(p.kind).toBe("tar.gz");
+			// Windows is the one platform dufs publishes as a zip, and `kind` is what
+			// tells the unpack step which reader to use.
+			expect(p.kind).toBe(target === "win32-x64" ? "zip" : "tar.gz");
 			expect(target.endsWith("-x64") || target.endsWith("-arm64")).toBe(true);
 		}
 	});
 
-	test("every cloudflared row is a well-formed pin, and the four unix targets are all there", () => {
+	test("every cloudflared row is a well-formed pin, and the five targets are all there", () => {
 		const rows = pinsFor("cloudflared");
-		expect(Object.keys(rows).sort()).toEqual(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"]);
+		expect(Object.keys(rows).sort()).toEqual(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64"]);
 		for (const p of Object.values(rows)) {
 			expect(p.sha256).toMatch(/^[0-9a-f]{64}$/);
 			// cloudflared's tags are the date-version itself, with no `v` to strip — the
 			// tag goes into the URL verbatim, so a typo here is a 404 at share time.
 			expect(p.tag).toBe(p.version);
 			expect(p.kind).toBe(p.asset.endsWith(".tgz") ? "tar.gz" : "binary");
-			// Linux publishes the bare executable; macOS publishes it inside an archive
-			// whose only entry is the name the bridge then spawns.
+			// Linux publishes the bare executable, macOS publishes it inside an archive
+			// whose only entry is the name the bridge then spawns, Windows publishes the
+			// executable with the extension on it.
 			if (p.kind === "tar.gz") expect(p.asset).toMatch(/^cloudflared-darwin-(amd64|arm64)\.tgz$/);
-			else expect(p.asset).toMatch(/^cloudflared-linux-(amd64|arm64)$/);
+			else expect(p.asset).toMatch(/^cloudflared-(linux-(amd64|arm64)|windows-amd64\.exe)$/);
 		}
+	});
+
+	test("there is no half-pinned Windows target", () => {
+		// dufs publishes an aarch64 Windows build and cloudflared does not, so a
+		// `win32-arm64` row would be a share that gets one binary and fails at the
+		// other. Both tables answer nothing for that target, which is the honest
+		// shape: the `no pinned build` message says what is missing.
+		expect(pinsFor("dufs")["win32-arm64"]).toBeUndefined();
+		expect(pinsFor("cloudflared")["win32-arm64"]).toBeUndefined();
 	});
 
 	test("the ledger lives where the docs say it does", () => {
@@ -347,15 +522,16 @@ describe("the table production actually uses", () => {
 		hits = [];
 		const t = targetKey();
 		const assetByTarget: Record<string, string> = {
-			"linux-x64": "x86_64-unknown-linux-musl",
-			"linux-arm64": "aarch64-unknown-linux-musl",
-			"darwin-x64": "x86_64-apple-darwin",
-			"darwin-arm64": "aarch64-apple-darwin",
+			"linux-x64": "dufs-v0.46.0-x86_64-unknown-linux-musl.tar.gz",
+			"linux-arm64": "dufs-v0.46.0-aarch64-unknown-linux-musl.tar.gz",
+			"darwin-x64": "dufs-v0.46.0-x86_64-apple-darwin.tar.gz",
+			"darwin-arm64": "dufs-v0.46.0-aarch64-apple-darwin.tar.gz",
+			"win32-x64": "dufs-v0.46.0-x86_64-pc-windows-msvc.zip",
 		};
 		if (!assetByTarget[t]) return; // an unusual host, not a broken table
 		const d = deps({ realPins: true, target: t, env: { PATH: join(work, "definitely-empty") } });
 		await expect(dufs(d)).rejects.toThrow(/answered HTTP 404/);
-		expect(hits[0]).toBe(`/v0.46.0/dufs-v0.46.0-${assetByTarget[t]}.tar.gz`);
+		expect(hits[0]).toBe(`/v0.46.0/${assetByTarget[t]}`);
 	});
 
 	test("a cloudflared download asks for its tag the way its releases are actually laid out", async () => {

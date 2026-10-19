@@ -35,12 +35,12 @@
  *
  * ## The three ways out of a missing binary
  *
- * `xfer.dufs: "/srv/bin/dufs"` is the escape hatch: a value that contains a `/` is
- * used verbatim and never downloaded from. A bare name is not that — a bare name
- * is the request to look, and to fetch if looking finds nothing. Nothing here
- * touches a file it did not install: an existing `~/.local/bin/dufs` that is not
- * the build this bridge wrote (per its own ledger) is reported with its hash and
- * left alone.
+ * `xfer.dufs: "/srv/bin/dufs"` is the escape hatch: a value containing a `/` or a
+ * `\` is used verbatim and never downloaded from. A bare name is not that — a bare
+ * name is the request to look, and to fetch if looking finds nothing. Nothing here
+ * touches a file it did not install: an existing `~/.local/bin/dufs` (on Windows,
+ * `%LOCALAPPDATA%\a2mcp\bin\dufs.exe`) that is not the build this bridge wrote (per
+ * its own ledger) is reported with its hash and left alone.
  */
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -59,6 +59,7 @@ import {
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { inflateRawSync } from "node:zlib";
 
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 
@@ -67,8 +68,17 @@ import { auditXfer } from "./audit.ts";
 /** The two programs `xfer` drives. Keys of `PINS`, and of `cfg.xfer`. */
 export type BinaryName = "dufs" | "cloudflared";
 
-/** `binary` is the raw executable, `tar.gz` an archive holding it at the top level. */
-export type Kind = "tar.gz" | "binary";
+/**
+ * `binary` is the raw executable, `tar.gz` an archive holding it at the top level,
+ * `zip` an archive holding it at the top level read without touching the disk.
+ *
+ * `zip` exists because that is how dufs publishes its Windows build, and it is read
+ * by this file rather than by a program: Windows ships `tar.exe` (bsdtar) and it
+ * does open a zip, but no check in this repository can run it, and GNU tar — the
+ * `tar` every other path here assumes — cannot. An unpack step nobody can execute
+ * is not a checked unpack step.
+ */
+export type Kind = "tar.gz" | "binary" | "zip";
 
 export interface Pin {
 	/** Release tag as it appears in the download URL, e.g. `v0.46.0`. */
@@ -93,17 +103,34 @@ export type Pins = Record<BinaryName, Record<string, Pin>>;
 /**
  * Keyed `${platform}-${arch}`, the same shape Node reports.
  *
- * Every hash here was read from the release asset's own `digest` field, never
- * computed from a checksum the download host offered. Four of the eight were then
- * downloaded and hashed by hand — cloudflared's four on 2026-10-17, dufs' linux-x64
- * on 2026-10-16 — and `bun run test:obtain` re-checks this machine's row against the
- * bytes GitHub actually serves, `HEAD`s all eight URLs so a mistyped tag on a target
- * nobody here can run still fails a check. Each dufs row is the musl build on Linux
- * because it is a fully static binary, which is the one thing that makes it safe to
- * run on a glibc host. Each cloudflared row is the ordinary build and not the
- * `-fips` one: a FIPS build is for a host that asked, and none has. Linux publishes
- * cloudflared as a bare executable, macOS as a tarball holding one file called
- * `cloudflared`, which is the difference `kind` records.
+ * A hash lives here as a literal, so bytes that come back different are a refusal
+ * rather than a swap. Where each literal came from differs by project, and the
+ * difference is worth recording: cloudflared publishes a sha256 per asset in its
+ * release notes, and its five rows are those digests. dufs publishes no checksums
+ * at all — eight assets, no digest in the release body — so its five rows are
+ * hashes this machine computed over the bytes it pulled from the release URL. Both
+ * Windows rows went in on 2026-10-19 after being downloaded and hashed here; the
+ * cloudflared one then equalled the published digest, and the dufs zip equalled the
+ * release API's `size` (2 323 817 B). The rows that went in before them were
+ * checked the same way — cloudflared's four on 2026-10-17, dufs' linux-x64 on
+ * 2026-10-16 — and `bun run test:obtain` re-checks this machine's own row against
+ * the bytes GitHub actually serves and `HEAD`s all ten URLs, so a mistyped tag on a
+ * target nobody here can run still fails a check.
+ *
+ * Each dufs row is the musl build on Linux because it is a fully static binary,
+ * which is the one thing that makes it safe to run on a glibc host. Each cloudflared
+ * row is the ordinary build and not the `-fips` one: a FIPS build is for a host that
+ * asked, and none has. Linux publishes cloudflared as a bare executable, macOS as a
+ * tarball holding one file called `cloudflared`, Windows as a bare `.exe` — which is
+ * the difference `kind` records, and why dufs needs both a packed (`tar.gz`) and an
+ * unpacked (`zip`) reading.
+ *
+ * `win32-arm64` is absent on purpose: dufs publishes an aarch64 Windows build and
+ * cloudflared does not — its release list has `windows-386.exe` and
+ * `windows-amd64.exe` and nothing for arm64 (read from the GitHub release API on
+ * 2026-10-19). One binary is not a working `xfer_share`, so the pair is not pinned
+ * and a Windows-on-ARM host gets the "no pinned build" answer instead of a partial
+ * table.
  */
 const PINS: Pins = {
 	dufs: {
@@ -135,6 +162,13 @@ const PINS: Pins = {
 			kind: "tar.gz",
 			sha256: "2c73fa330447c344111aea9159621af5e2d4460b9227562e09138e5c01d3becf",
 		},
+		"win32-x64": {
+			tag: "v0.46.0",
+			version: "0.46.0",
+			asset: "dufs-v0.46.0-x86_64-pc-windows-msvc.zip",
+			kind: "zip",
+			sha256: "21d829653ac1f178b124ed384e2a57df19b99ae404935cba9a1a5719c199b0bf",
+		},
 	},
 	cloudflared: {
 		"linux-x64": {
@@ -165,18 +199,27 @@ const PINS: Pins = {
 			kind: "tar.gz",
 			sha256: "647615df99d49cd179ea5e13ef760b9bbfb33630f6ae62f87e33dfadda60adcc",
 		},
+		"win32-x64": {
+			tag: "2026.10.1",
+			version: "2026.10.1",
+			asset: "cloudflared-windows-amd64.exe",
+			kind: "binary",
+			sha256: "4d2490e74082c5d48dbfedaf92576fa5bd1702379ab88eb7faa0cfbe8dc891b6",
+		},
 	},
 };
 
 /**
- * Bytes accepted for one download, and the wall clock allowed to fetch it.
+ * Bytes accepted for one download, and the wall clock allowed to fetch it. Why
+ * both exist is at `download()`.
  *
- * The cap clears the largest pinned asset (cloudflared's Linux binary, 40 MB) with
- * room for a version bump and still stops a stream that never ends; the deadline is
- * that asset's download at the slowest rate this host has measured off a working
- * connection, rounded up. `xfer_share` waits for both halves inline, so a fetch that
- * is merely slow is a tool call that is merely slow — one that stalls is the case
- * these two numbers exist for.
+ * The cap clears the largest pinned asset — cloudflared's Windows `.exe`, 52.7 MB
+ * as of 2026-10-19 — with room for a version bump, and still stops a stream that
+ * never ends. The deadline is not re-measured for that asset: 120 s is the wall
+ * clock this host rounded up from the Linux build it had fetched by hand, and 53 MB
+ * inside it asks for roughly 450 KB/s sustained. A Windows host on a slower
+ * connection gets a timeout in the audit log rather than a slow share, which is the
+ * honest shape of a limit nobody has run on the target platform.
  */
 const MAX_BYTES = 64 * 1024 * 1024;
 const TIMEOUT_MS = 120_000;
@@ -198,15 +241,24 @@ export interface Resolved {
 
 export interface ObtainDeps {
 	env?: NodeJS.ProcessEnv;
-	/** Where to install. Default `~/.local/bin`, the same place cloudflared lives. */
+	/** Where to install. Default `~/.local/bin` on unix, `%LOCALAPPDATA%\a2mcp\bin` on Windows. */
 	binDir?: string;
 	/** Ledger of what this bridge installed. Default `<agentDir>/a2mcp.installs.json`. */
 	ledger?: string;
 	/** Test seam: a local server standing in for the release host. */
 	fetchImpl?: typeof fetch;
 	base?: string;
-	/** Test seam: pretend to be another platform, to reach the unsupported branch. */
+	/** Test seam: pretend to be another `${platform}-${arch}`, to reach an unpinned target. */
 	target?: string;
+	/**
+	 * Test seam: pretend to be another platform, for the file-name shape only.
+	 *
+	 * Whether the installed file carries `.exe`, whether a PATH lookup tries
+	 * `PATHEXT`, whether a backslash means "this is a path" and where the default
+	 * install directory is — all four are Windows decisions, and the machine these
+	 * tests run on is not one. A branch nothing reaches is a branch nothing checks.
+	 */
+	platform?: string;
 	/**
 	 * Test seam: the pin table itself.
 	 *
@@ -260,17 +312,39 @@ async function isExec(p: string): Promise<boolean> {
 }
 
 /**
+ * The file name a program has on disk, on this platform.
+ *
+ * Windows will not `CreateProcess` a file called `dufs` when the bytes it installed
+ * are `dufs.exe`, and the release publishes them that way. On unix the name is the
+ * name, which is why only the Windows branch appends anything.
+ */
+function exeName(wanted: string, platform: string): string {
+	if (platform !== "win32") return wanted;
+	return wanted.toLowerCase().endsWith(".exe") ? wanted : `${wanted}.exe`;
+}
+
+/** The extensions Windows is willing to run out of a bare `dufs` request. */
+const WINDOWS_PATHEXT = ".EXE;.CMD;.BAT;.COM";
+
+/**
  * PATH, walked by hand.
  *
  * No shell and no `which`: the answer has to be the file this process will spawn,
  * and a lookup that spawns something else to ask about it inherits whatever that
  * program decides to say about an empty or relative PATH entry.
+ *
+ * Windows resolves a bare command through `PATHEXT`, so the plain name is tried
+ * first and each extension after it — the order `where.exe` uses, without spawning
+ * `where.exe`.
  */
-async function findOnPath(wanted: string, env: NodeJS.ProcessEnv): Promise<string | null> {
+async function findOnPath(wanted: string, env: NodeJS.ProcessEnv, platform: string): Promise<string | null> {
+	const suffixes = platform === "win32" ? ["", ...(env.PATHEXT ?? WINDOWS_PATHEXT).split(";").filter(Boolean)] : [""];
 	for (const dir of (env.PATH ?? "").split(delimiter)) {
 		if (!dir) continue;
-		const cand = isAbsolute(dir) ? join(dir, wanted) : resolve(dir, wanted);
-		if (await isExec(cand)) return cand;
+		for (const s of suffixes) {
+			const cand = isAbsolute(dir) ? join(dir, wanted + s) : resolve(dir, wanted + s);
+			if (await isExec(cand)) return cand;
+		}
 	}
 	return null;
 }
@@ -298,6 +372,110 @@ function ledgerPath(deps: ObtainDeps, env: NodeJS.ProcessEnv): string {
  */
 export function obtainLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
 	return env.A2MCP_INSTALLS ?? join(getAgentDir(), "a2mcp.installs.json");
+}
+
+/**
+ * Where the bridge installs, on this platform, when nobody said otherwise.
+ *
+ * Exported for the unit tests: the Windows shape is asserted here rather than by
+ * letting an install write into `%LOCALAPPDATA%` on somebody's machine.
+ */
+export function defaultBinDir(env: NodeJS.ProcessEnv, platform: string): string {
+	// Unix: `~/.local/bin`, the path the README names and the one cloudflared's own
+	// installer would have used. Windows: under `%LOCALAPPDATA%`, the same root the
+	// host's installer writes to, because `%USERPROFILE%\.local\bin` is a unix
+	// directory shape dropped onto a Windows box. Nothing here needs to be on PATH
+	// for a share to work — `xfer` spawns the absolute path this result was written
+	// to — so the choice is about where an operator looks, not about resolution.
+	if (platform === "win32") return join(env.LOCALAPPDATA || homedir(), "a2mcp", "bin");
+	return join(env.HOME || homedir(), ".local", "bin");
+}
+
+/**
+ * The one entry a `zip` holds, read out of the bytes with nothing written to disk.
+ *
+ * `tar` cannot be the answer here. Windows does ship `tar.exe` (bsdtar) and it opens
+ * a zip, and GNU tar — the `tar` every other path in this file assumes — does not;
+ * an unpack step no check in this repository can execute is not a checked unpack
+ * step. So the archive is parsed directly, and one consequence is that the
+ * tarball's safety dance disappears instead of being reimplemented: no entry name is
+ * ever joined onto a path, because the only thing an entry name is used for here is
+ * comparison.
+ *
+ * The entry's CRC is not re-checked: the whole archive has just been compared
+ * against a hash in the pin table, and a second checksum over a slice of bytes
+ * already proven identical adds a way to be wrong, not a way to be right.
+ *
+ * What it refuses, each with the reason in the message: no end-of-central-directory
+ * record, a zip64 structure (the extra field carrying the real offsets is not parsed,
+ * and no pinned asset needs one), an encrypted entry, a compression method other than
+ * stored or deflate, an entry declaring more than the download cap, a central
+ * directory or data start pointing outside the archive, and output whose length is not
+ * the declared one.
+ */
+export function readZipEntry(bytes: Buffer, wanted: string, limit: number): Buffer {
+	const eocd = findEndOfCentralDirectory(bytes);
+	const count = bytes.readUInt16LE(eocd + 10);
+	const cdSize = bytes.readUInt32LE(eocd + 12);
+	const cdOffset = bytes.readUInt32LE(eocd + 16);
+	if (count === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
+		throw new Error("this zip is zip64, which is not read: the extra field holding the real offsets is not parsed");
+	}
+	if (cdOffset + cdSize > bytes.length) {
+		throw new Error("the central directory of this zip points outside the archive");
+	}
+	for (let p = cdOffset, i = 0; i < count; i++) {
+		if (p + 46 > bytes.length || bytes.readUInt32LE(p) !== 0x02014b50) {
+			throw new Error(`zip central-directory record ${i} is not where the archive said it would be`);
+		}
+		const flags = bytes.readUInt16LE(p + 8);
+		const method = bytes.readUInt16LE(p + 10);
+		const csize = bytes.readUInt32LE(p + 20);
+		const usize = bytes.readUInt32LE(p + 24);
+		const nameLen = bytes.readUInt16LE(p + 28);
+		const extraLen = bytes.readUInt16LE(p + 30);
+		const commentLen = bytes.readUInt16LE(p + 32);
+		const localOff = bytes.readUInt32LE(p + 42);
+		const name = bytes.toString("utf8", p + 46, p + 46 + nameLen).replace(/^\.\//, "");
+		p += 46 + nameLen + extraLen + commentLen;
+		if (name !== wanted) continue;
+		if (flags & 0x1) throw new Error(`zip entry '${wanted}' is encrypted, and no password is in the pin table`);
+		if (method !== 0 && method !== 8) {
+			throw new Error(
+				`zip entry '${wanted}' uses compression method ${method}; only stored (0) and deflate (8) are read`,
+			);
+		}
+		if (csize === 0xffffffff || usize === 0xffffffff) {
+			throw new Error(`zip entry '${wanted}' is zip64, which is not read`);
+		}
+		if (usize > limit) {
+			throw new Error(`zip entry '${wanted}' declares ${usize} bytes, over the ${limit} byte cap for one install`);
+		}
+		if (localOff + 30 > bytes.length || bytes.readUInt32LE(localOff) !== 0x04034b50) {
+			throw new Error(`zip entry '${wanted}' has no local header where its central directory says one would be`);
+		}
+		const dataAt = localOff + 30 + bytes.readUInt16LE(localOff + 26) + bytes.readUInt16LE(localOff + 28);
+		if (dataAt + csize > bytes.length) {
+			throw new Error(`zip entry '${wanted}' runs past the end of the archive`);
+		}
+		const raw = bytes.subarray(dataAt, dataAt + csize);
+		const out = method === 0 ? Buffer.from(raw) : inflateRawSync(raw, { maxOutputLength: limit });
+		if (out.length !== usize) {
+			throw new Error(`zip entry '${wanted}' came out as ${out.length} bytes, not the ${usize} it declared`);
+		}
+		return out;
+	}
+	throw new Error(`no '${wanted}' entry in the archive`);
+}
+
+function findEndOfCentralDirectory(bytes: Buffer): number {
+	// The record is 22 bytes plus a comment of at most 65 535, and the signature is
+	// four little-endian bytes: the only honest way to find it is to look back.
+	const floor = Math.max(0, bytes.length - 22 - 0xffff);
+	for (let p = bytes.length - 22; p >= floor; p--) {
+		if (bytes.readUInt32LE(p) === 0x06054b50) return p;
+	}
+	throw new Error("not a zip archive: no end-of-central-directory record in the last 64 KB");
 }
 
 async function readLedger(file: string): Promise<Ledger> {
@@ -342,17 +520,21 @@ function runTar(args: string[]): Promise<string> {
 }
 
 /**
- * Pull the executable out of a `tar.gz`, or hand back the bytes.
+ * Hand back the bytes, or the one program inside the archive.
  *
- * The archive is listed before anything is written, because the entry names are
- * the only part of an untrusted file this code has to reason about: one top-level
- * entry called `wanted`, no absolute paths, no `..`. Extraction then goes into a
- * fresh temp directory whose `realpath` the result has to still be inside — GNU
- * and BSD tar both strip a leading `../` on their own, and this check is the
- * reason we do not have to trust them doing it.
+ * A `tar.gz` is listed before anything is written, because the entry names are the
+ * only part of an untrusted file this code has to reason about: one top-level entry
+ * called `wanted`, no absolute paths, no `..`. Extraction then goes into a fresh
+ * temp directory whose `realpath` the result has to still be inside — GNU and BSD
+ * tar both strip a leading `../` on their own, and this check is the reason we do
+ * not have to trust them doing it.
+ *
+ * A `zip` never reaches any of that. It is read by `readZipEntry`, whose entry name
+ * is only compared and never used as a path, so there is nothing to escape from.
  */
-async function extract(bytes: Buffer, wanted: string, kind: Kind): Promise<Buffer> {
+async function extract(bytes: Buffer, wanted: string, kind: Kind, limit: number): Promise<Buffer> {
 	if (kind === "binary") return bytes;
+	if (kind === "zip") return readZipEntry(bytes, wanted, limit);
 	const stage = await mkdtemp(join(tmpdir(), "a2mcp-obtain-"));
 	try {
 		const file = join(stage, "archive.tar.gz");
@@ -434,11 +616,14 @@ export async function resolveBinary(
 ): Promise<Resolved> {
 	const env = deps.env ?? process.env;
 	const target = deps.target ?? targetKey();
-	const binDir = deps.binDir ?? join(env.HOME || homedir(), ".local", "bin");
+	const platform = deps.platform ?? process.platform;
+	const binDir = deps.binDir ?? defaultBinDir(env, platform);
 	const key = `${name}|${configured}|${target}|${binDir}`;
 	const running = inflight.get(key);
 	if (running) return running;
-	const job = resolveOnce(name, configured, sid, env, target, binDir, deps).finally(() => inflight.delete(key));
+	const job = resolveOnce(name, configured, sid, env, target, binDir, platform, deps).finally(() =>
+		inflight.delete(key),
+	);
 	inflight.set(key, job);
 	return job;
 }
@@ -450,11 +635,15 @@ async function resolveOnce(
 	env: NodeJS.ProcessEnv,
 	target: string,
 	binDir: string,
+	platform: string,
 	deps: ObtainDeps,
 ): Promise<Resolved> {
 	// An explicit path is the operator's answer to "where is it", so it is used as
-	// given and a missing one is an error rather than a cue to download.
-	if (configured.includes("/")) {
+	// given and a missing one is an error rather than a cue to download. Both
+	// separators count: `C:\tools\dufs.exe` is a path on the one platform where a
+	// backslash means that, and reading it as a bare name would send a machine that
+	// said "never download" out to fetch bytes.
+	if (configured.includes("/") || configured.includes("\\")) {
 		if (!(await isExec(configured))) {
 			throw new Error(
 				`'${configured}' is not an executable file — a path in xfer.${name} is used as given, the bridge downloads nothing for one`,
@@ -463,7 +652,7 @@ async function resolveOnce(
 		return { path: configured, installed: null };
 	}
 
-	const hit = await findOnPath(configured, env);
+	const hit = await findOnPath(configured, env, platform);
 	if (hit) return { path: hit, installed: null };
 
 	const pin = (deps.pins ?? PINS)[name][target];
@@ -473,7 +662,11 @@ async function resolveOnce(
 		);
 	}
 
-	const dest = join(binDir, configured);
+	// What the program is called on this platform's disk, and what the archive calls
+	// its only entry — the same name, because the release publishes the entry under
+	// the name the OS runs.
+	const entry = exeName(configured, platform);
+	const dest = join(binDir, entry);
 	const there = await readFile(dest).catch(() => null);
 	if (there) {
 		const got = sha256(there);
@@ -498,7 +691,7 @@ async function resolveOnce(
 		if (got !== pin.sha256) {
 			throw new Error(`${pin.asset} has sha256 ${got}, not the pinned ${pin.sha256} — refusing to install it`);
 		}
-		bin = await extract(bytes, configured, pin.kind);
+		bin = await extract(bytes, entry, pin.kind, deps.maxBytes ?? MAX_BYTES);
 		install = { name, version: pin.version, target, sha256: pin.sha256, dest };
 	} catch (e) {
 		const why = (e as Error).message;
@@ -511,6 +704,8 @@ async function resolveOnce(
 		// Same directory as the target, so the rename is same-filesystem and the
 		// binary either exists complete or does not exist at all.
 		const part = join(binDir, `.${configured}.${randomBytes(6).toString("hex")}.part`);
+		// The mode is a POSIX bit; on Windows both calls are accepted and ignored, and
+		// what protects the file there is the directory's own ACL.
 		await writeFile(part, bin, { mode: 0o755 });
 		await chmod(part, 0o755);
 		await rename(part, dest);
