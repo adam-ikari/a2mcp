@@ -62,6 +62,13 @@ graph TB
 
 ## Install
 
+Two paths, and what separates them is whether the machine has `omp` yet: **with a
+host already installed**, the single `omp install` command below is the whole thing;
+**on a fresh machine**, the one-shot script adds one layer — the host — and its
+extension half runs that same command.
+
+### Install with omp (the machine already has omp)
+
 On any machine, from the git URL:
 
 ```sh
@@ -101,30 +108,10 @@ The URL has to be the full `https://….git` — a GitHub `owner/repo` shorthand
 rejected as an invalid package name, and pointing it at a `.tgz` fails with
 `ENOTDIR`.
 
-**No omp on the machine yet?** The repo ships a bootstrap script, and the host
-layer is all it manages:
-
-```sh
-sh scripts/bootstrap.sh --dry-run   # print the plan, write nothing
-sh scripts/bootstrap.sh
-```
-
-It does three things: with no `omp` on PATH it runs the official installer
-(`curl -fsSL https://omp.sh/install | sh`, or `--binary --ref v<version>` when it can
-read a pin from the `package.json` next to it); then it runs the one `omp install
-<git-url>` above; then it checks itself with the host's own `omp plugin doctor` and
-compares the version the host reports against that pin. A host already on PATH is
-left alone (`--upgrade` to re-run the installer), an existing registration is skipped
-(`--reinstall` to force it), and `--uninstall` removes only the registration, leaving
-the token and the audit log.
-
-**Installing the extension still has one path**, and the last thing the script does is
-run it. It symlinks nothing, offers no local install, validates no module graph and
-generates no token. The host checks for its own updates at startup by default, so
-"installed at the pinned version" is not "stays at the pinned version". The coverage is
-the `test:bootstrap` section of [docs/testing.md](docs/testing.md) (28 checks); the
-host-install half is never executed on a development machine, which is why what that
-probe tests is the script's decisions.
+Do not hand-symlink into `~/.omp/agent/extensions/` either:
+`ln -s "$PWD/extensions/a2mcp.ts" ...` only works when `$PWD` happens to be
+the repo root. Run it from anywhere else and it links a path that does not exist,
+the bridge never comes up, and the host says nothing about it.
 
 All of the above was measured, and `bun run test:install` checks the package,
 installs it into a temporary `HOME`, starts a host there, and drives the bridge
@@ -134,13 +121,100 @@ over MCP as a remote client. Since host 18.11.0 — re-checked on 18.12.1 —
 self-contained, and it leaves no registration on your real machine. See
 [docs/testing.md](docs/testing.md).
 
-Nor hand-symlink into `~/.omp/agent/extensions/`:
-`ln -s "$PWD/extensions/a2mcp.ts" ...` only works when `$PWD` happens to be
-the repo root. Run it from anywhere else and it links a path that does not exist,
-the bridge never comes up, and the host says nothing about it.
+### One-shot install (no omp on the machine yet)
 
-On first start the bridge generates its own config and token under
-`~/.omp/agent/`, so there is nothing else to set up per machine.
+The repo ships a bootstrap script, and the host layer is all it manages:
+
+```sh
+sh scripts/bootstrap.sh --dry-run   # print the plan, write nothing
+sh scripts/bootstrap.sh
+```
+
+Nothing has to be cloned to run it — the same script through a pipe:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.sh | sh
+# the plan only: … | sh -s -- --dry-run
+```
+
+It does three things: with no `omp` on PATH it runs the official installer
+(`curl -fsSL https://omp.sh/install | sh`, or `--binary --ref v<version>` when it can
+read a pin); then it runs the one `omp install <git-url>` above; then it checks itself
+with the host's own `omp plugin doctor` and compares the version the host reports
+against that pin. The pin is the host version every probe in this repo was last run
+green against. Next to a checkout it comes from `package.json`; run through a pipe
+there is no such file, so the script reads it from the `package.json` of the same
+repository it is about to clone (`https://raw.githubusercontent.com/<owner>/<repo>/HEAD/package.json`).
+No curl for the fetch, a body with no pin in it, a `--spec` that is not a `github.com`
+URL: the script says which of those happened on stderr and installs the latest host.
+`--host-version <version>` picks the version yourself and sends no request at all, and
+`--host-version latest` says so on purpose. A host already on PATH is
+left alone (`--upgrade` to re-run the installer) and asks for no pin either — nothing is
+going to be installed, so there is nothing to pin; an existing registration is skipped
+(`--reinstall` to force it), and `--uninstall` removes only the registration, leaving
+the token and the audit log.
+
+Outside the installer it writes one file, under a deliberately narrow condition: when
+the script installed the host itself and `~/.omp/agent/models.yml` does not exist, it
+seeds that file with one unreachable placeholder provider. Headless starts
+(`omp --mode rpc`) die in code that runs before any extension, so this file is the only
+thing that can save them; it is create-only — an existing file is not touched, and a
+machine with `omp` already on PATH gets nothing. The details are in Troubleshooting.
+
+**Installing the extension still has one path**, and the last thing the script does is
+run it. It symlinks nothing, offers no local install, validates no module graph and
+generates no token. The host checks for its own updates at startup by default, so
+"installed at the pinned version" is not "stays at the pinned version". The coverage is
+the `test:bootstrap` section of [docs/testing.md](docs/testing.md) (46 checks, one of
+which asks GitHub itself whether the derived URL serves this repo's pin); the official
+installer itself is never executed by a probe — one group replaces the download with a
+fake curl to drive the fresh-host branch — which is why what that probe tests is the
+script's decisions. The piped form was run once for real, into a throwaway `HOME`
+with `PI_INSTALL_DIR` pointing inside it: host 18.12.1 by `--ref`, `a2mcp@0.4.0`
+registered, `plugin doctor` clean, `--uninstall` taking the registration back out.
+
+**Windows?** The same script exists as `scripts/bootstrap.ps1`. It adds one thing the
+shell twin does not need: the official `https://omp.sh/install.ps1` prefers a bun source
+build whenever bun is installed, and `-Ref` without a mode switch flips it into that
+build as well, so every call this script makes passes `-Binary` (read from the
+installer's own main block, 2026-10-19).
+
+```powershell
+iwr https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.ps1 -OutFile bootstrap.ps1
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 -DryRun
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1
+```
+
+The `-OutFile` step is not ceremony: piped into `iex` the script has no
+`$PSCommandPath`, so it loses the `package.json` beside it and falls back to the
+repository's. The pin otherwise works the same way — `-HostVersion <version>` picks it
+and sends no request, a value that is not an exact version is refused as a pin, and with
+nothing readable the latest host is installed with a warning saying so. `-Uninstall`,
+`-Reinstall` and `-Upgrade` do what the shell flags do. Two places differ. The host
+directory is whatever each machine's own official installer defaults to — `~/.local/bin`
+for the shell one, `%LOCALAPPDATA%\omp` for this one — and the binaries `xfer` fetches
+land in `%LOCALAPPDATA%\a2mcp\bin`. And there is no `tar` check: `bootstrap.sh` warns
+that the bridge unpacks release assets with `tar`, while on Windows the bridge's own zip
+reader does the unpacking and nothing on PATH is needed.
+
+**That script has never been executed.** The machine that wrote it has no PowerShell at
+all, so not one line of it — the installer call, the plugin gate, the argument
+definitions — has run anywhere. Thirteen items in `bun test` read it as text and compare it
+against `bootstrap.sh` (`test/bootstrap-ps1.test.ts`): same plugin name, same repository
+URL, same installer, same exact-version gate, `-Binary` on every installer call, ASCII
+throughout, `Run` planning before executing, and the placeholder `models.yml` seeding
+agreeing line for line (same file body, same fresh-host-only branch, create-only, dry-run
+plans it). Those items say the two files agree. They
+do not say the script works, and a syntax error in it would pass every one.
+
+Either path ends the same way, and a machine with no model configured is no longer a
+stopper: the host opens a session anyway, the bridge fills the empty model slot with
+the unreachable placeholder `a2mcp/offline` (Troubleshooting has the shape), and the
+bridge generates its own config and token under `~/.omp/agent/` on first start, so
+there is nothing to set up per machine. The exception is the headless start
+(`omp --mode rpc`), which dies before any extension code runs; the one-shot script
+covers it by seeding `~/.omp/agent/models.yml` on exactly the branch where it installed
+the host.
 
 After starting the host omp, the notification bar shows:
 
@@ -164,7 +238,7 @@ The config file is `~/.omp/agent/a2mcp.json`, generated on first start with mode
 | `token` | Bearer token, generated on first start (43 characters); a hand-written one under 32 characters is refused |
 | `host` | Listen address, default `127.0.0.1` (a warning is added if you change it to `0.0.0.0`) |
 | `host_llm` | `"deny"` \| `"allow"` (default): whether the host's own session may make model requests when it boots — see [Host inference takeover](#host-inference-takeover). It decides the **startup state only**; a running bridge can be toggled over HTTP regardless of what is written here |
-| `xfer.dufs` | the HTTP file server that serves the shared path, default `dufs`: `PATH` first, else a pinned build fetched into `~/.local/bin`. A value containing `/` is used as given and never downloaded — see [Moving files](#moving-files) |
+| `xfer.dufs` | the HTTP file server that serves the shared path, default `dufs`: `PATH` first, else a pinned build fetched into `~/.local/bin`. A value containing `/` or `\` is used as given and never downloaded — see [Moving files](#moving-files) |
 | `xfer.cloudflared` | the tunnel binary that publishes the share, default `cloudflared`: the same search, the same kind of pin (`2026.10.1` as of this writing) |
 
 Only those fields: the four top-level ones above, plus an optional `xfer` block. **There is no tool allow/deny list and no file sandbox** — the bridge makes no permission decision of its own, so adding such fields to the config has no effect (unknown fields are ignored). `host_llm` is not a tool permission either: it gates the host's *own inference*, not what the caller may execute — the caller holds the token and runs whatever the host exposes.
@@ -272,7 +346,11 @@ Files move over plain HTTP: `xfer_share` hands a host path to `dufs` ([sigoden/d
 
 **The URL is a capability**: whoever holds it can read and write that path until the share closes.
 
-Prerequisites: `dufs` and `cloudflared`. The bridge finds both itself — `PATH` first, and when nothing answers there it fetches a pinned build into `~/.local/bin` and uses that. Both are pinned by version and sha256 in `src/obtain.ts`: `dufs` 0.46.0 and `cloudflared` 2026.10.1, four platform rows each, every hash re-checked against the bytes GitHub actually serves by `bun run test:obtain`. It never asks for `latest`, and it never takes a checksum from the same server that gave it the bytes.
+Prerequisites: `dufs` and `cloudflared`. The bridge finds both itself — `PATH` first, and when nothing answers there it fetches a pinned build into `~/.local/bin` (`%LOCALAPPDATA%\a2mcp\bin` on Windows) and uses that. Both are pinned by version and sha256 in `src/obtain.ts`: `dufs` 0.46.0 and `cloudflared` 2026.10.1, five platform rows each — `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, `win32-x64` — every hash re-checked against the bytes GitHub actually serves by `bun run test:obtain`. It never asks for `latest`, and it never takes a checksum from the same server that gave it the bytes.
+
+`win32-arm64` has no row, and the reason is upstream's: dufs publishes an aarch64 Windows build and cloudflared does not, so a Windows-on-ARM host would fetch one half and fail at the other. The answer it gets names the missing pair instead of half-installing.
+
+The Windows rows are the newest thing here and the least measured. What is checked: the asset URLs answer, the zip hashes on this machine to what the table says, the zip's one entry opens with the reader a Windows host will call, the `.exe` is a PE and fits the download cap — all of it inside `bun run test:obtain`. What is not checked: any of it running. No Windows machine was involved in writing this, so the first `xfer_share` on Windows is also the first time those bytes execute.
 
 The fetch is one more opinion from a bridge that otherwise forwards: it had already picked `dufs` as the file server, so what it decides here is only where the bytes come from. A path is the exit — write `xfer.dufs` as `"/srv/bin/dufs"` and the bridge uses that file as given and downloads nothing. A bare name is the request to look, and to fetch if looking finds nothing. It will not overwrite a binary it did not install: an existing `~/.local/bin/dufs` that is not the build this bridge wrote is refused, with its own sha256 printed, and the account of what was installed sits in `<agentDir>/a2mcp.installs.json`.
 
@@ -339,6 +417,7 @@ Design trade-off (read this before adding a feature):
 
 ## Troubleshooting
 
+- **First start on a machine with no model configuration**: the host still opens a session, and the bridge registers a placeholder provider `a2mcp/offline` at `session_start` and selects it. Its baseUrl points at `a2mcp.invalid`, an RFC 6761 reserved domain that can never resolve; the whole thing is runtime state — no file is written, and an operator's already-selected model is never overwritten, because the bridge only fills an empty slot. The MCP surface is therefore ready out of the box: the notification bar broadcasts and remote `initialize`/`tools/list` answer 200. The placeholder does not infer. A prompt on the host comes back as a connection-refused soft failure — measured on 18.12.1: `Couldn't connect to a2mcp.invalid (connection refused)` — and real inference always means `/login` and `/model`. Older hosts stop at `No model selected` (older still: `No models available`) on such a machine; that is the prompt-time gate, and upgrading the host is the fix. What the placeholder cannot reach is the headless start (`omp --mode rpc`): it dies inside `createAgentSession`, before any extension code runs, so only a `~/.omp/agent/models.yml` that exists before boot saves it. The one-shot scripts write exactly that file on exactly one branch: the script installed the host itself and the file was absent (create-only — an existing file is not read or touched, and a machine that already had `omp` on PATH gets nothing). A manually installed host that wants headless can write the same shape, documented under 占位模型 in `docs/protocol.md`. Probes run this unreachable shape daily on Linux and macOS; the Windows path (`C:\Users\<user>\.omp\agent\models.yml`) and the PowerShell twin have never been executed here.
 - **401 `unauthorized`**: the token does not match. The remote `mcp.json`'s `Authorization` header must equal the config's `token`; update the remote side after `/a2mcp rotate`. The host's stderr says `[a2mcp] N unauthorized attempt(s)` for the first failure and every 50th after it; those attempts stay out of the audit log on purpose (see the audit bullet under [Security and boundaries](#security-and-boundaries)).
 - **The bridge refuses to start with `field 'token' must be at least 32 characters`**: somebody wrote a short token into `a2mcp.json`. Put a real secret there (or delete the field and let the bridge generate and persist one); the bridge will not swap out a token it was handed.
 - **The bridge refuses to start with `field 'host_llm' must be 'deny' or 'allow'`**: the field was written with anything else (`"false"`, `"ALLOW"`, a boolean). The value decides the takeover's startup state; a fuzzy one is refused, not guessed (see [Host inference takeover](#host-inference-takeover)).
@@ -360,7 +439,8 @@ bun install
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
 bun run test:tree     # repo shape: no symlink points off this machine, 3 checks, no deps, no local omp (runs before bun test on purpose)
-bun test              # unit tests: test/*.test.ts (186: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer)
+bun test              # unit tests: test/*.test.ts (226: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
+bun run test:obtain   # the pinned binaries: fetches both for this platform, HEADs all ten asset URLs, reads the two Windows rows as bytes, 37 checks (needs no local omp; writes only inside its own /tmp directory)
 bun run test:registry # drive the takeover against the host's real model registry, 28 checks, seconds (needs no local omp, no credentials)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 34 items (needs a local omp)
@@ -368,7 +448,7 @@ bun run test:approval  # approval-boundary discriminating check, ~95s (needs a l
 bun run test:takeover  # host inference deny/restore against a counting sink, ~60s (needs a local omp)
 bun run test:scenario  # end-to-end scenarios, 8 narratives / 41 steps, ~45s (needs a local omp)
 bun run test:install   # published-package self-containment + a real host over MCP, 48 items (needs a local omp; fetches ~46 MB from GitHub)
-bun run test:bootstrap # the one-shot installer's decisions, 28 items, ~9s (groups 1-4 run against a recording stub omp; the last group needs a local omp)
+bun run test:bootstrap # the one-shot installer's decisions, 46 items, ~9s (everything but the last group runs against a recording stub omp and a fake curl; the last group needs a local omp)
 bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`
 ```
 

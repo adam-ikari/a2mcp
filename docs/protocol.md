@@ -84,6 +84,28 @@ deny 是三层的并集，分工按「每条推理请求最后从哪个口出去
 - **`title.generator` 没有关这个值**（枚举只有 `fork | tiny`），宿主仍会尝试生成会话标题；尝试在 deny 层失败关闭，错误通知可能出现在会话里。
 - **被拒的轮次仍是轮次。** 宿主会话历史里留下一条错误消息。takeover 限制的是宿主能做什么，不是它记得什么。
 
+### 占位模型
+
+机器上没有模型配置时，交互式宿主的 `Main` 会话带着一个空的模型槽起来，操作者的 prompt 会撞在宿主的提示闸门上（`No model selected`）。桥在每次 `session_start` 补这个空位：向宿主注册 provider `a2mcp` 的一行模型 `offline` 并用 `setModel` 选中它，通知栏说明发生了什么。这一行的 baseUrl 是 `http://a2mcp.invalid/v1`——RFC 6761 的保留域，DNS 永远解析不到；18.12.1 实测，在这样的宿主上发 prompt 报的是 `Couldn't connect to a2mcp.invalid (connection refused)`。选保留域而不是回环地址，为的是 deny 的绊线：绊线按注册表行的主机收键，占位行不该把 `127.0.0.1` 收进键集，而桥自己就监听在那个地址上。
+
+它守三条线。**只填空槽**：`session.model` 有值就一步都不做，操作员选过的模型永远压过桥的占位。**纯运行态**：不写 `agent.db`，不写 `models.yml`，不下 settings override——与接管同一性质，宿主重启后磁盘上没有桥留下的任何模型。**sourceId 是 `a2mcp-auto-model`，不是接管的 `a2mcp`**：restore 走 `clearSourceRegistrations` 按 source 拔注册，同名会连这张占位行一起拔走，两个功能的账不能记在同一个名字下。宿主每次新建会话都会做扩展来源对账（`syncExtensionSources`），剪掉扩展名下的注册，所以这张行在每个 `session_start` 重放一次：行在就不重注册、只补选中，行被剪了就重新注册。占位行没有 `transport`，走的是 fetch 道，因此 deny 在位时它照常进绊线键集——`host_llm: "deny"` 与占位模型同场是实测过的（`bun run test:takeover` 全绿的那一遍就带着这段接线）。
+
+占位模型不产生推理，也不该被当成能用的模型：它把「这台机器没配模型」从一个启动期的硬报错变成一个运行期的连接失败，为的是桥的 MCP 面在这种机器上照样起得来。它救不了无头启动：`omp --mode rpc` 在 `createAgentSession` 里就死，那时桥的代码还没跑过，唯一来得及在场的是磁盘上的 `~/.omp/agent/models.yml`。两份引导脚本都写这个文件，条件一样窄：脚本自己装了宿主，且该文件不存在（create-only；已有文件一个字不碰，PATH 上本来有宿主的机器什么都不写）。文件形状与运行态那张行同名同值：
+
+```yaml
+providers:
+  a2mcp:
+    baseUrl: http://a2mcp.invalid/v1
+    api: anthropic-messages
+    apiKey: not-a-real-key
+    models:
+      - id: offline
+        name: a2mcp placeholder (unreachable)
+        contextWindow: 100000
+```
+
+`apiKey` 是内联的假值：宿主的默认可用模型选择按「有没有具体凭据」过滤，占位行要能被选中就得带它；这个 key 发不出去，因为域名根本不存在。真配模型的机器不需要这份文件，`/login` 之后 `/model` 选一个就是正常宿主。
+
 ## 鉴权
 
 每个请求（含 `initialize` 与 `DELETE`）在任何状态变更之前校验：
@@ -157,7 +179,7 @@ deny 是三层的并集，分工按「每条推理请求最后从哪个口出去
 
 - `url` 带凭据，`host` 不带；`port` 是本地端口，`dufs` 只绑 `127.0.0.1`，公网那一侧由 quick tunnel 转发。字节不经 MCP 通道：`tools/call` 只送一条指令，下行 `curl -u omp:<secret> -O <host>/<name>`、上行 `curl -u omp:<secret> -T <local> <host>/<name>`，Range 续传、目录列表与 WebDAV 客户端都是 `dufs` 的能力。
 - 同一时刻只有一个共享：第二次 `xfer_share` 先关掉前一个，回包 `replaced: true`。
-- 两个二进制由桥自己找齐（`src/obtain.ts`）。配置里的值带 `/` 就按那条路径用，缺了也不下载，这是「这台机器不许下载」的写法；不带 `/` 就扫本机 `PATH`，其次复用桥自己装过的那一份（登记在 `<agentDir>/a2mcp.installs.json`），都没有才去下载：版本与 asset 名是代码里的字面量，字节回来先比对同一处钉住的 sha256，再用 `tar` 解到临时目录、检查条目没跑出目录之外，最后以 `0755` 原子写入 `~/.local/bin`。不请求 `latest`，也不向给字节的那台服务器要校验和；升级是改这个仓库的一次提交。桥不会覆盖一个不是自己装的文件，报它的哈希了事。两条都钉死了：`dufs` 0.46.0（Linux 取 musl 静态构建），`cloudflared` 2026.10.1（Linux 是裸 ELF，macOS 是 `.tgz` 里一个 `cloudflared`）。下载有上限，64 MB 与 120 秒墙上时钟，超出即是失败原文；哈希与钉值不符则拒绝安装。`bun run test:obtain` 每轮把钉表里八个 asset 的 URL 全部 `HEAD` 一遍，并把本机这一行真下、真跑。
+- 两个二进制由桥自己找齐（`src/obtain.ts`）。配置里的值带 `/` 或 `\` 就按那条路径用，缺了也不下载，这是「这台机器不许下载」的写法；不带分隔符就扫本机 `PATH`（Windows 中按 `PATHEXT` 的后缀逐个试），其次复用桥自己装过的那一份（登记在 `<agentDir>/a2mcp.installs.json`），都没有才去下载：版本与 asset 名是代码里的字面量，字节回来先比对同一处钉住的 sha256，再取出要的那一个文件——`.tar.gz` 交给 `tar` 解到临时目录并检查条目没跑出目录之外，`.zip` 在本仓库自己的读取器里展开那一个条目、一个字节都不落盘，裸 `.exe` 直接就是它——最后以 `0755` 原子写入安装目录（Windows 上文件名带 `.exe`，目录是 `%LOCALAPPDATA%\a2mcp\bin`；`0755` 是 POSIX 的位，在那边没有意义）。不请求 `latest`，也不向给字节的那台服务器要校验和；升级是改这个仓库的一次提交。桥不会覆盖一个不是自己装的文件，报它的哈希了事。两条都钉死了 Linux x64/arm64、macOS x64/arm64、Windows x64 五项：`dufs` 0.46.0（Linux 取 musl 静态构建，Windows 是 zip 里的 `dufs.exe`），`cloudflared` 2026.10.1（Linux 是裸 ELF，macOS 是 `.tgz` 里一个 `cloudflared`，Windows 是 `.exe`）。`win32-arm64` 这一行是空的，因为上游不发那个构建，桥在那里直接拒绝下载并说出缺什么。下载有上限，64 MB 与 120 秒墙上时钟，超出即是失败原文；哈希与钉值不符则拒绝安装。`bun run test:obtain` 每轮把钉表里十个 asset 的 URL 全部 `HEAD` 一遍，本机这一行真下、真跑，Windows 那两行真下、只到字节为止（zip 解出 `dufs.exe`、`.exe` 认出 PE 头），跑不了。
 - 失败一律 `200` + `isError: true`，text 就是原因：缺 `path` 为 `xfer_share needs a 'path' — the file or directory to serve`；路径 `stat` 失败为 `cannot serve <path>: <原因>`；`dufs` 或 `cloudflared` 起不来为子进程/隧道的错误原文。获取二进制失败的另外写一条 `install` 审计，带上是哪个 asset、钉的是哪个哈希；成功的那条同样在 `spawn` 之前落盘。
 
 **`xfer_status`** — 无参数。有共享：`{"serving": true, "path", "port", "url", "host", "startedAt", "expiresAt"}`；没有：`{"serving": false}`。

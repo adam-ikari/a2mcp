@@ -54,10 +54,14 @@ graph TB
 - 扩展在 `session_start` 时启动 `Bun.serve`，实现 MCP `2025-11-25` 的 `initialize` / `tools/list` / `tools/call`，响应为纯 JSON（无 SSE）。
 - 端点是**每进程**一个，而宿主的 `session_start` / `session_shutdown` 是**每会话**一个（task 子代理、ACP 会话、持久化 revive 各有自己一套 handler）。后来的 `session_start` 复用已起的服务器（同时在途的两个只绑一个端点）；`session_shutdown` 只在宿主注册表里没有活的 `Main` 会话时才释放端口（宿主把 `AgentRef.session` 注释成「parked/aborted 时恰为 null」，而 `tools/call` 本来就拒绝那个状态），否则任何一次子代理结束都会把还在服务的端口拆掉。若那个事件落在绑定完成之前，它手里还没有端口可停，于是绑定的那一方完成后回头看一眼注册表：`Main` 没了就把刚绑上的端口收掉。释放用的是非强制的 `stop()`：监听立刻关、新建连接一律被拒，而已经在处理的那一次照常跑完并落审计——强制切断会让 `tools/call` 少一行 `done`。
 - 目录、暴露门与执行读同一份注册表：宿主的 `Main` 会话（`getAllToolInfos()`，宿主也正是用它接出 `pi.getAllTools()`），执行随后就在同一个会话上按 `getToolByName` 解析名字。没有活的 `Main` 时（parked/aborted，端口尚未释放那一段），目录退回绑定它的那套 runner 自己的视图，而不是报出一份宿主其实并没有的空注册表。
-- 目录就是宿主注册表本身，加上桥自己的三个 `xfer_*` 工具，此外不增不减（见「安全与边界」）。
+- 目录就是宿主注册表本身，加上桥自己的三个 `xfer_*` 工具，不增不减（见「安全与边界」）。
 - 桥自己从不请求模型：一次远程调用就是「收请求 → 跑工具 → 回结果」。但执行落在宿主的真实会话里，工具留下的会话级副作用可能唤醒宿主自己的 agent，那次推理花的是宿主的 token（见「安全与边界」）。宿主能不能自己推理，这件事本身也归远程接管：见「宿主推理接管」。
 
 ## 安装
+
+两条路，分界在机器上有没有 `omp`：**已经有宿主**就下面那一条 `omp install`；**一台新机器**走一键脚本，它多做的只有宿主那一层，扩展那一半执行的还是同一条命令。
+
+### omp 安装（机器上已经有 omp）
 
 任意机器上，从 git URL 装：
 
@@ -71,7 +75,7 @@ omp install https://github.com/adam-ikari/a2mcp.git
 omp plugin uninstall a2mcp
 ```
 
-**从 v0.3.0 或更早升上来的，先卸载。** 插件记账按 `package.json:name` 落，而这一轮把名字改了。新 URL 装进来时如果 `pi-a2a-ext` 还在登记里，两个入口都在，宿主两个都加载——同一台机器上两个端口、两份 token、两次 takeover 装配，而后一次快照是唯一还拿来得住的那份。
+**从 v0.3.0 或更早升上来的，先卸载。** 插件记账按 `package.json:name` 落，而这一轮把名字改了。新 URL 装进来时如果 `pi-a2a-ext` 还在登记里，两个入口都在，宿主两个都加载——同一台机器上两个端口、两份 token、两次 takeover 装配，第二次那份快照盖掉了第一个的影子，restore 时只有后者还能拿回来。
 
 ```sh
 omp plugin uninstall pi-a2a-ext
@@ -87,23 +91,9 @@ omp install https://github.com/adam-ikari/a2mcp.git
 URL 必须是完整的 `https://….git`——GitHub 的 `owner/repo` 简写会被当作非法包名
 拒绝；指向 `.tgz` 会报 `ENOTDIR`。
 
-**机器上还没有 omp？** 仓库带一个引导脚本，它管的是宿主那一层：
-
-```sh
-sh scripts/bootstrap.sh --dry-run   # 只看计划，一个字都不写
-sh scripts/bootstrap.sh
-```
-
-它做三件事：PATH 上没有 `omp` 就跑官方安装器（`curl -fsSL https://omp.sh/install | sh`，
-能从旁边的 `package.json` 读到钉值时改成 `--binary --ref v<版本>`）；然后执行上面
-那一条 `omp install <git-url>`；最后用宿主自己的 `omp plugin doctor` 自检，并把
-宿主报的版本与钉值对一遍。已有宿主它不动（`--upgrade` 才重装），已登记就跳过
-（`--reinstall` 强制），`--uninstall` 只收登记、留着 token 与审计日志。
-
-**扩展的安装仍然只有原来那一条**，脚本最后执行的就是它。它不软链、不做本地安装、
-不自己校验模块图，也不生成 token。宿主默认在启动时自查更新，所以「按钉值装上」不是
-「一直停在钉值」。核验见 [docs/testing.md](docs/testing.md) 的 `test:bootstrap` 一节
-（28 项）；宿主那一支在开发机上永远走不到，那里测的是脚本的判断。
+也别手工软链到 `~/.omp/agent/extensions/`：`ln -s "$PWD/extensions/a2mcp.ts" ...`
+只在 `$PWD` 恰好是仓库根目录时有效，换个目录执行就链到一个不存在的路径，桥静默地
+不启动，而宿主不会报错。
 
 上面这些是实测过的，`bun run test:install` 也覆盖：核验发布包、把插件装进一个临时
 `HOME`、在那里起宿主，以远程客户端身份把桥的 MCP 面走完。宿主自 18.11.0（18.12.1
@@ -111,13 +101,78 @@ sh scripts/bootstrap.sh
 登记——光有软链不加载，已实测。所以那半程是自包含的，也不会在你的真实机器上留下
 登记。见 [docs/testing.md](docs/testing.md)。
 
-也别手工软链到 `~/.omp/agent/extensions/`：`ln -s "$PWD/extensions/a2mcp.ts" ...`
-只在 `$PWD` 恰好是仓库根目录时有效，换个目录执行就链到一个不存在的路径，桥静默地
-不启动，而宿主不会报错。
+### 一键安装（机器上还没有 omp）
 
-首次启动时桥会在 `~/.omp/agent/` 下自行生成配置与 token，所以每台机器无需额外
-配置。
+仓库带一个引导脚本，它管的是宿主那一层：
 
+```sh
+sh scripts/bootstrap.sh --dry-run   # 只看计划，一个字都不写
+sh scripts/bootstrap.sh
+```
+
+跑它不必先克隆仓库，同一条脚本从管道进去就行：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.sh | sh
+# 只看计划：curl -fsSL https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.sh | sh -s -- --dry-run
+```
+
+它做三件事：PATH 上没有 `omp` 就跑官方安装器（`curl -fsSL https://omp.sh/install | sh`，
+读得到钉值时改成 `--binary --ref v<版本>`）；然后执行上面那一条 `omp install <git-url>`；
+最后用宿主自己的 `omp plugin doctor` 自检，并把宿主报的版本与钉值对一遍。钉值是本仓库
+所有核验最后一次跑绿的那个宿主版本。仓库在旁边时它从 `package.json` 读；管道里没有这个
+文件，脚本就从它接下来要克隆的那同一个仓库读 `package.json`
+（`https://raw.githubusercontent.com/<owner>/<repo>/HEAD/package.json`）。没有 curl 可取、
+取回来的里面没有那一行、`--spec` 不是 `github.com` 的 URL：哪一种都在 stderr 说清楚，然后
+装最新的宿主。自己定版本用 `--host-version <版本>`，选了它就连一次请求都不发；确实要最新
+就写 `--host-version latest`。PATH 上已有 `omp` 时它不动那份宿主（`--upgrade` 才重装），
+也不为比较去读钉值：既然不打算装，就没有要钉的版本。已登记就跳过（`--reinstall` 强制），
+`--uninstall` 只收登记、留着 token 与审计日志。
+
+安装器之外它只写一个文件，条件压得很窄：脚本自己装了宿主、且 `~/.omp/agent/models.yml`
+不存在时，写进一个不可达的占位 provider。无头启动（`omp --mode rpc`）死在扩展代码运行
+之前，救它只能靠启动前就在磁盘上的这份文件；create-only，已存在的文件一个字不碰，
+PATH 上本来就有 `omp` 的机器什么都不写。细节在「故障排查」。
+
+**扩展的安装仍然只有原来那一条**，脚本最后执行的就是它。它不软链、不做本地安装、
+不自己校验模块图，也不生成 token。宿主默认在启动时自查更新，所以「按钉值装上」不是
+「一直停在钉值」。核验见 [docs/testing.md](docs/testing.md) 的 `test:bootstrap` 一节
+（46 项，其中一项真的去问 GitHub：那条推出来的 URL 取回的是不是本仓库这个钉值）；探针里
+宿主安装那一支永远不真跑，所以它测的是脚本的判断。无克隆这一支真跑过一次：临时 `HOME`，
+`PI_INSTALL_DIR` 也指进那个目录，宿主按 `--ref` 装上 18.12.1，`a2mcp@0.4.0` 进 lock，
+`plugin doctor` 出 ✔，`--uninstall` 把登记收掉，机器上原有的那份宿主与已装的插件没动。
+
+**Windows？** 同一个脚本有 `scripts/bootstrap.ps1`。它比 shell 那一支多处理一件事：官方
+`https://omp.sh/install.ps1` 只要机器上装了 bun 就偏向源码构建，`-Ref` 不带模式开关也会被翻
+过去，所以这个脚本每一次调用安装器都给 `-Binary`（这一条读的是安装器自己的主块，2026-10-19）。
+
+```powershell
+iwr https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.ps1 -OutFile bootstrap.ps1
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 -DryRun
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1
+```
+
+先落盘不是讲究：管道进 `iex` 的脚本没有 `$PSCommandPath`，读不到旁边那个 `package.json`，只能
+退回仓库的。钉值其余的规矩一样——`-HostVersion <版本>` 自己定且一次请求都不发，不是确切版本的
+值按钉值拒绝，读不到就装最新并留一条 warning 说明。`-Uninstall`、`-Reinstall`、`-Upgrade` 与
+shell 那几个开关同义。两处两支不一样：宿主装到哪，各听自己那个官方安装器的默认——shell 那一支
+是 `~/.local/bin`，这一支是 `%LOCALAPPDATA%\omp`；`xfer` 要拉的两个二进制落在
+`%LOCALAPPDATA%\a2mcp\bin`。另一处是 `tar`：`.sh` 会警告一句「没有 tar，桥解包要用它」，这一支
+不查，因为 Windows 上解 zip 的是桥自己那段代码，PATH 上没有解压器。
+
+**这一支一次都没跑过。** 写它的机器上没有 PowerShell，所以脚本里没有一行——安装器那一次调用、
+插件那道门、参数定义——在任何地方执行过。`bun test` 里有十三项把它当文本读，跟 `bootstrap.sh`
+对一遍（`test/bootstrap-ps1.test.ts`）：插件名同、仓库 URL 同、安装器同、确切版本那道门同、
+每一次安装器调用都带 `-Binary`、整个文件是 ASCII、`Run` 先打印计划再执行，占位 `models.yml`
+那一段也逐行对过（写进文件的正文一致、只有自装宿主那条分支会写、create-only、dry-run 只打计划）。
+这十三项说的是两个文件没写岔，没说脚本能跑——往里放一个语法错误，十三项照样全绿。
+
+两条路装完是同一个样子。零模型配置的机器上，交互式启动照常起：宿主创建 session，
+桥在 `session_start` 把空的模型槽填成占位模型 `a2mcp/offline`（不可达，见「故障排查」），
+配置与 token 也照旧由桥在 `~/.omp/agent/` 下自行生成，每台机器无需额外设置。
+例外是无头启动（`omp --mode rpc`）：宿主死在扩展代码运行之前，只有启动前就在磁盘上的
+`models.yml` 救得了它；一键脚本在「自己装了宿主」的那条路上已经写了一份，手工装的宿主
+想要无头，形状见 `docs/protocol.md` 的占位模型一节。
 启动宿主 omp 后，通知栏显示：
 
 ```
@@ -140,7 +195,7 @@ a2mcp listening on http://127.0.0.1:<port> (token <前6字符>…)
 | `token` | Bearer token，首次启动自动生成（43 字符）；手写短于 32 字符的会被拒绝 |
 | `host` | 监听地址，默认 `127.0.0.1`（改成 `0.0.0.0` 会额外告警） |
 | `host_llm` | `"deny"` \| `"allow"`（默认）：宿主启动时自己的会话能不能发模型请求，见「宿主推理接管」。它只决定**启动状态**；桥跑起来之后，远程一侧随时可以用 HTTP 切换，与这里写的是什么无关 |
-| `xfer.dufs` | 服务共享路径的 HTTP 文件服务器，默认 `dufs`：先查 PATH，查不到就按钉死的版本拉一份构建装进 `~/.local/bin`。写的值里带 `/` 就当作路径直接用，桥一次都不下载。见「传文件」 |
+| `xfer.dufs` | 服务共享路径的 HTTP 文件服务器，默认 `dufs`：先查 PATH，查不到就按钉死的版本拉一份构建，装进桥自己的安装目录（POSIX 是 `~/.local/bin`，Windows 是 `%LOCALAPPDATA%\a2mcp\bin`）。写的值里带 `/` 或 `\` 就当作路径直接用，桥一次都不下载。见「传文件」 |
 | `xfer.cloudflared` | 发布隧道的二进制，默认 `cloudflared`：查找和下载的规则同 `xfer.dufs`，本文写作时钉的是 2026.10.1 |
 
 只有这些字段：上面的四个顶层字段，加一个可选的 `xfer` 块。**没有工具白名单或黑名单，没有文件沙箱**——桥不替宿主做权限决定，配置里加这些字段不会生效（多余字段被忽略）。`host_llm` 也不在此列：它管的不是调用方能执行什么（那由 token 和宿主自己的工具权限决定），是宿主自己能不能推理。
@@ -248,9 +303,13 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 **这个 URL 就是一份能力**：谁拿着它，谁就能读、能写那条路径，直到共享关闭。
 
-前置的两个二进制，桥自己找：先查 PATH，查不到就拉一份钉死版本的构建装进 `~/.local/bin`，用它起服务。两个都钉版本号加 sha256，写在 `src/obtain.ts`：`dufs` 是 0.46.0，`cloudflared` 是 2026.10.1，各四个平台，每一个哈希都由 `bun run test:obtain` 对着 GitHub 实际下发的字节复验过。桥不要 `latest`，也不向递给它字节的那台服务器要校验和。
+前置的两个二进制，桥自己找：先查 PATH，查不到就拉一份钉死版本的构建，装进桥自己的安装目录（POSIX 上是 `~/.local/bin`，Windows 上是 `%LOCALAPPDATA%\a2mcp\bin`），用它起服务。两个都钉版本号加 sha256，写在 `src/obtain.ts`：`dufs` 是 0.46.0，`cloudflared` 是 2026.10.1，各有 `linux-x64`、`linux-arm64`、`darwin-x64`、`darwin-arm64`、`win32-x64` 五行，每一个哈希都由 `bun run test:obtain` 对着 GitHub 实际下发的字节复验过。桥不要 `latest`，也不向递给它字节的那台服务器要校验和。
 
-拉取是桥多出来的一个意见。它先前已经决定用 `dufs` 当文件服务器，这次只补一句「字节从哪来」。出口是写路径：`xfer.dufs` 写成 `"/srv/bin/dufs"`，桥就拿这个文件用，一次都不下载。写裸名字就是让它去找，找不到就去拉。别人放的文件桥不动：`~/.local/bin/dufs` 已经存在、又不是自己装的那一份，桥拒绝继续，并把它的 sha256 打出来。自己装过什么，记在 `<agentDir>/a2mcp.installs.json`。
+`win32-arm64` 没有那一行，原因在上游：`dufs` 发 aarch64 的 Windows 构建，`cloudflared` 不发，Windows on ARM 的机器会拉到一半、在另一半上失败。桥在那里报的是缺哪一对，不是装半个。
+
+Windows 那两行是这里最新、也最少被量过的东西。查到的：asset 的 URL 应答、zip 在这台机器上算出来与表里写的哈希一致、zip 里那一个条目能用 Windows 主机将要调的那段代码读出、`.exe` 是 PE 且没超下载上限——都在 `bun run test:obtain` 里。没查到的：它跑起来。写这几行的时候没有 Windows 机器在场，所以 Windows 上的第一次 `xfer_share` 也是这些字节第一次执行。
+
+拉取是桥多出来的一个意见。它先前已经决定用 `dufs` 当文件服务器，这次只补一句「字节从哪来」。出口是写路径：`xfer.dufs` 写成 `"/srv/bin/dufs"`，桥就拿这个文件用，一次都不下载；Windows 的路径带反斜杠，判据是「值里出现 `/` 或 `\`」。写裸名字就是让它去找，找不到就去拉。别人放的文件桥不动：`~/.local/bin/dufs` 已经存在、又不是自己装的那一份，桥拒绝继续，并把它的 sha256 打出来。自己装过什么，记在 `<agentDir>/a2mcp.installs.json`。
 
 需要拉取的共享会等拉完，回包用 `installed` 说清拉的是哪个版本，本来就在的地方是 `null`。每次调用一条审计，`tool: "xfer"`，拉取那几次是 `action: install`。
 
@@ -315,6 +374,7 @@ v1 边界：
 
 ## 故障排查
 
+- **一台没有任何模型配置的机器第一次启动**：宿主照样创建 session，桥在 `session_start` 注册一个占位 provider `a2mcp/offline` 并切换到它。它的 baseUrl 指向 `a2mcp.invalid`（RFC 6761 保留域），永远解析不到；整个过程是运行态，不写文件，也不抢操作者已经选好的模型——slot 是空的它才动。MCP 面因此开箱即用：通知栏照常广播，远程 `initialize`、`tools/list` 照常回 200。占位模型不做推理。在宿主上发 prompt 会得到连接被拒的软失败，18.12.1 实测报的是 `Couldn't connect to a2mcp.invalid (connection refused)`；真推理永远要自己 `/login`、`/model`。更早的宿主在这种机器上停在 `No model selected`（再早是 `No models available`），那是提示时刻的闸门，升级宿主即可。无头启动（`omp --mode rpc`）到不了这一步：宿主死在扩展代码运行之前，救它只能在开机前把 `~/.omp/agent/models.yml` 放到磁盘上。一键安装脚本正是在这个条件下写这份文件：只有脚本自己装了宿主、且该文件不存在时（create-only，已存在的文件一个字不碰，PATH 上本来就有宿主的机器什么都不写）。手工装的宿主想要无头启动，照 `docs/protocol.md` 的占位模型一节写。探针天天在跑的就是这份不可达占位形状，Linux 与 macOS 实测过；Windows 的 `C:\Users\<user>\.omp\agent\models.yml` 与 PowerShell 脚本两边都没执行过。
 - **401 `unauthorized`**：token 不匹配。远程 `mcp.json` 的 `Authorization` 头必须与配置 `token` 一致；`/a2mcp rotate` 之后要同步改远程侧。宿主 stderr 会在第一次失败以及此后每五十次打一行 `[a2mcp] N unauthorized attempt(s)`；这些尝试刻意不进审计日志（理由见「安全与边界」的审计日志条目）。
 - **桥拒绝启动，报 `field 'token' must be at least 32 characters`**：有人往 `a2mcp.json` 里写了个短的 token。放真正的密钥进去，或者删掉该字段让桥自己生成并持久化一个——桥不会替换交到它手里的那份。
 - **桥拒绝启动，报 `field 'host_llm' must be 'deny' or 'allow'`**：这个字段被写成了别的值（`"false"`、`"ALLOW"`、布尔量）。它决定接管的启动状态；含糊的值一律拒绝，不猜（见「宿主推理接管」）。
@@ -336,7 +396,8 @@ bun install
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
-bun test              # 单测：test/*.test.ts（186 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer）
+bun test              # 单测：test/*.test.ts（226 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
+bun run test:obtain   # 钉死的两个二进制：本机这一行真下载、钉表十个 asset 全 HEAD、Windows 那两行按字节读，37 项（不需要本机 omp；只往它自己那个 /tmp 目录里写）
 bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，34 项（需本机 omp）
@@ -344,7 +405,7 @@ bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp�
 bun run test:takeover  # 宿主推理 deny/restore 对一个计数 sink 实测，约 60 秒（需本机 omp）
 bun run test:scenario  # 端到端场景，8 个叙事 / 41 步，约 45 秒（需本机 omp）
 bun run test:install   # 发布包自包含 + 真实宿主走 MCP，48 项（需本机 omp；会向 GitHub 拉约 46 MB）
-bun run test:bootstrap # 一键脚本的判断核验，28 项，约 9 秒（前四组用自制的记账 stub omp；第五组需本机 omp）
+bun run test:bootstrap # 一键脚本的判断核验，46 项，约 9 秒（除最后一组都用自制的记账 stub omp 加一只记录 argv 的假 curl；最后一组需本机 omp）
 bun run website        # 文档站（VitePress）本地预览，端口见输出（5173 起，被占则顺延）；首次先 cd website && bun install
 ```
 

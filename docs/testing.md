@@ -5,19 +5,19 @@
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
 | `bun run test:tree` | 仓库形状核验，3 项，无依赖 | 否 | `tree-probe: repo shape OK` |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 194 pass / 0 fail（15 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 226 pass / 0 fail（17 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
-| `bun run test:obtain` | 外部二进制获取核验，31 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
+| `bun run test:obtain` | 外部二进制获取核验，37 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，34 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，56 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:takeover` | 宿主推理 deny/restore 核验，34 项，约 65 秒 | 是 | `takeover probe: all assertions met` |
 | `bun run test:install` | 发布包自包含 + 端到端，48 项 | 是 | `PACKAGE OK` |
-| `bun run test:bootstrap` | 一键脚本的判断核验，28 项，约 9 秒 | 第五组要 | `BOOTSTRAP OK` |
+| `bun run test:bootstrap` | 一键脚本的判断核验，46 项，约 9 秒 | 第五组要 | `BOOTSTRAP OK` |
 | `bun run test:scenario` | 端到端场景，8 个叙事 / 41 步，约 45 秒 | 是 | `SCENARIOS: 41 steps, 0 failed` |
 
-统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。`test:bootstrap` 前四组连真宿主都不起：它用脚本自己造在临时目录里的记账 `omp` stub，PATH 上没有真宿主也照样跑，只有第五组用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2MCP_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主自 18.11.0（18.12.1 上重测仍如此）按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的第五组是这趟里唯一真出网的一支：`PATH` 上什么都不留，让桥自己把两个二进制拉下来，约 46 MB，落点仍是它自己那个临时 `HOME`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2mcp-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。`test:bootstrap` 前五组连真宿主都不起：它用脚本自己造在临时目录里的记账 `omp` stub 和一只记录 argv 的假 `curl`，PATH 上没有真宿主也照样跑，只有最后一组（真宿主）用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2MCP_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主自 18.11.0（18.12.1 上重测仍如此）按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的第五组是这趟里唯一真出网的一支：`PATH` 上什么都不留，让桥自己把两个二进制拉下来，约 46 MB，落点仍是它自己那个临时 `HOME`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2mcp-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
 六个宿主核验、`test:obtain`、`test:bootstrap` 与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
 
@@ -56,7 +56,7 @@
 
 第一次的坏探针错在哪：它只往临时 HOME 的 agent 目录放标记，没往 plugins 目录放；而且**没给临时 HOME 写 `models.yml`**。
 
-第二点是关键，也单独吃过一次亏：**宿主没有模型配置就不创建 session，扩展在 `session_start` 加载，于是桥永远不广播**。这个症状与「插件发现忽略了我的 HOME」完全一样。写「桥没起来」的失败信息时，先看有没有这句 `No models available`。所有起宿主的核验都走 `test/harness.ts` 播种 `models.yml`（不可达 provider，够启动即可，桥不推理）。这个播种的边界要写清：它证明的是「桥不靠模型回答也能跑」，证不了「宿主不发模型请求」——不可达的请求静默失败，计数看不见。现实里确实有一条链从这个盲区漏出去：远程 `bash` 超过宿主 300 秒超时会被宿主转成后台任务，任务完成的 `async-result` 通知进会话，唤醒宿主自己的 agent 开始推理（远程 Windows 宿主实测，见 [computer-use](./computer-use.md)）。当时现有核验没有一条走后台任务路径——审批探针把 `bash` 挂住就看结论，超时转后台这条路没碰过。这条盲区由 2026-10-12 的第七核验收口：`test:takeover` 在带接管与撤掉接管两种状态下各测一次长 `bash`，唤醒链在负控那侧被真实地跑起来并数到（见「test:takeover」一节）。
+第二点是关键，也单独吃过一次亏，2026-10-19 在本钉住的宿主上把两半各量了一遍才写准：**零模型配置的机器上，交互式宿主照样创建 session**（撞车发生在提示时刻——操作者发 prompt 才会看到 `No model selected`），**而无头启动（`omp --mode rpc`）死在 `createAgentSession` 里，扩展代码一行都没跑**——那时桥的占位模型（`src/auto-model.ts`，在每个 `session_start` 填上空着的模型槽）还没机会存在，救无头的只有启动前就在磁盘上的 `models.yml`。播种因此有两个家：运行态那张占位行归桥，磁盘那份归引导脚本的自装宿主分支。写「桥没起来」的失败信息时，先分清死的是哪一道门。所有起宿主的核验都走 `test/harness.ts` 播种 `models.yml`（不可达 provider，够启动即可，桥不推理）。这个播种的边界要写清：它证明的是「桥不靠模型回答也能跑」，证不了「宿主不发模型请求」——不可达的请求静默失败，计数看不见。现实里确实有一条链从这个盲区漏出去：远程 `bash` 超过宿主 300 秒超时会被宿主转成后台任务，任务完成的 `async-result` 通知进会话，唤醒宿主自己的 agent 开始推理（远程 Windows 宿主实测，见 [computer-use](./computer-use.md)）。当时现有核验没有一条走后台任务路径——审批探针把 `bash` 挂住就看结论，超时转后台这条路没碰过。这条盲区由 2026-10-12 的第七核验收口：`test:takeover` 在带接管与撤掉接管两种状态下各测一次长 `bash`，唤醒链在负控那侧被真实地跑起来并数到（见「test:takeover」一节）。
 
 所以端到端这组现在是自包含的：它把插件装进自己那个临时 `HOME`，宿主从同一个 `HOME` 加载，真实机器上不留登记。
 
@@ -71,31 +71,79 @@
 
 全过 → `PACKAGE OK`；任何一项不过 → `FAIL: <label>` + exit 1。
 
-## `test:bootstrap` — 一键装宿主与扩展的脚本核验（28 项，约 9 秒）
+## `test:bootstrap` — 一键装宿主与扩展的脚本核验（46 项，约 9 秒）
 
-**核验 `scripts/bootstrap.sh` 的判断，不核验 omp 会不会装东西。** 五组：
+**核验 `scripts/bootstrap.sh` 的判断，不核验 omp 会不会装东西。** 七组：
 
 | 组 | 项数 | 断言 |
 | --- | --- | --- |
 | 钉值从哪来 | 6 | PATH 上没有宿主时，计划里的安装器调用带着从 `package.json` 读出的钉值，并说明读自哪个文件；把 `package.json` 换成另一份、钉值写 9.9.9，`--ref` 跟着变；钉值写成 range（`^18.0.0`）不当钉值用，如实告警后装 latest；`--host-version 7.7.7` 压过文件；`--host-version latest` 计划里没有 `--ref` |
+| 脚本单独一份时（无克隆那一支） | 9 | 见下节 |
 | `--dry-run` 的计划 | 5 | 退出 0；PATH 上已有宿主就不装（计划里一行 `curl` 都没有）；扩展那一步是 README 那条 git URL 原文；自检交给宿主自己的 `omp plugin doctor`；跑完那个临时 `HOME` 里一个条目也没有 |
-| 前置 | 5 | 没有 `curl` 且必须装宿主 → 红，且 `wanted` 那行写的就是 curl；没有 `git` → 红并点名 git；没有 `tar` → 只告警（那是桥自己解包用的），照样绿；`HOME` 不可用 → 红并说 HOME；不认识的参数 → 红而不是被忽略 |
+| 前置 | 7 | 没有 `curl` 且必须装宿主 → 红，且 `wanted` 那行写的就是 curl；没有 `git` → 红并点名 git；没有 `tar` → 只告警（那是桥自己解包用的），照样绿；`HOME` 不可用 → 红并说 HOME；不认识的参数 → 红而不是被忽略；脚本单独一份且 PATH 上没有 curl → 读钉值那条先如实告警，停仍停在安装器对 curl 的要求上；`sh -s -- --help` 从管道进去 → 打出选项表并退 0（`$0` 这时是 shell，不是脚本文件） |
 | 登记的取舍 | 7 | 已登记就不再装（stub 的 argv 里没有一个 `install`）；真装时跑的是 spec 不是本地路径；`--reinstall` 的卸载排在安装之前；`--uninstall` 只调卸载、一个安装都没有；doctor 那行是 ✔ 就过并回声出来；改成 ✗ 就红（这道门不是摆设）；宿主版本与钉值不一致只告警、不中止 |
+| 占位 `models.yml` | 7 | 见下节「自装宿主那一条分支的播种」 |
 | 真宿主 | 5 | 用 PATH 上那份真 omp 在临时 `HOME` 里跑真一遍：脚本退出 0、登记落进 `omp-plugins.lock.json`、`node_modules/<插件>` 目录在、第二次跑如实说 already registered、`--uninstall` 把登记从 lock 里拿掉 |
+
+### 自装宿主那一条分支的播种（7 项）
+
+脚本在「自己装了宿主且文件不存在」时写 `~/.omp/agent/models.yml`（不可达占位 provider，形状见 `docs/protocol.md` 的占位模型一节），这是安装器之外它唯一的落盘。前几组都进不去这条分支——要么 PATH 上有宿主，要么 `--dry-run` 停在计划——所以这一组把下载替换掉而不是跳过：一只假 `curl` 认 `omp.sh/install` 那次调用、回空（真安装器会写的二进制已经预先躺在 `PI_INSTALL_DIR` 里，是记账 stub 的副本），其余 URL 一律按 `curl -f` 退 22；脚本自己的解析逻辑接着找到 `$PI_INSTALL_DIR/omp`，自装宿主分支从头走到尾。
+
+| 断言 | 判据 |
+| --- | --- |
+| 这一支跑到底并写出文件 | 退出 0 且 `<HOME>/.omp/agent/models.yml` 存在 |
+| 文件带的是桥自己那张占位形状 | `providers:`、`a2mcp:`、`baseUrl: http://a2mcp.invalid/v1`、`api: anthropic-messages`、`apiKey: not-a-real-key`、`- id: offline` 逐条在场 |
+| 脚本说了它写了什么 | stdout 有 `Wrote <路径>` 一行 |
+| `--host-version` 在场时只出网一次 | 假 curl 的日志里只有安装器那一条，没有 raw 的钉值请求 |
+| 已存在的文件 create-only | 先放一份哨兵内容，跑完字节不变、输出里没有 `Wrote` |
+| `--dry-run` 只打计划 | 有 `plan: write …（…create-only）` 一行，且那个 `HOME` 跑完还是空的 |
+| 已有宿主的机器不写 | stub 宿主在 PATH、非 dry-run 走完全程，`HOME` 下没有 `.omp` |
+
+一道变异跑过：删掉脚本里 create-only 那个 `[ -e ]` 守卫 → 第五项红（`exit 0: claimed a write`），其余 45 项不动。这一组也让「宿主那一支从没被执行过」这句话第一次变了形状：执行是执行了，被替换的只有下载那一下。
+
+运行态那一半在 `bun test` 里是 `test/auto-model.test.ts` 八项（有模型 → 一个调用都不发；空槽 → 恰好一次注册一次选中；行的字面值、sourceId 不等于 takeover 那个、选中的是注册表自己的行、剪枝后逐次重放、注册表不吐行就抛错）。宿主不在场的部分靠 pty 真量了一遍（2026-10-19，18.12.1，临时 `HOME` 零配置）：TUI 起来、桥广播、`initialize` 与 `tools/list` 回 200；占位行在位的会话发一条 prompt，宿主报的是 `Couldn't connect to a2mcp.invalid (connection refused)`，会话记录里 `provider=a2mcp model=offline stopReason=error`——第二道 `getApiKey` 闸门被内联假 key 放过，这是量出来的，不是推的。变异两道：删掉「有模型就不动」的守卫 → 两项红；把 sourceId 写成接管的 `a2mcp` → 命名那条红。`host_llm: "deny"` 与占位行同场由 `bun run test:takeover` 守（带这段接线的 34 项全绿那一遍）。
+
+### 无克隆那一支（9 项）
+
+`curl -fsSL …/scripts/bootstrap.sh | sh` 这种跑法没有仓库在旁边：`$SCRIPT_DIR/../package.json` 指向的是管道那侧不存在的路径，钉值那一跳就掉了，脚本于是知道要装宿主却不知道钉哪个版本。这一组把脚本拷进一个上面没有 `package.json` 的目录（`bareScript()`），再塞一个假的 `curl` 进 PATH（`fakeCurl()`：把每次调用的 argv 追加进一个日志文件，然后要么吐出我们指定的 `package.json`，要么按 `curl -f` 的方式退 22）。断言因此能同时说清两件事：取到了什么，以及它到底有没有出网。
+
+| 断言 | 判据 |
+| --- | --- |
+| 钉值取自 spec 指向的那个仓库 | 假 curl 回 9.9.9，计划里是 `--binary --ref v9.9.9` |
+| 出处那行写的是 URL 本身 | `pinned to v9.9.9 (read from https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/package.json)` |
+| 这个钉值真走了网络 | 假 curl 的 argv 日志里有那条 URL 的 `-fsSL --max-time 20` 调用 |
+| 取不到就装 latest，不停下来 | 假 curl 退 22：退出码 0、计划里是不带 `--ref` 的安装器命令、stderr 点名试过的那个 URL |
+| 失败时说的是试过哪儿 | 回声那行 `no pin available from <URL> — installing latest` |
+| 不是 `github.com` 的 spec 不猜也不发请求 | `--spec git@gitlab.example:foo/bar.git`：假 curl 的日志空，输出说明这个 spec 推不出 URL，装 latest |
+| `--host-version` 优先且不读钉值 | 传 `7.7.7`：假 curl 一次没被调用，`--ref v7.7.7` 照样在计划里 |
+| 已有宿主就不出网 | PATH 上放着 stub 宿主：假 curl 一次没被调用——既然不装宿主，就没有要钉的版本 |
+| 推出来的 URL 服务的是本仓库这个钉值 | 真发一次 `curl` 到那条 URL，取回的钉值 == `package.json` 里的 `PIN`；够不着 GitHub 时这一项打印 `info:` 不计入项数 |
+
+三条变异跑过：把派生出来的 `/HEAD/` 改成 `/main/` → 出处那行与「真走了网络」那两条一起红（假 curl 对 URL 不敏感，所以拦住它的是断言盯着字面 URL，不是它挑不挑 URL）；去掉「已有宿主就不出网」那个条件 → 第八条红，argv 日志里多出一条请求。第 9 条挂在真网络上，跑的时候 GitHub 可达，它读回来的是 `18.12.1`。
+
+为什么第八条值得占一项：无克隆那条路是给人装第一台机器用的，而「机器上已经有宿主」是最常见的形态；这个脚本在这种形态下应当一次请求都不发。读钉值的分支挂在「确实要装宿主」这个条件上，条件写丢的失败模式是一次无害的 GET，看不见、也不报错，只有 argv 日志能证明它没发生。
 
 它为什么存在：README 教的安装方式是 `omp install <git-url>` 那一条，而那句话假设机器上已经有 `omp`。脚本补的是宿主那一层，扩展那一半执行的还是原句——**它不是第二条安装路径**。2026-10-02 删掉 `scripts/install.sh` 那条决定也没被翻面：那次错在自己维护一份模块图校验，这次连插件登记好不好都问宿主的 `omp plugin doctor`，脚本不重新发明判据。
 
 `PATH` 是探针自己造的目录，只软链点名的那几个真二进制，所以「没有 curl」是真没有，不是脚本自己说的。`omp` 换成一个只往文件里追加 argv 的 stub，于是安装、卸载、`plugin list`、`plugin doctor` 全都看得见，而机器上什么都没被改动。
 
-插件名与安装 URL 都不抄在探针里：前者读 `package.json:name`，后者读 README 里那行 `omp install <url>`，读出来是空就抛错而不是继续跑。这一条是本轮改名换来的教训——脚本、README、探针三处各写着同一个名字，手抄的话改一半也能全绿。
+插件名与安装 URL 都不抄在探针里：前者读 `package.json:name`，后者读 README 里那行 `omp install <url>`，读出来是空就抛错而不是继续跑。同一个名字原先抄在三处（脚本、README、探针），改一半也能全绿，所以这两样都改成从源头读。无克隆那一组的 raw URL 也从 `README_URL` 推，不另抄一份 owner/repo。
 
 一个洞是写的过程中自己踩到的：前置那组第一个场景拿掉了 `curl`，可 PATH 上还留着 stub 宿主，脚本走的是「已有宿主」那一支，`curl` 那条检查根本没跑到；它顺手把扩展「装」进了 stub 的登记文件，于是下一个场景（拿掉 `git`）读到已登记、跳过安装，两条都绿。修法是该场景把 `omp` 也从 PATH 上拿掉，并且每个场景重铺 stub 的状态。这类「上一个场景改了夹具」的污染，只有把每条的期望退出码打出来才看得见。
 
-边界写在探针文件头，不藏着：**宿主那一支在本仓库永远走不到**——探针要么 PATH 上有宿主（脚本就不装），要么在 `--dry-run` 里（只打印计划）。那半程的第一次真执行发生在别人的新机器上，本仓库能给它的只有 stub 覆盖加一行诚实的说明。
+边界写在探针文件头，不藏着：**官方安装器那一次下载在探针里永远不真跑**——要么 PATH 上有宿主（脚本就不装），要么在 `--dry-run` 里（只打印计划），要么像播种那一组那样被假 `curl` 替换掉（分支走全，下载那一下是假的）。2026-10-19 手动补了一次真跑：临时 `HOME`、`PI_INSTALL_DIR` 指进同一个目录、PATH 上没有宿主，脚本从 raw 读到 `18.12.1`，安装器按 `--ref v18.12.1` 把二进制写进那个临时目录，`omp install <git-url>` 真克隆并登记出 `✔ plugin:a2mcp: v0.4.0`，`--uninstall` 收掉登记，整个目录 353 MB 删掉，机器上原有的宿主与插件没动。这一次不在探针里，它证明的是那半程走得通，不是它每天被跑着。
 
 第五组用 `omp install .`（本地安装在这里同样是测试夹具，不是受支持的安装方式），它验的是脚本能不能驱动真宿主走完登记、自检、卸载这一串；`A2MCP_BOOTSTRAP_SPEC` 指成 git URL 就改成验 omp 自己的 git 抓取，那条路 `test:install` 前三组已经覆盖。
 
-## `test:obtain` — 外部二进制获取核验（31 项）
+### PowerShell 那一支：十三项字面核对（`test/bootstrap-ps1.test.ts`，在 `bun test` 里）
+
+`scripts/bootstrap.ps1` 与上面这 46 项无关——**这 46 项一项都没执行过那份脚本**。写它的机器上 `pwsh` 与 `powershell` 都不在，脚本里没有一行被解释过。能不靠解释器做的，就是把它当文本读，跟 `bootstrap.sh` 对一遍：插件名（并与 `package.json:name` 对）、扩展仓库（从 README 那行 `omp install <url>` 现读，与探针同一个源头）、安装器地址（shell 那条是 `https://omp.sh/install`，PowerShell 那条必须是它加 `.ps1`）、读钉值时点名的宿主包名、拒绝 range 而要确切版本那道门的字面正则、每一次 `([scriptblock]::Create(...))` 调用都带 `-Binary`（共两次——钉值那次与 latest 那次；这一条盯着上游那个坑：`-Ref` 不给模式开关会被翻成 bun 源码构建）、`-Ref "v$Version"` 与 `-HostVersion` 走同一个 `$Pin`、整个文件纯 ASCII（PowerShell 5.1 按 ANSI 码页读无 BOM 的 UTF-8，一个非 ASCII 字符就是一条乱码注释，落在字符串字面量里就是一个错值）、所有副作用都过 `Run` 而 `Run` 先打印计划再执行，以及占位 `models.yml` 播种的四条：写进文件的正文逐行相等（heredoc 对 here-string）、`InstalledHost` 赋值各只一次且紧跟「No omp on PATH」那行、两边都是 create-only 且落在各自平台的 profile 路径上、dry-run 两边都只打同一句计划。
+
+**这不是覆盖。** 断言的标题里就写着：往 `bootstrap.ps1` 里放一个语法错误，这十三项照样全绿。它们值一句「两个文件没写岔」，再多的一句都不值。这一节的存在是因为 README 把那条 PowerShell 命令摆给人敲，而这里唯一能自动跑的核对只有这一种形状。
+
+四道变异跑过（都按 `cp` 出来的备份恢复，没有用 `git checkout`）：把钉值那次调用上的 `-Binary` 删掉 → 一项红；把 `$Plugin` 改一个字符 → 一项红；删掉 ps1 播种的 `Test-Path -PathType Leaf` 守卫 → create-only 那条红，其余十二项不动；把播种的 `$InstalledHost = $true` 改成两处 → 「只一次」那条红。红的都正好是盯着这一处的那条。
+
+## `test:obtain` — 外部二进制获取核验（37 项）
 
 **要回答的问题**：桥自己拉下来的那两个二进制，是不是真能用。`--auth user:pass@/:rw` 这组参数最后一次实测是在 0.43.0 上，而 `src/obtain.ts` 钉的是 0.46.0——没跑过就把版本号写进 README，那是猜。cloudflared 那一侧同样的规矩：钉表的哈希是从 release 元数据读的，读回来还得对着真下的字节复算一次。这条探针因此是钉值的门：它不绿，文档里那些版本就留空。
 
@@ -104,15 +152,21 @@
 | 真下载（两个二进制各五项） | 10 | 本机平台在钉表里；`resolveBinary` 把文件装进它说的那个临时目录；`--version` 自己报出钉的那个版本；账本记下这次安装的哈希；第二次调用不重下 |
 | 由 `xfer_share` 驱动 | 2 | 空 PATH + 空安装目录，让工具自己完成获取，回包的 `installed.dufs` 点名它拉的那个版本；`installed.cloudflared` 是 `null`（cloudflared 在这里是写明路径的那一侧，按规则不下载） |
 | 拉来的二进制起真共享 | 8 | GET 字节一致（200）、Range（206）、PUT（201）且落盘、错密码 401、目录列表 200、`xfer_stop` 后端口释放、下一次共享复用安装而 `installed` 回到 `null` |
-| 钉表每一行的 URL | 8 | 两个二进制 × 四个平台，每个 asset 的 URL `HEAD` 一次要回 200。本机跑不了的那三个平台的行，单测只核对 URL 拼法，是否存在只有这里能说 |
+| 钉表每一行的 URL | 10 | 两个二进制 × 五个平台，每个 asset 的 URL `HEAD` 一次要回 200。本机跑不了的那四个平台的行，单测只核对 URL 拼法，是否存在只有这里能说 |
+| Windows 那两行按字节读 | 4 | `win32-x64` 那两行指向错 asset 也一样回 200，而本仓库没有一处运行 Windows 二进制，所以这两行按 Windows 主机会读的方式读一遍：dufs 的 zip 在这台机器上算出的 sha256 与表里一致、表里那个条目名由 `readZipEntry`（win32 安装走的同一段代码）读得出来（实测 4 721 664 字节）、cloudflared 的 `.exe` 前两个字节是 `4d5a`（HTTP 206 拿到的，不是归档）、报回的总长 55 325 120 在桥自己的 64 MB 上限之内。这四项说的是「字节与形状都对」，说不了「跑得起来」 |
 | 审计 | 3 | 日志里两个版本各一条 `install`，`share` 记录在 |
 
 这组核验里 cloudflared 走的是**写明路径**那一侧，所以「两个二进制都由一次 `xfer_share` 拉下来」这条它没有覆盖，单测也没有（单测把获取整个 stub 掉）。那一条要靠真宿主的端到端：隔离 `HOME`、`PATH` 削到只剩宿主自己，远程调 `xfer_share`。2026-10-17 头一遍跑绿是拿用完即删的脚本量的：14.0 秒返回，`installed` 是 `{"dufs":"0.46.0","cloudflared":"2026.10.1"}`，两个文件都落在桥自己的 `HOME` 里（6.4 MB 与 38.4 MB，`0755`），登记各一行，审计是 `install` 两条加 `share`、`stop` 各一条，loopback GET 字节一致、PUT 201 落盘、错密码 401、`xfer_stop` 后端口释放，操作者真正的 `~/.local/bin` 里依然没有 `dufs`。同一趟在出网差的时候也真跑过另一遍：dufs 装成功，cloudflared 那 40 MB 在流里停住，120 秒到点回 `isError` 带失败原文，共享没开成、dufs 服务被收走、没有孤儿进程，整趟 229 秒——冷装两个二进制最坏就是两个 120 秒加握手，这两遍合起来把上限与正常值都量到了。第二天这一遍升格成 `test:install` 的第五组（见上一节），从此它是提交里的核验，脚本不再是唯一证人。
 
-真隧道单列，只 `info:` 报告不断言：拿第一节下载并验过哈希的那份 cloudflared 起一次真 quick tunnel，主机名确实 announce 出来了，但从发布它的那台机器 curl 回去报证书错误——本机网络对代理域名重签 TLS。于是断言那一路用注入的开洞器，硬检查一律打在 `127.0.0.1:<port>` 上。还有一处现象记在 `test/obtain-probe.ts` 的文件头而没有归因：探针自己同时握住真 cloudflared 与那次公网取回时，两次都是本地各项全过、然后不再返回。它留在文件头，是因为没归因的事既不能写成结论，也不能写成断言。
+真隧道单列，只 `info:` 报告不断言：拿第一节下载并验过哈希的那份 cloudflared 起一次真 quick tunnel，主机名确实 announce 出来了，但从发布它的那台机器 curl 回去报证书错误——本机网络对代理域名重签 TLS。于是断言那一路用注入的开洞器，硬检查一律打在 `127.0.0.1:<port>` 上。还有一处现象记在 `test/obtain-probe.ts` 的文件头而没有解释：探针自己同时握住真 cloudflared 与那次公网取回时，两次都是本地各项全过、然后不再返回。它留在文件头，是因为没查清原因的事既不能写成结论，也不能写成断言。
+
+### Windows 那些分支在 Linux 上测的部分（`test/obtain.test.ts`「the shape Windows insists on」，10 项）
+
+`src/obtain.ts` 里的 win32 判断不读 `process.platform`，平台由 `ObtainDeps.platform` 注入（与既有的 `target`、`pins`、`env`、`binDir` 同一个性质），所以这台 Linux 机器能走进那些分支。测试里自己造 zip：手工写本地头、`deflateRawSync` 压出的数据、中央目录与 EOCD，CRC 是真算的（那夹具对过一次 `unzip -t`）。十项各自盯着一个只有 Windows 才有的形状：zip 里那一个条目装出来叫 `dufs.exe`；`readZipEntry` 两种存法都读得出（deflate 与 stored）；条目按名字精确匹配，差一点不算；压缩方法不是 0/8 就拒绝而不是猜；条目声明的长度超过上限时一个字节都不解；解出来的长度与声明不符即失败；不是 zip 的字节找不到 EOCD；裸名字在 `PATHEXT` 上命中而不问 release 服务器（假 fetch 断言一次请求都没发）；`C:\tools\dufs.exe` 认作「按给定路径用」且零请求；win32 的安装目录在 `LOCALAPPDATA` 下而不是 unix 的 home。另有一项断言两张钉表都不给 `win32-arm64` 留半行。
+
+变异跑过两处：把 `cdOffset` 读错一位（`eocd + 16` 多加一个字节），十项里红六项——装不出 `dufs.exe`、deflate 与 stored 读不出、精确条目名/方法拒绝/上限拒绝三条各自的前置都不成立，只有「不是 zip 的字节找不到 EOCD」照样绿，因为它本来就该失败；去掉「值里带 `\` 就是路径」那半边，只有 `C:\…` 那一条红，其余全绿——这台机器上除了那条断言，没人替 Windows 用户守着这道门。
 
 ## 隧道那条读循环（`test/tunnel.test.ts`，4 项）
-
 `src/tunnel.ts` 读子进程的输出，从里面找主机名。那条循环开着多久等于共享开着多久，所以它手里那个缓冲区两个方向都会坏：收得太早就把主机名丢了，症状是隧道从来不 announce；完全不收，一个小时的共享就变成宿主进程里一个小时的内存增长。代码的写法是先搜，搜不到才把缓冲区收成尾部的一半。
 
 钉住它的是「主机名埋在比转录更多的输出后面」那一条，而这一条的难点在夹具，不在实现。子进程不加节奏地写（每行一次 `writeSync`，或者一整块写下去），到父进程这边是十来个体积不等的读事件，实测有一次把 200 KB 全塞进第一个事件——那样的流里压根没有几次能撞到上限，把实现写成「满了就不再追加」也不会红。每行之间加一个 `await Bun.sleep(5)`，流才真是一行一个事件。另一个坑更安静：`process.stdout.write` 的循环后面接一句 `console.log`，Bun 让那句同步写越过排队的异步写，主机名直接跑到第一个 chunk 里。夹具的注释写着这两条，因为下一个改这个文件的人会重新发明它们。
@@ -130,7 +184,7 @@
 | JSON-RPC 校验 | 4 | GET 405；坏 JSON 400；`jsonrpc: "1.0"` 400；batch 400 |
 | 暴露门 | 3 | 目录含 `read`；未注册名调用 → `isError` + `not exposed`；别名 `xd://read` 同样拒绝 |
 | 真实执行 | 1 | `tools/call read` 在 Main 会话读回文件内容 |
-| 审计 | 7 | `read` 的 start/done 双相；被拒的调用也有 start；所有 done 能按 id 配对到 start；**记录携带 `sid`（归因）**；审计文件 0600；**嵌到第三层的长字符串折成 `<len:N,sha256>`，正文 60 字符的窗口在日志里查不到** |
+| 审计 | 7 | `read` 的 start/done 双相；被拒的调用也有 start；所有 done 能按 id 配对到 start；**记录携带 `sid`（对得上是哪个客户端会话）**；审计文件 0600；**嵌到第三层的长字符串折成 `<len:N,sha256>`，正文 60 字符的窗口在日志里查不到** |
 | 审计轮转 | 4 | 过 512 KB 确实轮转；轮转前后记录总数不缩水（按数量算，6 条前置 + 426 条本轮 = 429 进 `.1` + 3 留在当前文件）；跨两个文件每条 `done` 都能配到 `start`（本轮有 1 条只能在 `.1` 里配到）；`.1` 是完好的 JSONL |
 | 会话终止 | 2 | 已鉴权 DELETE → 204；随后请求该会话 → 404 |
 
@@ -239,11 +293,11 @@
 
 ## 名字守卫（`test/naming.test.ts`，6 项）
 
-**要回答的问题**：这一轮把项目改到了 `a2mcp`，改的是名字，而名字的敌人是复制。旧拼写会从三条路回来：抄错的一行文档、新写的一个探针、手填的 `serverInfo`。
+**要回答的问题**：这一轮把项目改到了 `a2mcp`。名字抄在几处就可能漏改几处，旧拼写会从三条路回来：抄错的一行文档、新写的一个探针、手填的 `serverInfo`。
 
-按形态匹配，不是全文禁那个协议名：`docs/protocol.md` 拿它当隔壁那个协议来比较，那是合法用法。拦的是自指的四种形态——旧包名、旧桥名、旧环境变量前缀、旧斜杠命令，外加旧前缀打头的标识符和散文里那句旧称呼。这比一刀切禁字符串弱，弱出来的那一寸是明说的：要拦临时目录前缀就得把那个前缀列成形态，而两个历史设计稿的文件名长得和它一样。
+按形态匹配，不是全文禁那个协议名：`docs/protocol.md` 拿它当隔壁那个协议来比较，那是合法用法。拦的是自指的四种形态——旧包名、旧桥名、旧环境变量前缀、旧斜杠命令，外加旧前缀打头的标识符和散文里那句旧称呼。这比一刀切禁字符串弱，弱在哪里也写明了：要拦临时目录前缀就得把那个前缀列成形态，而两个历史设计稿的文件名长得和它一样。
 
-扫描面是 `src`、`extensions`、`test`、`scripts`、`.github`、`docs` 顶层、`website`（生成物除外）加四个根文件。豁免两种：整文件是历史（变更日志、brain、设计稿、锁文件与站点构建输出——锁文件记的是它生成时那个目录名，本仓库的工作目录留着旧拼写是有意的），以及逐条列出的旧名引用：README 的迁移段必须写出该卸载哪个、哪个文件从此没人读，探针与被替换那句断言的注释绕不开旧名字。按文件生效而不是按行，这是个真实的洞；收下它是因为每个文件只有一个理由拼旧名字，而没人用的豁免会让这条测试变红——表自己烂不掉。守卫这份文件自己也在豁免里：旧拼写在它那儿是数据，它不能同时是扫描对象。
+扫描面是 `src`、`extensions`、`test`、`scripts`、`.github`、`docs` 顶层、`website`（生成物除外）加四个根文件。豁免两种：整文件是历史（变更日志、brain、设计稿、锁文件与站点构建输出——锁文件记的是它生成时那个目录名，本仓库的工作目录留着旧拼写是有意的），以及逐条列出的旧名引用：README 的迁移段必须写出该卸载哪个、哪个文件从此没人读，探针与被替换那句断言的注释也都得拼旧名字。按文件生效而不是按行，这是个真实的洞；收下它是因为每个文件只有一个理由拼旧名字，而没人用的豁免会让这条测试变红——表自己烂不掉。守卫这份文件自己也在豁免里：旧拼写在它那儿是数据，它不能同时是扫描对象。
 
 另三条是结构断言：`pi.extensions` 里每个路径都存在，而 `extensions/` 里除了它不许有第二个 `.ts`；`harness.linkExtension()` 软链出去的文件名就是它；包名、命令名、`serverInfo.name` 是同一个词。v0.3.0 上这三个是三个词，远程调用方在 `initialize` 里读到的名字和宿主 `plugin list` 里的不是一回事。
 
