@@ -10,8 +10,9 @@
 
 - docs: README 的 Windows 指令从 `iwr ... -OutFile bootstrap.ps1` 改成了不落盘的 `& ([scriptblock]::Create((iwr -UseBasicParsing <raw-url>).Content)) -DryRun`（维护者：「不要保存安装脚本」）。这不是脚本机制的变更，是文档补上脚本一直支持的形态：`$PSCommandPath` 为空时它跳过旁边的 `package.json`、只在 `PATH` 上没有宿主时才去 spec 仓库读 raw pin，两条都成立才需要落盘。
 - docs: 安装一节按维护者要求重排成「omp 安装命令 + 一键安装命令，分 Linux / macOS / Windows」——正文只留命令与一句级的提醒（旧名迁移与 `mcp.json` 重抄、URL 形态、开关一行、占位 `models.yml` 的 create-only 条件）。被删掉的段落都有别的家：迁移细节在下面的改名一节，核验边界在 `docs/testing.md` 与脚本头注释，首跑事实就在本节上面。`test/naming.test.ts` 的 allowance 表跟着缩——README 不再念旧配置文件名，六条白名单成了空开的洞，删。
-- site: 「网站太啰嗦了」一轮——首页 install/xfer/testing 三张卡、testing 页描述、中英 README 的一键安装与 Windows 两节全部收紧，量砍了约四成；被守的事实一个字没丢（git URL 原文、pin 语义、create-only 条件、46/226/十三这些数字、每处诚实边界）。
-- 回归: `bun test` 226/226（项数未动，ps1 头注释改写字面仍过十三项）、`lint` / `tsc` 干净、站点 `build` + `check` 全过。
+- docs: 站文压缩一轮——首页 install/xfer/testing 三张卡、testing 页描述、中英 README 的一键安装与 Windows 两节全部收紧，量砍了约四成；被守的事实一个字没丢（git URL 原文、pin 语义、create-only 条件、46/226/十三这些数字、每处诚实边界）。
+- fix: 两份脚本结尾那条 models.yml 提示改成按分支说话。第二遍真机记录（同日，不落盘的 scriptblock 形态，DryRun 计划原文纯 ASCII）暴露了那句的歧义：宿主已在的机器上脚本碰都没碰 `models.yml`，句子里却出现「wrote one when it installed the host」，读起来像这台机器被写了。现在写了就报路径，没写就明说「这台没写、只有自装宿主且文件缺席才写」。真机那遍的 `-File` 与内存形态至此都过了；安装器与播种两支仍未真跑，边界不变。
+- 回归: `bun test` 226/226（项数未动，ps1 头注释改写字面仍过十三项）、`lint` / `tsc` 干净、站点 `build` + `check` 全过。推送后的 CI（含 host-probes）与 Pages 部署两个 run 均 success。
 
 ## 2026-10-19 — 零模型配置的机器：桥自己填占位模型，引导脚本给无头启动补 `models.yml`
 
