@@ -137,9 +137,9 @@
 
 ### PowerShell 那一支：十三项字面核对（`test/bootstrap-ps1.test.ts`，在 `bun test` 里）
 
-`scripts/bootstrap.ps1` 与上面这 46 项无关——**这 46 项一项都没执行过那份脚本**。写它的机器上 `pwsh` 与 `powershell` 都不在，脚本里没有一行被解释过。能不靠解释器做的，就是把它当文本读，跟 `bootstrap.sh` 对一遍：插件名（并与 `package.json:name` 对）、扩展仓库（从 README 那行 `omp install <url>` 现读，与探针同一个源头）、安装器地址（shell 那条是 `https://omp.sh/install`，PowerShell 那条必须是它加 `.ps1`）、读钉值时点名的宿主包名、拒绝 range 而要确切版本那道门的字面正则、每一次 `([scriptblock]::Create(...))` 调用都带 `-Binary`（共两次——钉值那次与 latest 那次；这一条盯着上游那个坑：`-Ref` 不给模式开关会被翻成 bun 源码构建）、`-Ref "v$Version"` 与 `-HostVersion` 走同一个 `$Pin`、整个文件纯 ASCII（PowerShell 5.1 按 ANSI 码页读无 BOM 的 UTF-8，一个非 ASCII 字符就是一条乱码注释，落在字符串字面量里就是一个错值）、所有副作用都过 `Run` 而 `Run` 先打印计划再执行，以及占位 `models.yml` 播种的四条：写进文件的正文逐行相等（heredoc 对 here-string）、`InstalledHost` 赋值各只一次且紧跟「No omp on PATH」那行、两边都是 create-only 且落在各自平台的 profile 路径上、dry-run 两边都只打同一句计划。
+`scripts/bootstrap.ps1` 与上面这 46 项无关——**这 46 项一项都没执行过那份脚本**。2026-10-19 真 Windows 机器头一遍跑了它（`omp 18.12.2` 已在 `PATH`、扩展已登记），DryRun 打出计划，真跑停在宿主自己的 `plugin doctor` 那枚 `✔` 上——过的只有「已有宿主」这一支；官方安装器那一次调用与占位 `models.yml` 那一次播种至今仍然没有任何地方执行过。字面核对因此还是字面核对，十三项把那支脚本当文本读，跟 `bootstrap.sh` 对一遍：插件名（并与 `package.json:name` 对）、扩展仓库（从 README 那行 `omp install <url>` 现读，与探针同一个源头）、安装器地址（shell 那条是 `https://omp.sh/install`，PowerShell 那条必须是它加 `.ps1`）、读钉值时点名的宿主包名、拒绝 range 而要确切版本那道门的字面正则、每一次 `([scriptblock]::Create(...))` 调用都带 `-Binary`（共两次——钉值那次与 latest 那次；这一条盯着上游那个坑：`-Ref` 不给模式开关会被翻成 bun 源码构建）、`-Ref "v$Version"` 与 `-HostVersion` 走同一个 `$Pin`、整个文件纯 ASCII（PowerShell 5.1 按 ANSI 码页读无 BOM 的 UTF-8，一个非 ASCII 字符就是一条乱码注释，落在字符串字面量里就是一个错值）、所有副作用都过 `Run` 而 `Run` 先打印计划再执行，以及占位 `models.yml` 播种的四条：写进文件的正文逐行相等（heredoc 对 here-string）、`InstalledHost` 赋值各只一次且紧跟「No omp on PATH」那行、两边都是 create-only 且落在各自平台的 profile 路径上、dry-run 两边都只打同一句计划。
 
-**这不是覆盖。** 断言的标题里就写着：往 `bootstrap.ps1` 里放一个语法错误，这十三项照样全绿。它们值一句「两个文件没写岔」，再多的一句都不值。这一节的存在是因为 README 把那条 PowerShell 命令摆给人敲，而这里唯一能自动跑的核对只有这一种形状。
+**这不是覆盖。** 断言的标题里就写着：往 `bootstrap.ps1` 里放一个语法错误，这十三项照样全绿——真解释器过它只有 2026-10-19 那一次手工，一次性，不在任何 CI 里。它们值一句「两个文件没写岔」，再多的一句都不值。这一节的存在是因为 README 把那条 PowerShell 命令摆给人敲，而这里唯一能自动跑的核对只有这一种形状。
 
 四道变异跑过（都按 `cp` 出来的备份恢复，没有用 `git checkout`）：把钉值那次调用上的 `-Binary` 删掉 → 一项红；把 `$Plugin` 改一个字符 → 一项红；删掉 ps1 播种的 `Test-Path -PathType Leaf` 守卫 → create-only 那条红，其余十二项不动；把播种的 `$InstalledHost = $true` 改成两处 → 「只一次」那条红。红的都正好是盯着这一处的那条。
 

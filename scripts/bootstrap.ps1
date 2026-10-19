@@ -23,15 +23,22 @@
   this script turns its own comments into mojibake on the machines that run it.
 
   Usage:
+    # in memory, nothing written to disk (from a PowerShell session):
+    & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.ps1).Content)) -DryRun
+    # or saved first:
     powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 [-DryRun]
       [-Uninstall] [-Reinstall] [-Upgrade] [-HostVersion <version>|latest]
       [-Spec <git-url>]
 
-  Written on a machine with no PowerShell at all, so not one line of this file has
-  been executed. What was checked instead is recorded in docs/testing.md, in the
-  subsection of the test:bootstrap section named for this script's literal checks,
-  which is where the claim "the two files agree, and that is all it is
-  worth" is written down.
+  First run on a real Windows machine: 2026-10-19, omp 18.12.2 already on PATH
+  and a2mcp already registered. DryRun printed the plan and wrote nothing; the
+  real run left the host alone and ended on the host's own plugin doctor tick.
+  That exercised the already-installed-host branch. The installer call and the
+  models.yml seeding have still never run anywhere. Thirteen items in bun test
+  read this file as text against bootstrap.sh; the boundary they set is
+  recorded in docs/testing.md, in the subsection of the test:bootstrap section
+  named for this script's literal checks -- "the two files agree, and that is
+  all it is worth." A syntax error here would still pass every one of them.
 #>
 [CmdletBinding()]
 param(
