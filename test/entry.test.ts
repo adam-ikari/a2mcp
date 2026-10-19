@@ -40,7 +40,11 @@ async function ping(port: number, token = TOKEN): Promise<number | null> {
 	try {
 		const res = await fetch(`http://127.0.0.1:${port}/`, {
 			method: "POST",
-			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			// `connection: close`, so "null" really means a fresh connection was refused.
+			// The bridge stops gracefully (src/server.ts), which lets an already-open
+			// keep-alive connection answer one more request — a pooled socket from an
+			// earlier ping would report 200 over a port that no longer accepts anything.
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json", connection: "close" },
 			body: JSON.stringify({
 				jsonrpc: "2.0",
 				id: 1,
@@ -386,5 +390,116 @@ describe("the a2mcp command", () => {
 		expect(r.notes.filter((n) => n.text === "a2mcp not running")).toHaveLength(3);
 		// Fail-closed means leaving the file alone, not healing it into something else.
 		expect(readFileSync(configPath(), "utf8")).toContain("not a number");
+	});
+});
+
+/**
+ * `/a2mcp tunnel` against a stand-in cloudflared.
+ *
+ * The config's `xfer.cloudflared` is set to an absolute path, which is the obtain
+ * escape hatch: no PATH lookup, no download, the file is used as given — so these
+ * tests never touch the network and never install anything. The fake announces a
+ * fixed `trycloudflare.com` hostname (the shape `openQuickTunnel` greps for) and
+ * logs its own spawns and SIGTERMs, which is how "one child, not two" and "the
+ * child died with the bridge" are checked without pid roulette.
+ */
+describe("the a2mcp tunnel command", () => {
+	let fakeCount = 0;
+	function fakeCloudflared(): { bin: string; spawns: () => number; terms: () => number } {
+		const tag = `cf${fakeCount++}`;
+		const log = join(dir, `${tag}.log`);
+		const bin = join(dir, `${tag}-cloudflared`);
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bun
+import { appendFileSync, writeSync } from "node:fs";
+appendFileSync(${JSON.stringify(log)}, \`spawn \${process.pid}\\n\`);
+process.on("SIGTERM", () => {
+	appendFileSync(${JSON.stringify(log)}, \`term \${process.pid}\\n\`);
+	process.exit(0);
+});
+writeSync(1, "https://entry-tunnel.trycloudflare.com\\n");
+setTimeout(() => process.exit(0), 60_000);
+`,
+			{ mode: 0o755 },
+		);
+		const count = (kind: string) =>
+			existsSync(log)
+				? readFileSync(log, "utf8")
+						.split("\n")
+						.filter((l) => l.startsWith(kind)).length
+				: 0;
+		return { bin, spawns: () => count("spawn"), terms: () => count("term") };
+	}
+
+	// The fake's hostname is fixed, so an URL assertion is really an "openQuickTunnel
+	// found the announcement" assertion.
+	const URL = "https://entry-tunnel.trycloudflare.com";
+
+	async function startWithFake(cf: { bin: string }): Promise<Runner> {
+		writeConfig({ host: "127.0.0.1", port: 0, token: TOKEN, xfer: { cloudflared: cf.bin } });
+		const r = newRunner();
+		await r.start();
+		return r;
+	}
+
+	const tunnelRecords = () =>
+		(existsSync(join(dir, "audit.log")) ? readFileSync(join(dir, "audit.log"), "utf8") : "")
+			.trim()
+			.split("\n")
+			.filter(Boolean)
+			.map((l) => JSON.parse(l) as Record<string, unknown>)
+			.filter((rec) => rec.tool === "tunnel");
+
+	test("opens the tunnel, prints the URL and the only-gate warning, and audits the start", async () => {
+		const cf = fakeCloudflared();
+		const r = await startWithFake(cf);
+		await r.command("tunnel");
+		expect(texts(r)).toContain(`a2mcp tunnel: ${URL}/ — public; the Bearer token is the only gate`);
+		expect(texts(r)).not.toContain(TOKEN);
+		expect(cf.spawns()).toBe(1);
+		const started = tunnelRecords().find((rec) => !rec.isError && String(rec.args).includes("start"));
+		expect(started).toMatchObject({ sid: null, phase: "done", tool: "tunnel" });
+		expect(String(started?.args)).toContain(URL);
+	});
+
+	test("a second tunnel reuses the open one and spawns nothing", async () => {
+		const cf = fakeCloudflared();
+		const r = await startWithFake(cf);
+		await r.command("tunnel");
+		const recordsBefore = tunnelRecords().length;
+		await r.command("tunnel");
+		expect(texts(r)).toContain(`a2mcp tunnel already open: ${URL}/`);
+		expect(cf.spawns()).toBe(1);
+		// Idempotence is the whole claim here: one child, one audit line, one URL.
+		expect(tunnelRecords()).toHaveLength(recordsBefore);
+	});
+
+	test("tunnel stop closes the child, audits it, and then says none is open", async () => {
+		const cf = fakeCloudflared();
+		const r = await startWithFake(cf);
+		await r.command("tunnel");
+		await r.command("tunnel stop");
+		expect(texts(r)).toContain(`a2mcp tunnel closed: ${URL}/`);
+		expect(cf.terms()).toBe(1);
+		const stopped = tunnelRecords().find((rec) => String(rec.args).includes("stop"));
+		expect(stopped).toMatchObject({ sid: null, isError: false });
+		await r.command("tunnel stop");
+		expect(texts(r)).toContain("a2mcp tunnel: none open");
+		expect(tunnelRecords().filter((rec) => String(rec.args).includes("stop"))).toHaveLength(1);
+	});
+
+	test("the endpoint going down takes the tunnel child with it", async () => {
+		const cf = fakeCloudflared();
+		const r = await startWithFake(cf);
+		await r.command("tunnel");
+		const port = r.advertisedPort() as number;
+		expect(await ping(port)).toBe(200);
+		AgentRegistry.resetGlobalForTests();
+		await r.shutdown();
+		// The public hostname must not outlive the bridge that opened it: the child
+		// got its SIGTERM and the port is gone in the same breath.
+		expect(cf.terms()).toBe(1);
+		expect(await ping(port)).toBeNull();
 	});
 });

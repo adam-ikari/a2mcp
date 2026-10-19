@@ -1,13 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { auditHostLlm } from "../src/audit.ts";
+import { auditHostLlm, auditTunnel } from "../src/audit.ts";
 import { ensurePlaceholderOnMainSession } from "../src/auto-model.ts";
 import { buildCallTool, buildToolCatalog, hasMainSession } from "../src/bridge.ts";
 import type { BridgeConfig } from "../src/config.ts";
 import { configPath, generateToken, loadConfig, saveConfig } from "../src/config.ts";
+import { resolveBinary } from "../src/obtain.ts";
 import { startServer } from "../src/server.ts";
 import { hostLlmState, rearmMainSession, setEnabled } from "../src/takeover.ts";
+import { openQuickTunnel, type QuickTunnel } from "../src/tunnel.ts";
 import { createXfer, XFER_TOOLS, type Xfer } from "../src/xfer.ts";
 
 /**
@@ -68,6 +70,19 @@ let liveCallTool: ReturnType<typeof buildCallTool> | null = null;
  * shutdown path has to close it without a session in hand.
  */
 let xfer: Xfer | null = null;
+
+/**
+ * The operator-opened quick tunnel in front of the MCP endpoint, or `null`.
+ *
+ * Runtime state only — like the takeover toggle, it never touches the config
+ * and dies with the bridge. One per process because `server` is one per
+ * process; `tunnelOpening` is the same in-flight guard `bringingUp` is for the
+ * bind: two concurrent `/a2mcp tunnel` calls would otherwise spawn two
+ * cloudflared children and the module would only remember (and only be able
+ * to stop) the last one.
+ */
+let mcpTunnel: QuickTunnel | null = null;
+let tunnelOpening: Promise<void> | null = null;
 
 /** Report a takeover that could not be armed, in the three places an operator looks. */
 function reportArmFailure(ctx: ExtensionContext, e: unknown): void {
@@ -212,6 +227,12 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 		if (hasMainSession()) return;
 		// The share holds a public URL and a spawned server; the endpoint going away
 		// has to take both with it, or the hostname outlives the bridge that opened it.
+		// The MCP tunnel is the same kind of promise: a public hostname pointing at a
+		// port this process is about to close. No audit here — a stop by teardown is
+		// the same "no record for a plain stop" rule `xfer.stop()` follows.
+		await mcpTunnel?.stop();
+		mcpTunnel = null;
+		tunnelOpening = null;
 		await xfer?.stop();
 		xfer = null;
 		server?.stop();
@@ -221,7 +242,8 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("a2mcp", {
-		description: "Show a2mcp status, rotate its token with `a2mcp rotate`, or show the full token with `a2mcp token`.",
+		description:
+			"Show a2mcp status, rotate its token with `a2mcp rotate`, show the full token with `a2mcp token`, or open (`a2mcp tunnel`) and close (`a2mcp tunnel stop`) a public quick tunnel in front of the MCP endpoint.",
 		handler: async (args, ctx) => {
 			try {
 				if (args.trim() === "rotate") {
@@ -247,6 +269,60 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 					ctx.ui.notify(`a2mcp token: ${cfg.token}`);
 					return;
 				}
+				if (args.trim() === "tunnel" || args.trim() === "tunnel stop") {
+					if (!server || !cfg) {
+						ctx.ui.notify("a2mcp not running", "error");
+						return;
+					}
+					// The endpoint and the config are module state that a shutdown can
+					// null while this async path is in flight — read them into locals.
+					const port = server.port;
+					const conf = cfg;
+					if (args.trim() === "tunnel stop") {
+						if (!mcpTunnel) {
+							ctx.ui.notify("a2mcp tunnel: none open");
+							return;
+						}
+						const closing = mcpTunnel;
+						await closing.stop();
+						if (mcpTunnel === closing) mcpTunnel = null;
+						await auditTunnel("stop", { url: closing.url }, null);
+						ctx.ui.notify(`a2mcp tunnel closed: ${closing.url}/`);
+						return;
+					}
+					if (tunnelOpening) {
+						// A start is already in flight and it reports its own outcome; ride
+						// along instead of spawning a second child nothing would remember.
+						await tunnelOpening;
+						if (mcpTunnel) ctx.ui.notify(`a2mcp tunnel already open: ${mcpTunnel.url}/`);
+						return;
+					}
+					if (mcpTunnel) {
+						ctx.ui.notify(
+							`a2mcp tunnel already open: ${mcpTunnel.url}/ — public; the Bearer token is the only gate; /a2mcp tunnel stop closes it`,
+						);
+						return;
+					}
+					tunnelOpening = (async () => {
+						try {
+							const cf = await resolveBinary("cloudflared", conf.xfer.cloudflared, null);
+							const opened = await openQuickTunnel({ bin: cf.path, port });
+							mcpTunnel = opened;
+							await auditTunnel("start", { url: opened.url, port }, null);
+							ctx.ui.notify(
+								`a2mcp tunnel: ${opened.url}/ — public; the Bearer token is the only gate; /a2mcp tunnel stop closes it`,
+							);
+						} catch (e) {
+							const why = (e as Error)?.message ?? String(e);
+							await auditTunnel("start", { port }, why);
+							ctx.ui.notify(`a2mcp tunnel failed to open: ${why}`, "error");
+						} finally {
+							tunnelOpening = null;
+						}
+					})();
+					await tunnelOpening;
+					return;
+				}
 				if (!server || !cfg) {
 					ctx.ui.notify("a2mcp not running", "error");
 					return;
@@ -258,7 +334,7 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 				// rather than left to be inferred from `denied=0`.
 				const st = hostLlmState();
 				ctx.ui.notify(
-					`a2mcp on ${url} (token ${cfg.token.slice(0, 6)}…, port ${server.port}) host_llm=${st.enabled ? "allow" : st.degraded ? "deny (tripwire only)" : "deny"} denied=${st.denied}`,
+					`a2mcp on ${url} (token ${cfg.token.slice(0, 6)}…, port ${server.port}) host_llm=${st.enabled ? "allow" : st.degraded ? "deny (tripwire only)" : "deny"} denied=${st.denied}${mcpTunnel ? ` tunnel=${mcpTunnel.url}` : ""}`,
 				);
 			} catch (e) {
 				ctx.ui.notify(`a2mcp command failed: ${(e as Error)?.message ?? String(e)}`, "error");

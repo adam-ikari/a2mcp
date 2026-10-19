@@ -265,3 +265,34 @@ export function auditXfer(
 		env,
 	);
 }
+
+/**
+ * One record per `/a2mcp tunnel` start or stop.
+ *
+ * The MCP tunnel hands the bridge's own endpoint a public hostname, so this is
+ * the record of the bridge managing a public listener — there is no `sid` to
+ * attribute it to, because only the operator's session can open or close it
+ * (`sid: null`, the same standing as the startup host-llm record). `args`
+ * carries the announced hostname and the local port; the token never enters.
+ */
+export function auditTunnel(
+	action: string,
+	detail: Record<string, unknown>,
+	error: string | null,
+	env?: NodeJS.ProcessEnv,
+): Promise<void> {
+	const args = { action, ...detail };
+	return appendLine(
+		`${JSON.stringify({
+			ts: new Date().toISOString(),
+			id: randomUUID(),
+			sid: null,
+			phase: "done",
+			tool: "tunnel",
+			isError: error !== null,
+			args: serializeArgs(args),
+			...(error ? { error: error.slice(0, 200) } : {}),
+		})}\n`,
+		env,
+	);
+}

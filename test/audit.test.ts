@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { auditDone, auditHostLlm, auditLogPath, auditStart, auditWriteFailures } from "../src/audit.ts";
+import { auditDone, auditHostLlm, auditLogPath, auditStart, auditTunnel, auditWriteFailures } from "../src/audit.ts";
 
 /**
  * Rotation retention.
@@ -124,6 +124,7 @@ describe("audit never loses a call", () => {
 			["auditStart", () => auditStart("shape-start", "sid", "read", {}, env)],
 			["auditDone", () => auditDone("shape-done", "sid", "read", {}, false, env)],
 			["auditHostLlm", () => auditHostLlm("sid", true, null, env)],
+			["auditTunnel", () => auditTunnel("stop", {}, null, env)],
 		] as const) {
 			const returned = call();
 			expect(returned, `${name} returns the queue tail`).toBeInstanceOf(Promise);
@@ -138,6 +139,22 @@ describe("audit never loses a call", () => {
 		// rather than in its id — and `args` is itself a serialized string, so the
 		// payload shows up escaped inside the line.
 		expect(raw).toContain('"tool":"host_llm"');
+	});
+
+	test("a tunnel record carries no session and cuts its error like the others", async () => {
+		// `/a2mcp tunnel` is an operator command, not a request: there is no caller
+		// session to attribute, so `sid` is null by design — the same shape as the
+		// startup host_llm record (also no `id` to pair by; it mints a uuid). What
+		// has to hold is the tag, the null, and the 200-char error cut, because the
+		// error half is the line an operator greps when the tunnel did not come up.
+		await auditTunnel("start", { url: "https://t.example.trycloudflare.com", port: 41_000 }, null, env);
+		await auditTunnel("start", { port: 41_000 }, "t".repeat(300), env);
+		const recs = readRecords().filter((r) => r.tool === "tunnel");
+		const started = recs.find((r) => !r.isError && String(r.args).includes("t.example"));
+		expect(started).toMatchObject({ sid: null, phase: "done", tool: "tunnel", isError: false });
+		expect(String(started?.args)).toContain('"port":41000');
+		const failed = recs.find((r) => r.isError);
+		expect(String(failed?.error)).toHaveLength(200);
 	});
 
 	test("args that JSON.stringify rejects are still recorded", async () => {
