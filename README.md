@@ -62,167 +62,81 @@ graph TB
 
 ## Install
 
-Two paths, and what separates them is whether the machine has `omp` yet: **with a
-host already installed**, the single `omp install` command below is the whole thing;
-**on a fresh machine**, the one-shot script adds one layer — the host — and its
-extension half runs that same command.
+Two paths, and what separates them is whether the machine has `omp` yet: with a
+host already installed, the single `omp install` command is the whole thing; on a
+fresh machine, the one-shot script installs the host first and then runs that
+same command.
 
-### Install with omp (the machine already has omp)
-
-On any machine, from the git URL:
+### With omp (the machine already has omp)
 
 ```sh
 omp install https://github.com/adam-ikari/a2mcp.git
 ```
 
-That installs it into `~/.omp/plugins/node_modules/a2mcp`. To remove it:
+To remove it:
 
 ```sh
 omp plugin uninstall a2mcp
 ```
 
-**Upgrading from v0.3.0 or earlier: uninstall first.** The plugin lock keeps its
-record under `package.json:name`, and this round changed the name. Installing the
-new URL while `pi-a2a-ext` is still registered leaves both entries in place, and
-the host loads both — two ports, two tokens, two takeover arms in one process,
-where the second arm's snapshot is the only one left to restore from.
+Upgrading from v0.3.0 or earlier, retire the old name first — the plugin lock
+records by package name, and with both entries registered the host loads both:
 
 ```sh
 omp plugin uninstall pi-a2a-ext
-omp install https://github.com/adam-ikari/a2mcp.git
 ```
 
-Nothing reads `~/.omp/agent/a2a-bridge.json` any more and the bridge does not look
-for it: the config file is `~/.omp/agent/a2mcp.json` now, with a token generated
-fresh, so every remote `mcp.json` has to be re-copied. `a2a-bridge.log` and
-`a2a-bridge.installs.json` stay where they are; the new generation writes its own
-two files. Leftover `A2A_BRIDGE_*` environment variables are ordinary variables
-now — nobody reads them.
+After retiring the old name the config file and token are generated fresh, so
+every remote `mcp.json` has to be re-copied.
 
-**That is the only install path.** `omp install` itself also takes a directory and
-npm specs, but this extension does not offer a local install: what you install is
-the repository behind the git URL above. The `pi.extensions` field in
-`package.json` is what tells omp which entry file to load, so do not remove it.
+The URL has to be the full `https://….git`: a GitHub `owner/repo` shorthand is
+rejected as an invalid package name, and a `.tgz` fails with `ENOTDIR`.
 
-The URL has to be the full `https://….git` — a GitHub `owner/repo` shorthand is
-rejected as an invalid package name, and pointing it at a `.tgz` fails with
-`ENOTDIR`.
+### One-shot install (fresh machine)
 
-Do not hand-symlink into `~/.omp/agent/extensions/` either:
-`ln -s "$PWD/extensions/a2mcp.ts" ...` only works when `$PWD` happens to be
-the repo root. Run it from anywhere else and it links a path that does not exist,
-the bridge never comes up, and the host says nothing about it.
-
-All of the above was measured, and `bun run test:install` checks the package,
-installs it into a temporary `HOME`, starts a host there, and drives the bridge
-over MCP as a remote client. Since host 18.11.0 — re-checked on 18.12.1 —
-`~/.omp/plugins` resolves by `HOME`, and what loads is the registration in
-`omp-plugins.lock.json` — a bare symlink loads nothing. So that half is
-self-contained, and it leaves no registration on your real machine. See
-[docs/testing.md](docs/testing.md).
-
-### One-shot install (no omp on the machine yet)
-
-The repo ships a bootstrap script, and the host layer is all it manages:
+**Linux**
 
 ```sh
-sh scripts/bootstrap.sh --dry-run   # print the plan, write nothing
-sh scripts/bootstrap.sh
-```
-
-Nothing has to be cloned to run it — the same script through a pipe:
-
-```sh
+curl -fsSL https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.sh | sh -s -- --dry-run   # plan only
 curl -fsSL https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.sh | sh
-# the plan only: … | sh -s -- --dry-run
 ```
 
-It does three things: with no `omp` on PATH it runs the official installer
-(`curl -fsSL https://omp.sh/install | sh`, or `--binary --ref v<version>` when it can
-read a pin); then it runs the one `omp install <git-url>` above; then it checks itself
-with the host's own `omp plugin doctor` and compares the version the host reports
-against that pin. The pin is the host version every probe in this repo was last run
-green against. Next to a checkout it comes from `package.json`; run through a pipe
-there is no such file, so the script reads it from the `package.json` of the same
-repository it is about to clone (`https://raw.githubusercontent.com/<owner>/<repo>/HEAD/package.json`).
-No curl for the fetch, a body with no pin in it, a `--spec` that is not a `github.com`
-URL: the script says which of those happened on stderr and installs the latest host.
-`--host-version <version>` picks the version yourself and sends no request at all, and
-`--host-version latest` says so on purpose. A host already on PATH is
-left alone (`--upgrade` to re-run the installer) and asks for no pin either — nothing is
-going to be installed, so there is nothing to pin; an existing registration is skipped
-(`--reinstall` to force it), and `--uninstall` removes only the registration, leaving
-the token and the audit log.
+**macOS** (identical to Linux)
 
-Outside the installer it writes one file, under a deliberately narrow condition: when
-the script installed the host itself and `~/.omp/agent/models.yml` does not exist, it
-seeds that file with one unreachable placeholder provider. Headless starts
-(`omp --mode rpc`) die in code that runs before any extension, so this file is the only
-thing that can save them; it is create-only — an existing file is not touched, and a
-machine with `omp` already on PATH gets nothing. The details are in Troubleshooting.
+```sh
+curl -fsSL https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.sh | sh -s -- --dry-run   # plan only
+curl -fsSL https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.sh | sh
+```
 
-**Installing the extension still has one path**, and the last thing the script does is
-run it. It symlinks nothing, offers no local install, validates no module graph and
-generates no token. The host checks for its own updates at startup by default, so
-"installed at the pinned version" is not "stays at the pinned version". The coverage is
-the `test:bootstrap` section of [docs/testing.md](docs/testing.md) (46 checks, one of
-which asks GitHub itself whether the derived URL serves this repo's pin); the official
-installer itself is never executed by a probe — one group replaces the download with a
-fake curl to drive the fresh-host branch — which is why what that probe tests is the
-script's decisions. The piped form was run once for real, into a throwaway `HOME`
-with `PI_INSTALL_DIR` pointing inside it: host 18.12.1 by `--ref`, `a2mcp@0.4.0`
-registered, `plugin doctor` clean, `--uninstall` taking the registration back out.
-
-**Windows?** The same script exists as `scripts/bootstrap.ps1`. It adds one thing the
-shell twin does not need: the official `https://omp.sh/install.ps1` prefers a bun source
-build whenever bun is installed, and `-Ref` without a mode switch flips it into that
-build as well, so every call this script makes passes `-Binary` (read from the
-installer's own main block, 2026-10-19).
+**Windows** (PowerShell, runs in memory; nothing is saved to disk)
 
 ```powershell
-iwr https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.ps1 -OutFile bootstrap.ps1
-powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 -DryRun
-powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1
+& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.ps1).Content)) -DryRun
+& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.ps1).Content))
 ```
 
-The `-OutFile` step is not ceremony: piped into `iex` the script has no
-`$PSCommandPath`, so it loses the `package.json` beside it and falls back to the
-repository's. The pin otherwise works the same way — `-HostVersion <version>` picks it
-and sends no request, a value that is not an exact version is refused as a pin, and with
-nothing readable the latest host is installed with a warning saying so. `-Uninstall`,
-`-Reinstall` and `-Upgrade` do what the shell flags do. Two places differ. The host
-directory is whatever each machine's own official installer defaults to — `~/.local/bin`
-for the shell one, `%LOCALAPPDATA%\omp` for this one — and the binaries `xfer` fetches
-land in `%LOCALAPPDATA%\a2mcp\bin`. And there is no `tar` check: `bootstrap.sh` warns
-that the bridge unpacks release assets with `tar`, while on Windows the bridge's own zip
-reader does the unpacking and nothing on PATH is needed.
+The script runs three steps: with no `omp` on PATH it calls the official
+installer at the pinned version; then the one `omp install` above — the
+extension keeps that single install path; then the host's own
+`omp plugin doctor` closes it out. Remaining flags: `--upgrade` re-runs the
+installer, `--reinstall` forces re-registration, `--uninstall` takes the
+registration back (token and audit stay), `--host-version <version>` picks the
+version and sends no request. The host self-updates at startup by default —
+"installed at the pin" is not "stays at the pin". The script writes one file
+outside the installer: a placeholder model config when it installed the host
+itself and `~/.omp/agent/models.yml` did not exist (create-only; a machine with
+`omp` already on PATH gets nothing — Troubleshooting says why it exists).
 
-**That script has never been executed.** The machine that wrote it has no PowerShell at
-all, so not one line of it — the installer call, the plugin gate, the argument
-definitions — has run anywhere. Thirteen items in `bun test` read it as text and compare it
-against `bootstrap.sh` (`test/bootstrap-ps1.test.ts`): same plugin name, same repository
-URL, same installer, same exact-version gate, `-Binary` on every installer call, ASCII
-throughout, `Run` planning before executing, and the placeholder `models.yml` seeding
-agreeing line for line (same file body, same fresh-host-only branch, create-only, dry-run
-plans it). Those items say the two files agree. They
-do not say the script works, and a syntax error in it would pass every one.
-
-Either path ends the same way, and a machine with no model configured is no longer a
-stopper: the host opens a session anyway, the bridge fills the empty model slot with
-the unreachable placeholder `a2mcp/offline` (Troubleshooting has the shape), and the
-bridge generates its own config and token under `~/.omp/agent/` on first start, so
-there is nothing to set up per machine. The exception is the headless start
-(`omp --mode rpc`), which dies before any extension code runs; the one-shot script
-covers it by seeding `~/.omp/agent/models.yml` on exactly the branch where it installed
-the host.
-
-After starting the host omp, the notification bar shows:
+Either path ends the same way. Start the host and the notification bar shows:
 
 ```
 a2mcp listening on http://127.0.0.1:<port> (token <first 6 chars>…)
 ```
 
-`<port>` is the actual listening port (random by default).
+`<port>` is the actual listening port (random by default). The bridge generates
+its own config and token, so nothing is set up per machine; a machine with no
+model configured opens a session anyway — the bridge fills the empty slot with
+the placeholder model (Troubleshooting).
 
 ## Configuration
 
@@ -417,7 +331,7 @@ Design trade-off (read this before adding a feature):
 
 ## Troubleshooting
 
-- **First start on a machine with no model configuration**: the host still opens a session, and the bridge registers a placeholder provider `a2mcp/offline` at `session_start` and selects it. Its baseUrl points at `a2mcp.invalid`, an RFC 6761 reserved domain that can never resolve; the whole thing is runtime state — no file is written, and an operator's already-selected model is never overwritten, because the bridge only fills an empty slot. The MCP surface is therefore ready out of the box: the notification bar broadcasts and remote `initialize`/`tools/list` answer 200. The placeholder does not infer. A prompt on the host comes back as a connection-refused soft failure — measured on 18.12.1: `Couldn't connect to a2mcp.invalid (connection refused)` — and real inference always means `/login` and `/model`. Older hosts stop at `No model selected` (older still: `No models available`) on such a machine; that is the prompt-time gate, and upgrading the host is the fix. What the placeholder cannot reach is the headless start (`omp --mode rpc`): it dies inside `createAgentSession`, before any extension code runs, so only a `~/.omp/agent/models.yml` that exists before boot saves it. The one-shot scripts write exactly that file on exactly one branch: the script installed the host itself and the file was absent (create-only — an existing file is not read or touched, and a machine that already had `omp` on PATH gets nothing). A manually installed host that wants headless can write the same shape, documented under 占位模型 in `docs/protocol.md`. Probes run this unreachable shape daily on Linux and macOS; the Windows path (`C:\Users\<user>\.omp\agent\models.yml`) and the PowerShell twin have never been executed here.
+- **First start on a machine with no model configuration**: the host still opens a session, and the bridge registers a placeholder provider `a2mcp/offline` at `session_start` and selects it. Its baseUrl points at `a2mcp.invalid`, an RFC 6761 reserved domain that can never resolve; the whole thing is runtime state — no file is written, and an operator's already-selected model is never overwritten, because the bridge only fills an empty slot. The MCP surface is therefore ready out of the box: the notification bar broadcasts and remote `initialize`/`tools/list` answer 200. The placeholder does not infer. A prompt on the host comes back as a connection-refused soft failure — measured on 18.12.1: `Couldn't connect to a2mcp.invalid (connection refused)` — and real inference always means `/login` and `/model`. Older hosts stop at `No model selected` (older still: `No models available`) on such a machine; that is the prompt-time gate, and upgrading the host is the fix. What the placeholder cannot reach is the headless start (`omp --mode rpc`): it dies inside `createAgentSession`, before any extension code runs, so only a `~/.omp/agent/models.yml` that exists before boot saves it. The one-shot scripts write exactly that file on exactly one branch: the script installed the host itself and the file was absent (create-only — an existing file is not read or touched, and a machine that already had `omp` on PATH gets nothing). A manually installed host that wants headless can write the same shape, documented under 占位模型 in `docs/protocol.md`. Probes run this unreachable shape daily on Linux and macOS; on Windows the script itself ran for the first time on 2026-10-19 (already-installed-host branch), and the `C:\Users\<user>\.omp\agent\models.yml` seeding path has never been executed there.
 - **401 `unauthorized`**: the token does not match. The remote `mcp.json`'s `Authorization` header must equal the config's `token`; update the remote side after `/a2mcp rotate`. The host's stderr says `[a2mcp] N unauthorized attempt(s)` for the first failure and every 50th after it; those attempts stay out of the audit log on purpose (see the audit bullet under [Security and boundaries](#security-and-boundaries)).
 - **The bridge refuses to start with `field 'token' must be at least 32 characters`**: somebody wrote a short token into `a2mcp.json`. Put a real secret there (or delete the field and let the bridge generate and persist one); the bridge will not swap out a token it was handed.
 - **The bridge refuses to start with `field 'host_llm' must be 'deny' or 'allow'`**: the field was written with anything else (`"false"`, `"ALLOW"`, a boolean). The value decides the takeover's startup state; a fuzzy one is refused, not guessed (see [Host inference takeover](#host-inference-takeover)).

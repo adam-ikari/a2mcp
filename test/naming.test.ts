@@ -68,17 +68,10 @@ const SKIP_PATHS = [
  * test below, so the table cannot quietly grow stale.
  */
 const ALLOWED: { file: string; text: string; why: string }[] = [
-	// Migration instructions must say what to uninstall and which file stops being read.
+	// Migration instructions must say what to uninstall; the rest of the rename
+	// history lives in the CHANGELOG, off the live surfaces.
 	{ file: "README.md", text: "pi-a2a-ext", why: "the upgrade note names the entry to remove" },
-	{ file: "README.md", text: "a2a-bridge.json", why: "names the config file nobody reads any more" },
-	{ file: "README.md", text: "a2a-bridge.log", why: "names the audit log left in place" },
-	{ file: "README.md", text: "a2a-bridge.installs.json", why: "names the install ledger left in place" },
-	{ file: "README.md", text: "A2A_BRIDGE_", why: "names the env vars that became inert" },
 	{ file: "README_ZN.md", text: "pi-a2a-ext", why: "the upgrade note names the entry to remove" },
-	{ file: "README_ZN.md", text: "a2a-bridge.json", why: "names the config file nobody reads any more" },
-	{ file: "README_ZN.md", text: "a2a-bridge.log", why: "names the audit log left in place" },
-	{ file: "README_ZN.md", text: "a2a-bridge.installs.json", why: "names the install ledger left in place" },
-	{ file: "README_ZN.md", text: "A2A_BRIDGE_", why: "names the env vars that became inert" },
 	// Quoted history: the text being discussed is the assertion that was replaced.
 	{ file: join("test", "hardening.ts"), text: "a2a_file_", why: "names the tool prefix that guard defended" },
 	{ file: join("test", "install-probe.ts"), text: 'a2a_"', why: "quotes the assertion line it replaced" },
