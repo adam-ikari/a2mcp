@@ -20,7 +20,7 @@
 set -eu
 
 PLUGIN="a2mcp"
-DEFAULT_SPEC="a2mcp"
+DEFAULT_SPEC="https://github.com/adam-ikari/a2mcp.git"
 INSTALLER_URL="https://omp.sh/install"
 PIN_PACKAGE="@oh-my-pi/pi-coding-agent"
 

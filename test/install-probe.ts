@@ -732,13 +732,15 @@ try {
 rmSync(stage, { recursive: true, force: true });
 
 // --- 6. what the README's one command puts on disk ----------------------------
-// The reason the README teaches the npm name and not the git URL is size and
-// shape on disk: a git spec installs a whole checkout of this repo (measured
+// The npm name is a reserved shape, not an available one: the package is not
+// published, and the README teaches the git URL. What this group still proves
+// when the registry does answer is the size-and-shape claim behind that
+// reservation — a git spec installs a whole checkout of this repo (measured
 // 2.3 MB, docs/ and test/ and website/ included — bun's git path ignores the
-// `files` field), the registry installs the packed tarball. This group runs the
-// real `omp install a2mcp` in a throwaway HOME and asserts the shape that
-// landed. Network is this group's business, not CI's: a registry that does not
-// answer (or does not carry the package yet) skips the whole group as info.
+// `files` field), a published package installs the packed tarball. The group
+// runs the real `omp install a2mcp` in a throwaway HOME and asserts the shape
+// that landed. Network is this group's business, not CI's: a registry that does
+// not answer (or does not carry the package yet) skips the whole group as info.
 {
 	const npmHome = mkdtempSync(join(tmpdir(), "install-npm-"));
 	const npmEnv = { ...process.env, HOME: npmHome };

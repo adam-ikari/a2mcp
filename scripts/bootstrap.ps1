@@ -59,7 +59,7 @@ param(
 # Parity with bootstrap.sh. Keep these four in step with that file: the items in
 # test/bootstrap-ps1.test.ts read both scripts and fail when they drift.
 $Plugin = "a2mcp"
-$DefaultSpec = "a2mcp"
+$DefaultSpec = "https://github.com/adam-ikari/a2mcp.git"
 $InstallerUrl = "https://omp.sh/install.ps1"
 $PinPackage = "@oh-my-pi/pi-coding-agent"
 # bootstrap.sh: the installer's own default, so the path reported is the path

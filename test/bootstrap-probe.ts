@@ -485,24 +485,22 @@ console.log("\n--- prerequisites ---");
 	);
 
 	stubHost();
-	// The default spec is an npm name now, so git belongs to the script only when
-	// the spec is a git URL again — the compatibility form asked for on purpose.
-	const noGit = runBootstrap([farm(core(["git"]))], home, [
-		"--dry-run",
-		"--spec",
-		"https://github.com/adam-ikari/a2mcp.git",
-	]);
+	// The default spec is the git URL again (the npm name stays only as the
+	// reserved shape), so the bare default run is the one that needs git. curl is
+	// in the farm so the installer check passes for the missing host, and the run
+	// stops at the clone the host would do for the URL spec.
+	const noGit = runBootstrap([farm(core(["omp", "git"]))], home, ["--dry-run"]);
 	check(
 		noGit.code !== 0 && /wanted: git on PATH/.test(noGit.out),
-		"a git-shaped spec without git on PATH stops and says git",
+		"the git-shaped default spec without git on PATH stops and says git",
 		noGit.lines.find((l) => l.includes("git")) ?? `exit ${noGit.code}`,
 	);
 
 	stubHost();
-	const npmNoGit = runBootstrap([farm(core(["git"]))], home, ["--dry-run"]);
+	const npmNoGit = runBootstrap([farm(core(["omp", "git"]))], home, ["--dry-run", "--spec", "a2mcp"]);
 	check(
 		npmNoGit.code === 0,
-		"the npm-shaped default spec asks for no git",
+		"an npm-shaped spec asks for no git",
 		npmNoGit.lines.find((l) => l.includes("wanted")) ?? `exit ${npmNoGit.code}`,
 	);
 
