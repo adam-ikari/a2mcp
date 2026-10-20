@@ -210,19 +210,22 @@ const PINS: Pins = {
 };
 
 /**
- * Bytes accepted for one download, and the wall clock allowed to fetch it. Why
- * both exist is at `download()`.
+ * Bytes accepted for one download, the idle window, and the overall deadline.
+ * Why each exists is at `download()`.
  *
  * The cap clears the largest pinned asset — cloudflared's Windows `.exe`, 52.7 MB
  * as of 2026-10-19 — with room for a version bump, and still stops a stream that
- * never ends. The deadline is not re-measured for that asset: 120 s is the wall
- * clock this host rounded up from the Linux build it had fetched by hand, and 53 MB
- * inside it asks for roughly 450 KB/s sustained. A Windows host on a slower
- * connection gets a timeout in the audit log rather than a slow share, which is the
- * honest shape of a limit nobody has run on the target platform.
+ * never ends. The two timers replace the old 120 s wall clock over the whole
+ * body: that one could not tell a dead connection from a slow one, and a Windows
+ * host measured it on 2026-10-20 — 52.7 MB inside 120 s asks for roughly
+ * 450 KB/s, and the machine that tried got `The operation timed out.` with no
+ * way to know which of the two it had. 30 s without a single byte now names the
+ * dead case; 10 minutes of steady dribbling (≈90 KB/s at the largest asset)
+ * covers the slow one; the deadline stays only for the stream that never stops.
  */
 const MAX_BYTES = 64 * 1024 * 1024;
-const TIMEOUT_MS = 120_000;
+const IDLE_MS = 30_000;
+const TOTAL_MS = 600_000;
 
 export interface InstallInfo {
 	name: BinaryName;
@@ -267,7 +270,9 @@ export interface ObtainDeps {
 	 * can hand in. Production never passes this: `PINS` above is the authority.
 	 */
 	pins?: Pins;
-	timeoutMs?: number;
+	/** Test seam: the idle window and the overall deadline of `download()`. */
+	idleMs?: number;
+	totalMs?: number;
 	maxBytes?: number;
 }
 
@@ -563,37 +568,85 @@ async function extract(bytes: Buffer, wanted: string, kind: Kind, limit: number)
 	}
 }
 
+/** A stream that stopped making progress inside the idle window. */
+class DownloadStalled extends Error {}
+/** A stream that is still moving but has run past the overall deadline. */
+class DownloadTooSlow extends Error {}
+
 /**
- * Fetch with a size cap and a deadline.
+ * Fetch with a size cap, an idle window, and an overall deadline. Why the two
+ * timers replaced a single wall clock is at the constants above.
  *
- * Both are load-bearing, not hygiene: this host has measured GitHub archives
- * stalling at 0 B/s behind a TLS-intercepting network, and `xfer_share` answers
- * inline. An unbounded read is a tool call that never returns.
+ * The idle timer is armed before the request goes out — so a connection that
+ * never answers dies inside the same window as one that stops mid-body — and is
+ * reset by every chunk that arrives. A stall and a deadline trip surface as
+ * distinct error types, because the operator's next move differs: one says the
+ * network is dead here, the other says it is merely too slow for the pinned
+ * bytes and names the escape hatch (`resolveOnce` appends it).
  */
-async function download(url: string, limit: number, timeoutMs: number, f: typeof fetch): Promise<Buffer> {
+async function download(url: string, limit: number, idleMs: number, totalMs: number, f: typeof fetch): Promise<Buffer> {
+	const asset = url.split("/").pop() || url;
+	const controller = new AbortController();
+	let received = 0;
+	let why: "idle" | "total" | null = null;
+	let idleTimer: ReturnType<typeof setTimeout> | undefined;
+	const armIdle = () => {
+		if (idleTimer !== undefined) clearTimeout(idleTimer);
+		idleTimer = setTimeout(() => {
+			why = "idle";
+			controller.abort();
+		}, idleMs);
+	};
+	armIdle();
+	const totalTimer = setTimeout(() => {
+		why = "total";
+		controller.abort();
+	}, totalMs);
+	const disarm = () => {
+		if (idleTimer !== undefined) clearTimeout(idleTimer);
+		clearTimeout(totalTimer);
+	};
+	const stallError = () =>
+		why === "total"
+			? new DownloadTooSlow(`gave up on ${asset} after ${totalMs} ms with only ${received} bytes received`)
+			: new DownloadStalled(`stalled downloading ${asset}: no bytes for ${idleMs} ms (${received} bytes received)`);
 	let res: Response;
 	try {
-		res = await f(url, { redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
+		res = await f(url, { redirect: "follow", signal: controller.signal });
 	} catch (e) {
+		disarm();
+		if (why !== null) throw stallError();
 		throw new Error(`cannot fetch ${url}: ${(e as Error).message}`);
 	}
-	if (!res.ok) throw new Error(`${url} answered HTTP ${res.status}`);
-	if (!res.body) throw new Error(`${url} answered with no body`);
+	if (!res.ok) {
+		disarm();
+		throw new Error(`${url} answered HTTP ${res.status}`);
+	}
+	if (!res.body) {
+		disarm();
+		throw new Error(`${url} answered with no body`);
+	}
 	const reader = res.body.getReader();
 	const parts: Buffer[] = [];
-	let total = 0;
 	try {
 		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) break;
 			if (!value) continue;
-			total += value.byteLength;
-			if (total > limit) throw new Error(`download is larger than the ${limit} byte cap`);
+			received += value.byteLength;
+			if (received > limit) throw new Error(`download is larger than the ${limit} byte cap`);
+			armIdle();
 			parts.push(Buffer.from(value));
 		}
 	} catch (e) {
+		if (why !== null) {
+			await reader.cancel().catch(() => {});
+			throw stallError();
+		}
 		await reader.cancel().catch(() => {});
-		throw new Error(`downloading ${url.split("/").pop()} failed: ${(e as Error).message}`);
+		throw new Error(`downloading ${asset} failed: ${(e as Error).message}`);
+	} finally {
+		disarm();
 	}
 	return Buffer.concat(parts);
 }
@@ -684,7 +737,8 @@ async function resolveOnce(
 		const bytes = await download(
 			url,
 			deps.maxBytes ?? MAX_BYTES,
-			deps.timeoutMs ?? TIMEOUT_MS,
+			deps.idleMs ?? IDLE_MS,
+			deps.totalMs ?? TOTAL_MS,
 			deps.fetchImpl ?? fetch,
 		);
 		const got = sha256(bytes);
@@ -694,7 +748,16 @@ async function resolveOnce(
 		bin = await extract(bytes, entry, pin.kind, deps.maxBytes ?? MAX_BYTES);
 		install = { name, version: pin.version, target, sha256: pin.sha256, dest };
 	} catch (e) {
-		const why = (e as Error).message;
+		// A stall says the network is dead here; a deadline says it is too slow for
+		// these bytes. Both have the same answer for the operator, and it is not
+		// retrying: put the binary on PATH, or name it in the config — the
+		// separator-in-the-value rule above then uses it as given and nothing is
+		// fetched. Only the timeout shapes carry that sentence; every other failure
+		// (a refused checksum, an unwritable directory) already says what it means.
+		let why = (e as Error).message;
+		if (e instanceof DownloadStalled || e instanceof DownloadTooSlow) {
+			why += ` — put a ${name} on this machine's PATH, or set xfer.${name} in the config to a local copy's full path; the bridge then uses it as given`;
+		}
 		await auditXfer(sid, "install", { name, version: pin.version, target, asset: pin.asset }, why);
 		throw new Error(why);
 	}
