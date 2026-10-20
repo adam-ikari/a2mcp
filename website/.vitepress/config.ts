@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { defineConfig, type Plugin } from "vitepress";
 import { MermaidMarkdown } from "vitepress-plugin-mermaid";
 
@@ -15,11 +16,25 @@ const base = onGitHubPages ? (isUserSite ? "/" : `/${repo}/`) : "/";
 const ORIGIN = onGitHubPages ? `https://${owner}.github.io` : "http://localhost:5173";
 const SITE_URL = `${ORIGIN}${base}`;
 const SITE_NAME = "a2mcp";
+const REPO_URL = "https://github.com/adam-ikari/a2mcp";
 // One description, used for config.description and as the per-page fallback in
 // transformHead. Two copies drifted before: the site description said one thing
-// and every og:description said another.
+// and every og:description said another. Chinese SERPs cut around 80 characters,
+// so this stays one sentence with the three terms people search for: omp, MCP,
+// and remote calls.
 const SITE_DESC =
-	"omp 扩展：把本机的 read、bash、edit 开成一个 MCP 接口，远程的 agent（另一个 omp、Claude Code、任何 MCP 客户端）都能在这台机器上真实执行命令。推理在调用方，桥自己从不请求模型";
+	"omp 扩展：把本机的 read、bash、edit 开成 MCP 接口，远端 agent 经 Streamable HTTP 调用，命令和文件改动真实落在本机。推理在调用方。";
+// Version and name live in package.json; a literal here would be a second copy
+// to forget at release time.
+const PKG = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
+	version?: string;
+};
+const AUTHOR = {
+	"@type": "Person",
+	name: "adam-ikari",
+	url: "https://github.com/adam-ikari",
+} as const;
+const OG_IMAGE_ALT = "a2mcp：把 omp 的本机工具开成远程 MCP 接口";
 
 // Mermaid settings, handed to the diagram component as a virtual module. This
 // replaces withMermaid(), whose Vite plugin injected a *statically imported*
@@ -71,62 +86,107 @@ export default defineConfig({
 		// itself is registered async in theme/index.ts.
 		config: (md) => MermaidMarkdown(md, { class: "mermaid" }),
 	},
-	// Per-page SEO: canonical, Open Graph, Twitter Card, and WebSite JSON-LD.
+	// Per-page SEO: canonical, robots, Open Graph, Twitter Card, and JSON-LD.
 	// VitePress emits title/description/lang/viewport itself; these are the
-	// signals it does not cover.
+	// signals it does not cover. Titles and descriptions come from the
+	// frontmatter written by scripts/sync.mjs, one pair per page.
 	transformHead({ pageData }) {
+		// The 404 page is built through the same hook. It must not claim a
+		// canonical URL or invite indexing; the HTTP status already says 404.
+		if (pageData.relativePath === "404.md" || pageData.title === "404") {
+			return [["meta", { name: "robots", content: "noindex" }]];
+		}
 		const rel = pageData.relativePath.replace(/index\.md$/, "").replace(/\.md$/, "");
 		const url = `${SITE_URL}${rel}`;
+		const pageTitle = pageData.title || SITE_NAME;
 		const title = pageData.title ? `${pageData.title} | ${SITE_NAME}` : SITE_NAME;
 		const desc = pageData.description || SITE_DESC;
 		// Social platforms do not render SVG in og:image (Twitter/X, Facebook
 		// and Slack all ignore it), so the card ships as a 1200x630 PNG. The
 		// editable source is public/img/og.svg next to it.
 		const image = `${SITE_URL}img/og.png`;
-		// A WebSite node on a docs page misdescribes it: only the home page is
-		// the site, the rest are articles. Declaring the right type per page
-		// also lets the home page carry the search-action sitelinks search
-		// engines use to offer a sitelinks search box.
 		const isHome = pageData.relativePath === "index.md";
+		const publisher = {
+			"@type": "Organization",
+			name: SITE_NAME,
+			url: SITE_URL,
+			logo: { "@type": "ImageObject", url: image },
+		};
+		const website = {
+			"@type": "WebSite",
+			name: SITE_NAME,
+			alternateName: "pi-a2a-ext",
+			description: SITE_DESC,
+			url: SITE_URL,
+			inLanguage: "zh-CN",
+			publisher,
+			sameAs: [REPO_URL],
+		};
+		// A WebSite node on a docs page misdescribes it: only the home page is
+		// the site, the rest are articles. The home page also carries the
+		// software itself, which is what lets a search engine treat this as a
+		// downloadable tool rather than a blog; article pages carry the trail
+		// back to the home page.
 		const ld = isHome
-			? {
-					"@context": "https://schema.org",
-					"@type": "WebSite",
-					name: SITE_NAME,
-					description: desc,
-					url,
-					inLanguage: "zh-CN",
-					potentialAction: {
-						"@type": "SearchAction",
-						target: {
-							"@type": "EntryPoint",
-							urlTemplate: `${SITE_URL}?q={search_term_string}`,
-						},
-						"query-input": "required name=search_term_string",
-					},
-				}
+			? { "@context": "https://schema.org", ...website }
 			: {
 					"@context": "https://schema.org",
 					"@type": "TechArticle",
-					headline: title,
+					headline: pageTitle,
 					description: desc,
 					url,
+					mainEntityOfPage: { "@type": "WebPage", "@id": url },
+					image,
 					inLanguage: "zh-CN",
-					isPartOf: { "@type": "WebSite", name: SITE_NAME, url: SITE_URL },
+					author: AUTHOR,
+					publisher,
+					isPartOf: website,
+				};
+		const extra = isHome
+			? {
+					"@context": "https://schema.org",
+					"@type": "SoftwareApplication",
+					name: SITE_NAME,
+					alternateName: "pi-a2a-ext",
+					description: SITE_DESC,
+					url,
+					applicationCategory: "DeveloperApplication",
+					operatingSystem: "Linux, macOS, Windows",
+					softwareVersion: PKG.version,
+					programmingLanguage: "TypeScript",
+					codeRepository: REPO_URL,
+					license: `${REPO_URL}/blob/master/LICENSE`,
+					author: AUTHOR,
+					offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+					inLanguage: "zh-CN",
+				}
+			: {
+					"@context": "https://schema.org",
+					"@type": "BreadcrumbList",
+					itemListElement: [
+						{ "@type": "ListItem", position: 1, name: "首页", item: SITE_URL },
+						{ "@type": "ListItem", position: 2, name: pageTitle, item: url },
+					],
 				};
 		return [
 			["link", { rel: "canonical", href: url }],
+			// max-image-preview:large is what allows a full-size thumbnail in
+			// Google results; the default is a small square. No SearchAction:
+			// the local search box has no ?q= URL for a crawler to point at.
+			["meta", { name: "robots", content: "index, follow, max-image-preview:large, max-snippet:-1" }],
+			["meta", { name: "author", content: "adam-ikari" }],
 			["meta", { property: "og:type", content: isHome ? "website" : "article" }],
 			["meta", { property: "og:site_name", content: SITE_NAME }],
 			["meta", { property: "og:title", content: title }],
 			["meta", { property: "og:description", content: desc }],
 			["meta", { property: "og:url", content: url }],
 			["meta", { property: "og:image", content: image }],
-			// Dimensions and alt are declared so consumers can lay the card out
+			// Dimensions and type are declared so consumers can lay the card out
 			// before the image loads; without them the aspect ratio is unknown.
+			["meta", { property: "og:image:type", content: "image/png" }],
 			["meta", { property: "og:image:width", content: "1200" }],
 			["meta", { property: "og:image:height", content: "630" }],
-			["meta", { property: "og:image:alt", content: `${SITE_NAME} — ${desc}` }],
+			["meta", { property: "og:image:alt", content: OG_IMAGE_ALT }],
 			["meta", { property: "og:locale", content: "zh_CN" }],
 			// summary_large_image, not summary: a 630px-tall card is rendered
 			// full-bleed on both timelines, summary would shrink it to a square.
@@ -134,16 +194,20 @@ export default defineConfig({
 			["meta", { name: "twitter:title", content: title }],
 			["meta", { name: "twitter:description", content: desc }],
 			["meta", { name: "twitter:image", content: image }],
+			["meta", { name: "twitter:image:alt", content: OG_IMAGE_ALT }],
 			// Third tuple element, NOT a key in the attrs object: VitePress renders
 			// ["script", attrs, innerHTML] as <script ...>innerHTML</script>. With
 			// innerHTML inside attrs it was serialized as an HTML attribute, so the
 			// script body was empty and crawlers saw no structured data at all.
 			["script", { type: "application/ld+json" }, JSON.stringify(ld)],
+			["script", { type: "application/ld+json" }, JSON.stringify(extra)],
 		];
 	},
 	themeConfig: {
 		siteTitle: SITE_NAME,
-		logo: "/img/logo.svg",
+		// A bare string renders alt="" — a decorative image. The logo doubles as
+		// the home link, so it needs a name a crawler can read.
+		logo: { src: "/img/logo.svg", alt: SITE_NAME },
 		// DRAFT=1 ships one holding page (see scripts/sync.mjs). Nav and sidebar go
 		// empty with it, so the published site has no way into the docs that are
 		// not published. Without the env var both come back verbatim — that way

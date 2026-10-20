@@ -51,19 +51,41 @@ features: []
 
 cpSync(join(REPO, "docs"), CONTENT, { recursive: true });
 
-// Per-page descriptions. `transformHead` already prefers `pageData.description`
-// over the site-wide one, but nothing set it — so every page carried the same
-// string, which is how a search engine sees near-duplicate pages. Each is taken
-// from what that page actually says.
-const PAGE_DESCRIPTIONS = {
-	"protocol.md":
-		"桥实现的 MCP 2025-11-25 Streamable HTTP 子集：处理顺序、会话生命周期、错误码总表、桥自己的 xfer_* 三个工具与那条 /xfer/ 文件路由、操作员的 quick tunnel、POST /host-llm 的宿主推理切换，以及它放弃的东西。",
-	"testing.md":
-		"核验矩阵：仓库形状、253 项单测（含命名守卫、占位模型、PowerShell 字面核对）、真实模型注册表、加固、发布包端到端、外部二进制获取、宿主推理 deny/restore、一键脚本、端到端场景与审批边界。各项的判据、实测数字与变异记录在正文。",
-	"computer-use.md":
-		"computer use 让模型看屏幕猜坐标去点按，本桥让调用方按名字调工具。执行走的是本机工具自己的实现，目录由 tools/list 一条条给出名字和参数。",
+// Per-page titles and descriptions. `transformHead` already prefers
+// `pageData.description` over the site-wide one, but nothing set it — so every
+// page carried the same string, which is how a search engine sees
+// near-duplicate pages. Each is taken from what that page actually says.
+//
+// Titles keep the brand out: VitePress appends " | a2mcp" itself. Chinese SERPs
+// cut descriptions around 80 characters, so these target 70-90 rather than the
+// 150-160 an English site would use. Colons are full-width on purpose — an
+// ASCII ": " would end the YAML scalar early.
+const PAGE_META = {
+	"protocol.md": {
+		title: "MCP 协议参考：Streamable HTTP、会话与文件路由",
+		description:
+			"a2mcp 实现的 MCP 2025-11-25 Streamable HTTP 子集：处理顺序、会话生命周期、错误码、xfer_* 工具、/xfer/ 文件路由与宿主推理切换。",
+	},
+	"testing.md": {
+		title: "测试与核验：单测、真机探针与审批边界",
+		description:
+			"a2mcp 的核验矩阵：253 项单测、真实模型注册表、加固探针、发布包端到端、外部二进制获取、宿主推理 deny/restore、端到端场景与审批边界，附判据与实测数字。",
+	},
+	"computer-use.md": {
+		title: "与 computer use 的区别：按名字调工具",
+		description:
+			"computer use 让模型看屏幕猜坐标点按；a2mcp 让调用方按名字调本机工具，参数由 tools/list 逐条给出，执行走本机工具自己的实现，推理在调用方。",
+	},
+	"superpowers/specs/2026-09-10-a2a-mcp-bridge-design.md": {
+		description:
+			"2026-09 的初始设计稿：为什么让 omp 当宿主、为什么只做 Streamable HTTP、工具如何暴露与审批，以及当时定下、后来改掉的边界。",
+	},
+	"superpowers/plans/2026-09-10-a2a-mcp-bridge.md": {
+		description:
+			"2026-09 的初始实施计划：扩展入口、JSON-RPC 服务器、工具转发、审批与配置的分步任务，以及每一步当时的验收方式。",
+	},
 };
-for (const [file, description] of Object.entries(PAGE_DESCRIPTIONS)) {
+for (const [file, meta] of Object.entries(PAGE_META)) {
 	const target = join(CONTENT, file);
 	const body = readFileSync(target, "utf8");
 	if (body.startsWith("---")) continue; // already has frontmatter
@@ -73,7 +95,8 @@ for (const [file, description] of Object.entries(PAGE_DESCRIPTIONS)) {
 	const h1 = body.match(/^# (.+)\n/);
 	const rest = body.replace(/^# .*\n+/, "");
 	const heading = h1 ? `\n# ${h1[1]}\n` : "";
-	writeFileSync(target, `---\ndescription: ${description}\n---\n${heading}\n${rest}`);
+	const title = meta.title ? `title: ${meta.title}\n` : "";
+	writeFileSync(target, `---\n${title}description: ${meta.description}\n---\n${heading}\n${rest}`);
 }
 
 // README_ZN.md -> intro.md. The site is the Chinese one: README.md is the
@@ -100,7 +123,7 @@ const intro = readFileSync(join(REPO, "README_ZN.md"), "utf8")
 // it its own h1 rather than promoting a section.
 writeFileSync(
 	join(CONTENT, "intro.md"),
-	`---\ntitle: 使用指南\n---\n\n# 装上它，远程 agent 就能用你本机的工具\n\n${intro}`,
+	`---\ntitle: 使用指南：安装并接上第一个远程 agent\ndescription: 从安装到接上第一个远程 agent：git URL 与 bootstrap 两种装法、token 与 mcp.json、两条接入路，以及传文件和宿主推理开关。\n---\n\n# 装上它，远程 agent 就能用你本机的工具\n\n${intro}`,
 );
 
 // CHANGELOG -> changelog.md (H1 replaced, add frontmatter). The link rewrites
@@ -115,7 +138,7 @@ const changelog = readFileSync(join(REPO, "CHANGELOG.md"), "utf8")
 	.replaceAll("](docs/testing.md)", "](./testing.md)");
 writeFileSync(
 	join(CONTENT, "changelog.md"),
-	`---\ntitle: 变更日志\ndescription: 从 v0.1.0 起的改动记录：名字为什么从 a2a 改到 a2mcp、宿主推理为什么靠 POST /host-llm 整体关掉、哪些端到端核验被推倒重测、安装方式怎么收到一条，每条都写明实测数字与代价。\n---\n\n# 变更日志\n\n${changelog}`,
+	`---\ntitle: 变更日志：设计取舍与实测记录\ndescription: a2mcp 从 v0.1.0 起的改动记录：名字从 a2a 改到 a2mcp、宿主推理开关、端到端核验的推倒重测、安装方式收敛到一条 git URL，每条都带实测数字与代价。\n---\n\n# 变更日志\n\n${changelog}`,
 );
 
 // protocol.md: repo-relative links -> site form
@@ -133,6 +156,7 @@ writeFileSync(
 // .vitepress/config.ts instead of per-folder _category_.json.
 const home = `---
 layout: home
+title: 把本机 omp 的工具开成远程 MCP 接口
 
 hero:
   name: a2mcp

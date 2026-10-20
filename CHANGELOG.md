@@ -4,6 +4,16 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## 2026-10-20 — 文档站的搜索面：每页一组标题与摘要，首页带上软件的结构化数据
+
+站点原本已经有 canonical、Open Graph、Twitter Card、sitemap 与 robots，缺的都在内容层：首页的 `<title>` 只有 `a2mcp`，两篇设计稿的摘要回落到全站那一句，八页里多页共用同一段描述；logo 的 `alt` 是空的；页面没有 robots meta；JSON-LD 只有 WebSite 与 TechArticle 两个薄节点。搜索引擎读到的是一组分不清谁是谁的页面。
+
+- head: `sync.mjs` 给每页写独立的 title 与 description——首页、使用指南、变更日志在生成 frontmatter 时写，protocol / testing / computer-use 与两篇 superpowers 设计稿走 `PAGE_META`；描述按中文搜索结果约 80 字来写（不是英文的 150-160 字符），品牌由 VitePress 的 `| a2mcp` 统一追加。`config.ts` 补 robots meta（`max-image-preview:large`）、author、`og:image:type`、`twitter:image:alt`，logo 从字符串改成带 `alt` 的对象。
+- schema: 首页除 WebSite（`alternateName` 收着旧名 `pi-a2a-ext`）外多一个 `SoftwareApplication`——类别、三个操作系统、`softwareVersion` 从根 `package.json` 读、仓库、MIT 许可、价格 0、作者；文章页的 TechArticle 补 author、publisher、image、mainEntityOfPage，并加一条 BreadcrumbList。原先的 `SearchAction` 删掉：本地搜索没有 `?q=` 这种可抓的 URL。
+- 404: 同一只 `transformHead` 也会跑到 404 上，从前它给 404 发 canonical 与索引许可。现在 404 只回 `noindex`，没有 canonical，也没有结构化数据。
+- test: `render-check.mjs` 从「canonical / og:image / twitter:card / JSON-LD 能解析」扩到八页逐页断言：标题与描述各自唯一、标题 10-60 字、描述 40-120 字、恰好一个 h1、logo 有 alt、robots 允许大图预览、canonical 等于 og:url、第二个 JSON-LD 节点是首页的 `SoftwareApplication` 或文章页的 `BreadcrumbList`；404 单独一条。125 项全过，`docs/testing.md` 总览那一行的 56 项跟着改成 125。SEO 分析器那三条警告里，「Multiple H1」是它把标题锚点里的零宽空格当成第二个 h1，「No schema」是它只认 microdata 不认 JSON-LD，两样都由 render-check 对着 DOM 与脚本正文核过；「描述过短」是拿英文字符数衡量中文。
+- 回归: `build` + `check` 全过（125 项），`lint` / `tsc` 干净；协议、代码与安装方式未动。
+
 ## 2026-10-20 — 一个端口两张面：文件挂到 `/xfer` 路由，公网那一面归操作员的隧道
 
 维护者把方向定成一句：「方向统一宿主是 server，宿主除了提供 mcp 端点，还要提供文件传输端点，走 http 协议通过 tunnel 转发」，随后在两个方案里选了 B，并补一条边界：「只交操作员开关」。落到代码上的理由是 cloudflared 的 quick tunnel 只接受一个 `--url`，一条隧道顶一个 origin——从前一次共享自己起一条隧道、`/a2mcp tunnel` 另起一条，一台机器上两个公网主机名、两套说法；现在 `dufs` 仍然在 `127.0.0.1` 上占一个随机端口，桥把这个端口反代成自己端口的 `/xfer/` 路由，于是同一个主机名、同一个 Bearer token 既走工具调用也走文件，出公网与否只剩操作员那条命令。

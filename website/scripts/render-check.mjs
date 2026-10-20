@@ -194,6 +194,8 @@ srv.close();
  * crawler read zero structured data while the tag looked present in review.
  */
 const headChecks = [];
+const titles = new Map();
+const descriptions = new Map();
 for (const file of [
 	"index.html",
 	"intro.html",
@@ -201,36 +203,96 @@ for (const file of [
 	"computer-use.html",
 	"testing.html",
 	"changelog.html",
+	"superpowers/specs/2026-09-10-a2a-mcp-bridge-design.html",
+	"superpowers/plans/2026-09-10-a2a-mcp-bridge.html",
 ]) {
 	const html = readFileSync(join(DIST, file), "utf8");
 	const page = file.replace(/\.html$/, "");
 
+	const title = html.match(/<title>([^<]+)<\/title>/)?.[1] ?? "";
+	const description = html.match(/<meta name="description" content="([^"]*)"/)?.[1] ?? "";
 	const canonical = html.match(/<link rel="canonical" href="([^"]+)"/)?.[1];
+	const ogUrl = html.match(/property="og:url" content="([^"]+)"/)?.[1];
 	const ogImage = html.match(/property="og:image" content="([^"]+)"/)?.[1];
 	const ogType = html.match(/property="og:type" content="([^"]+)"/)?.[1];
 	const card = html.match(/name="twitter:card" content="([^"]+)"/)?.[1];
-	const ldRaw = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)?.[1];
-	let ldType = null;
-	let ldValid = false;
-	try {
-		ldType = JSON.parse(ldRaw)["@type"];
-		ldValid = true;
-	} catch {
-		/* reported below */
+	const robots = html.match(/<meta name="robots" content="([^"]+)"/)?.[1] ?? "";
+	const logoAlt = html.match(/<img class="VPImage logo"[^>]*\balt="([^"]*)"/)?.[1] ?? "";
+	const h1Count = (html.match(/<h1[\s>]/g) ?? []).length;
+
+	// Every JSON-LD block must parse. The first one is the page's primary node;
+	// the second is what the page adds on top of it (the software on the home
+	// page, the breadcrumb on an article).
+	const blocks = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+	const parsed = [];
+	for (const raw of blocks) {
+		try {
+			parsed.push(JSON.parse(raw));
+		} catch {
+			parsed.push(null);
+		}
 	}
+	const ld = parsed[0];
+	const extra = parsed[1];
+	const ldValid = parsed.length === 2 && parsed.every(Boolean) && ld["@context"] === "https://schema.org";
 
 	// og:image must be a raster format: Twitter/X, Facebook and Slack all drop
 	// an SVG, so the card silently never appears.
 	const raster = /\.(png|jpe?g|gif|webp)$/i.test(ogImage ?? "");
 	const expectedType = page === "index" ? "WebSite" : "TechArticle";
+	const expectedExtra = page === "index" ? "SoftwareApplication" : "BreadcrumbList";
+
+	titles.set(title, [...(titles.get(title) ?? []), page]);
+	descriptions.set(description, [...(descriptions.get(description) ?? []), page]);
 
 	headChecks.push(
-		[Boolean(canonical), `${page}: canonical`],
+		[Boolean(title) && title.includes("a2mcp"), `${page}: title names the site (${title})`],
+		[title.length >= 10 && title.length <= 60, `${page}: title is 10-60 chars (${title.length})`],
+		// Chinese characters take roughly twice the width of Latin ones, so a
+		// description written for a Chinese SERP lands near 80, not 150-160.
+		// The bound is characters, not display width; 120 is the upper guard.
+		[
+			description.length >= 40 && description.length <= 120,
+			`${page}: description is 40-120 chars (${description.length})`,
+		],
+		[Boolean(canonical) && canonical === ogUrl, `${page}: canonical matches og:url`],
 		[raster, `${page}: og:image is raster (${ogImage?.split("/").pop() ?? "missing"})`],
 		[card === "summary_large_image", `${page}: twitter:card (${card})`],
 		[Boolean(ogType), `${page}: og:type (${ogType})`],
-		[ldValid && ldType === expectedType, `${page}: JSON-LD parses as ${expectedType} (got ${ldType ?? "unparseable"})`],
+		[
+			robots.includes("index") && robots.includes("max-image-preview:large"),
+			`${page}: robots allows indexing and large previews`,
+		],
+		[logoAlt.length > 0, `${page}: logo has alt text (${logoAlt || "empty"})`],
+		[h1Count === 1, `${page}: exactly one h1 (${h1Count})`],
+		[
+			ldValid && ld["@type"] === expectedType,
+			`${page}: JSON-LD parses as ${expectedType} (got ${ld?.["@type"] ?? "unparseable"})`,
+		],
+		[
+			extra?.["@type"] === expectedExtra,
+			`${page}: JSON-LD carries ${expectedExtra} (got ${extra?.["@type"] ?? "missing"})`,
+		],
 	);
+}
+for (const [label, seen] of [
+	["titles", titles],
+	["descriptions", descriptions],
+]) {
+	const dupes = [...seen].filter(([, pages]) => pages.length > 1);
+	headChecks.push([
+		dupes.length === 0,
+		`${label} unique across ${seen.size} pages${dupes.length ? `: ${dupes.map(([v, p]) => `${p.join("/")} share "${v.slice(0, 30)}"`).join("; ")}` : ""}`,
+	]);
+}
+{
+	const notFound = readFileSync(join(DIST, "404.html"), "utf8");
+	headChecks.push([
+		/<meta name="robots" content="[^"]*noindex/.test(notFound) &&
+			!notFound.includes('rel="canonical"') &&
+			!notFound.includes("application/ld+json"),
+		"404: noindex, no canonical, no structured data",
+	]);
 }
 
 /*

@@ -10,7 +10,7 @@
 | `bun run test:obtain` | 外部二进制获取核验，41 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，34 项 | 是 | `HARDEN OK` |
-| `cd website && bun run check` | 站点渲染与 SEO 核验，56 项 | 否 | `render-check: all pages OK` |
+| `cd website && bun run check` | 站点渲染与 SEO 核验，125 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:takeover` | 宿主推理 deny/restore 核验，34 项，约 65 秒 | 是 | `takeover probe: all assertions met` |
 | `bun run test:install` | 发布包自包含 + 端到端，55 项（其中 npm 真装那组 4 项在包发到 registry 之前按 `info:` 跳过——包名形态是预留，这一组就是不发不跑） | 是 | `PACKAGE OK` |
