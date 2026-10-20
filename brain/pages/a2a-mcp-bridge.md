@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-20T05:14:49"
+updated: "2026-10-20T06:33:59"
 ---
 
 <!-- compiled_truth -->
@@ -966,4 +966,9 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
 - time: 2026-10-20T05:14:49
   kind: reversal
   summary: "2026-10-20 安装主路回退：同日「切 npm 包名」的翻面再翻回去。维护者判据「保持 git 安装、不发包」，npm publish 不再排期；v0.5.1 的 README 曾写着 omp install a2mcp 而该名字在 registry 上是 404，命令停在依赖解析——文档不许躺会静默失败的命令，主路回到 omp install 加 git URL，v0.5.2 是这份文档纠偏（代码与 0.5.1 同源）。保留的不是话术是机制：两份引导脚本的 spec 形状二选一与 registry 读钉分支、tarball 打包与 files 治理、install 探针的预留形态组（不发不跑、如实 info 跳过）原样在树里，哪天发包哪天启用，compiled_truth 未为 npm 翻过面所以无需回改。两条免 git 的路量过并否掉：tgz 直装是宿主 link 路径的 ENOTDIR 死路（复核成立），把 dufs 与 cloudflared 打进发布物全五目标约 200 MB、单 Windows 一对约 60 MB，与「发布物是代码包」的定位不合。"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-20T06:33:59
+  kind: decision
+  summary: "接入面在文档里收成两条路：会说 MCP 的客户端直接填 mcp.json 接桥、不要自写客户端；不会说 MCP 但能跑代码的调用方取一个官方参考实现 scripts/mcp-call.py，零依赖 Python 3 单文件，替它处理会话头、404 重握手、每次调用超时与退出码——正是手搓 mcp_call.py 最容易写错的两处。起因是接到桥上的 agent 反复各自手搓一个握手脚本：桥答 plain JSON 谁都能打，但握手有状态，被贴进提示词而非注册成 MCP 客户端的 agent 就每次从零重推。语言定 Python 标准库（与 agent 已自发产出的形状同源，CI 镜像近乎标配），Go 跨平台二进制讨论后否掉——那会翻成第二套二进制分发系统加 CI 编译链，而调用方要能读能抄的代码。脚本不进 package.json 的 files（仍 extensions/ 加 src/），与 bootstrap.sh 同路走 raw URL 交付，不进安装 tarball。新增独立探针 test:mcp-call：真宿主驱动 list/call/错 token/不存在工具，加一只第一次 tools/call 回 404 的假 Bun.serve 验重握手自愈；缺 python3 整段 info 跳过退 0。协议面与装法不变（git URL 主路），进 patch v0.5.3。"
   affects: [a2a-mcp-bridge]
