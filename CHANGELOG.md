@@ -1,6 +1,6 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.6.0`（2026-10-20，传文件不再自带一条隧道：文件挂在桥自己端口的 `/xfer/` 路由下，公网那一面统一由操作员的 `/a2mcp tunnel` 提供，`xfer_share` 的回包字段因此变了）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.7.0`（2026-10-20，隧道开着时 `xfer_share` / `xfer_status` 的回包多一个 `publicUrl`：同一条 `/xfer/` 路由在操作员那条 `/a2mcp tunnel` 上的地址，隧道没开是 `null`）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
@@ -244,6 +244,14 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.7.0 — 隧道开着时，共享回包带上公网地址
+
+**这一版对远程调用方变的是 `xfer_share` / `xfer_status` 的回包：多一个 `publicUrl` 字段——操作员那条 `/a2mcp tunnel` 开着时，它是同一条 `/xfer/` 路由在那个公网主机名下的地址；隧道没开就是 `null`，`usage.public` 改口点名两条路（SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`）。工具仍然不开隧道、也不关它，读的是一个已经存在的主机名。** 传输、鉴权、会话、`tools/list` 的面貌一个字没动：MCP Streamable HTTP `2025-11-25`、单 Bearer token、宿主注册表逐字加那三个 `xfer_*`。远程 `mcp.json` 不用改，token 不换代；按 2026-10-18 判据（调用方经协议拿到的东西变了进 minor）进 v0.7.0。
+
+- 内容: 见上 2026-10-20 的「隧道开着时，共享回包带上公网地址」一节（`XferDeps` 的 `publicUrl` getter、`xfer_share` 与 `xfer_status` 的回包字段、`usage.public` 的两种形态、`bun test` 253→254 与那组新断言、两份 README 与三份 docs、AGENTS.md 例外清单第二条）。
+- 边界: 这一版不新增暴露面——隧道是操作员开的，工具只报它已经有的主机名（主机名本来就不是秘密，隧道审计里就写着它）。公网那半程仍然只有人工证据：本机网络对 `*.trycloudflare.com` 重签 TLS，回环那侧的验证算不了公网半程（`docs/testing.md` 那条判样沿用）。协议页另加一条判据：回包里若还出现 `user` / `secret` / `host`，那是宿主还跑着 0.6.0 之前的版本（那版每次共享自带一条 cloudflared），判据是 `initialize` 回的 `serverInfo.version`。
+- 回归（发版前这一遍，2026-10-20，宿主 omp 18.12.1）: `bun test` 254 项 751 断言全绿；`lint` / `tsc` 干净；`tree` 3 项、`registry` 5497 行（13.3 ms 装配）、`BOOTSTRAP OK` 47 项、`MCP-CALL OK` 6 项、`SMOKE OK`（22 个工具）、`HARDEN OK` 34 项、`SCENARIOS: 41 steps, 0 failed`、`takeover` 34 项 65.8 秒（inference POST=1、元数据非 POST=1）、审批 `VERDICT: B`（90.0 秒挂起、start=1 done=0）；`test:obtain` PASS（41 项，真隧道 announce 到的那个主机名从发布它的那台机器 curl 回去仍是证书错误，那条读数照旧）、`test:install` `PACKAGE OK`（55 项，其中 npm 真装那组 4 项按 `info:` 跳过、第五组真下真跑）；站点 `build` + `check` 全过。
 
 ## v0.6.0 — 一个端口两张面：文件走 `/xfer` 路由，公网只归操作员那条隧道
 
