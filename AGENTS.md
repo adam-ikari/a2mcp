@@ -47,8 +47,10 @@ paid for with auditing and documentation:
   bridge's own port — and they are appended to `tools/list` after the host registry, so they
   bypass the host's approval gate and bring no sandbox of their own. The cost is auditing
   (`tool: "xfer"`, one record per call) and documentation; what bounds the route is the same
-  Bearer token that opens the port. The tool returns no credential and no public hostname:
-  going outside is the operator's `/a2mcp tunnel`, not the tool's decision. Asked for by the
+  Bearer token that opens the port. The tool returns no credential, and it opens no tunnel:
+  going outside is the operator's `/a2mcp tunnel`, not the tool's decision. While that
+  tunnel is up, `xfer_share` and `xfer_status` report the hostname it already has as
+  `publicUrl` — reading a state that exists, not adding a way out. Asked for by the
   maintainer; the contract and usage are in
   `docs/protocol.md` under 桥自己的工具 (`xfer_*`) and in the README under 传文件.
 - `src/obtain.ts` puts a binary on the host's disk. When a name in the `xfer` block

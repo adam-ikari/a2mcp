@@ -5,7 +5,7 @@
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
 | `bun run test:tree` | 仓库形状核验，3 项，无依赖 | 否 | `tree-probe: repo shape OK` |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 253 pass / 0 fail（18 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 254 pass / 0 fail（18 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
 | `bun run test:obtain` | 外部二进制获取核验，41 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
@@ -181,7 +181,7 @@
 
 钉住它的是「主机名埋在比转录更多的输出后面」那一条，而这一条的难点在夹具，不在实现。子进程不加节奏地写（每行一次 `writeSync`，或者一整块写下去），到父进程这边是十来个体积不等的读事件，实测有一次把 200 KB 全塞进第一个事件——那样的流里压根没有几次能撞到上限，把实现写成「满了就不再追加」也不会红。每行之间加一个 `await Bun.sleep(5)`，流才真是一行一个事件。另一个坑更安静：`process.stdout.write` 的循环后面接一句 `console.log`，Bun 让那句同步写越过排队的异步写，主机名直接跑到第一个 chunk 里。夹具的注释写着这两条，因为下一个改这个文件的人会重新发明它们。
 
-## 共享的两半（`test/xfer-route.test.ts` 17 项 / `test/xfer.test.ts` 16 项）
+## 共享的两半（`test/xfer-route.test.ts` 17 项 / `test/xfer.test.ts` 17 项）
 
 `/xfer` 是两段代码：`src/server.ts` 里那个反向代理，和 `src/xfer.ts` 里把文件服务器起起来、再把目标交给代理的工具。两个文件各测一段，夹具都是假的，假得有针对性。
 
@@ -190,6 +190,8 @@
 同一个文件里另一组断言在量两条面的边界：没带 token 的文件请求 401，而文件服务器一次都没被碰，鉴权门在路由之前；没共享时 404，回话点名 `xfer_share`；往 `POST /xfer/echo` 里塞一段 JSON-RPC 仍然是文件请求，正文原样交给服务器、`callTool` 计数为零——MCP 那一支读 body 而根本不看 pathname，这条边界不钉住，一次上传就会被当成一次工具调用；`DELETE /xfer/f.txt` 是删文件，MCP 会话照旧能用，因为 `DELETE` 那一支原先在任何路径上都会结束会话；`xfer-private` 不是这条路由（GET 仍旧 405、`initialize` 仍旧 200、服务器零命中）；`GET /` 在有共享可服务的时候仍旧拒 405，而 `GET /xfer/` 正常出目录；`HEAD` 拿到头而不带正文；服务器不再回话时是 502，正文里查不到 `127.0.0.1`，端口和 `Unable to connect` 只在宿主 stderr。共享活着的时候，目录与调用那一面逐项没变。
 
 工具这边测的是真二进制问不出来的接线：挑的那个端口就是它服务的那个端口，自己编的那对凭据就是服务器校验的那对，而这对凭据只待在进程里。回包里 `user`/`secret`/`host` 三个字段是消失，不是留空——留空会让人去找已经不存在的凭据。审计记的是路由 `/xfer/`：操作员读日志要知道当时什么东西可达，公网那一半属于隧道自己的记录。
+
+隧道那一半的读数也在这组里：隧道开着时 `xfer_share` 与 `xfer_status` 的 `publicUrl` 是那条公网地址，关着是 `null`，`usage.public` 改口点名 SSH 转发与请操作员开隧道两条路。测试只翻那个 getter 的返回值——工具读现成状态，开隧道的是 `/a2mcp tunnel`，这一点由它自己的测试与审计管着。
 
 夹具那只能当 dufs 的脚本得写成带 shebang 的可执行文件，因为 `xfer.dufs` 是一个程序名而不是一行 shell：第一版把 `bun <file>` 整串塞进名字里，spawn 就去找一个文件名等于这整串字符的东西。就绪那一探也踩过一次：它问的是带前缀的根，那是一个目录，回的是 listing 而不是文件，当文件读会抛，抛出来的 500 让就绪循环一路等下去。
 

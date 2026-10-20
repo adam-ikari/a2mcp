@@ -4,6 +4,17 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## 2026-10-20 — 隧道开着时，共享回包带上公网地址
+
+远端 agent 拿到 `xfer_share` 的回包却拼不出文件地址：`url` 是宿主自己的回环 origin（`http://127.0.0.1:<桥端口>/xfer/`），在远端机器上指向远端自己；公网入口只有操作员那条 `/a2mcp tunnel`，而回包从前不带它。远端能想到的最短路径于是是自己再起一条隧道。现在隧道开着时，`xfer_share` 与 `xfer_status` 多一个 `publicUrl`（`https://<随机>.trycloudflare.com/xfer/`），隧道没开就是 `null`。
+
+- feat: `src/xfer.ts` 的 `XferDeps` 多一个 `publicUrl` getter，读的是调用那一刻的状态（隧道在共享期间开或关，`xfer_status` 立刻跟着变）；`extensions/a2mcp.ts` 把它接到 `mcpTunnel?.url ?? null`。回包多 `publicUrl` 字段，`usage.public` 在隧道开着时是那条公网地址的 curl，没开时点名两条路：SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。
+- 边界: 工具仍然不开隧道、也不关它——读的是一个已经存在的主机名，不新增暴露面（主机名本来就不是秘密，`docs/protocol.md` 的隧道审计里就写着它）。回包不带凭据这一条没变，那对 basic-auth 照旧只留在桥代发的请求里。
+- test: `bun test` 253 → 254。`test/xfer.test.ts` 多一项：隧道开着时 `publicUrl` 是那条地址、`usage.public` 带着它，关着就是 `null`，`xfer_status` 读的是当下的状态而不是共享开始那一刻的。
+- docs: 两份 README 的传文件一节、协议页 `xfer_*` 一节的回包样例与 `xfer_status` 形状、隧道那一节的边界、`docs/testing.md` 的项数、AGENTS.md 例外清单第二条（那句「工具不回公网主机名」按新形状改口）。
+- 顺带: 上一轮站点搜索面那笔改动把 `pi-a2a-ext` 写进了站点的 `alternateName`，把两份历史设计文档的文件名写进了 `website/scripts/` 的两个脚本——命名守卫因此红了（改动在 7ab9d7b，红是本轮才验出来的）。守卫的豁免表加三条，各带一句为什么，红项变绿。
+- 版本位: 回包多一个字段，远程调用方拿到的东西变了，按 2026-10-18 那条判据属于 minor 位；这一笔不发版，版本号留给维护者定。
+
 ## 2026-10-20 — 文档站的搜索面：每页一组标题与摘要，首页带上软件的结构化数据
 
 站点原本已经有 canonical、Open Graph、Twitter Card、sitemap 与 robots，缺的都在内容层：首页的 `<title>` 只有 `a2mcp`，两篇设计稿的摘要回落到全站那一句，八页里多页共用同一段描述；logo 的 `alt` 是空的；页面没有 robots meta；JSON-LD 只有 WebSite 与 TechArticle 两个薄节点。搜索引擎读到的是一组分不清谁是谁的页面。

@@ -271,7 +271,7 @@ The measured wake-up chain (see [Security and boundaries](#security-and-boundari
 
 Files move over plain HTTP. `xfer_share` hands a host path to [`dufs`](https://github.com/sigoden/dufs), which listens on `127.0.0.1` at a free port, and the bridge reverse-proxies that port under `/xfer/` on its own endpoint. The reply is the route (`http://127.0.0.1:<port>/xfer/`), the file server's port and the expiry — and no second credential. The Bearer token that calls `tools/list` is what authorizes a `GET` or a `PUT` on the route: the proxy replaces whatever `Authorization` the caller sent with the basic-auth pair the bridge invented for this share, and the `www-authenticate` header the file server answers with is stripped on the way back. Download with `curl -H 'Authorization: Bearer <token>' -O <url>/<name>`, upload with `-T`; Range requests resume, WebDAV clients work, and a browser gets the file server's own directory listing. `DELETE` and `MOVE` come back 403 — the bridge asks the file server for upload only. The share closes at the TTL (default 3600s), on `xfer_stop`, or when the bridge stops; a second share replaces the first. `xfer_status` and `xfer_stop` take no arguments. The bytes never travel over JSON-RPC; the bridge ships no byte protocol of its own.
 
-Nothing leaves the machine on its own: the route is loopback, and the only public hostname is the one the operator opens with `/a2mcp tunnel`. The reply's `usage.public` is the command that says so.
+Nothing leaves the machine on its own: the route is loopback, and the only public hostname is the one the operator opens with `/a2mcp tunnel`. While that tunnel is up, `xfer_share` and `xfer_status` return it as `publicUrl` — the same `/xfer/` route under the public hostname. While it is down, `publicUrl` is `null` and `usage.public` names the two ways in: an SSH port forward to the bridge port, or `/a2mcp tunnel`. The tool reports that hostname; it never opens one.
 
 **The token is the capability**: whoever holds it can read and write that path until the share closes. The share adds no credential of its own to hand out — the per-share basic-auth pair stays inside the bridge's proxied requests, out of every tool result, audit record and doc.
 
@@ -353,7 +353,7 @@ bun install
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
 bun run test:tree     # repo shape: no symlink points off this machine, 3 checks, no deps, no local omp (runs before bun test on purpose)
-bun test              # unit tests: test/*.test.ts (253: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
+bun test              # unit tests: test/*.test.ts (254: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
 bun run test:obtain   # the pinned binaries: fetches both for this platform, HEADs all ten asset URLs, reads the two Windows rows as bytes, 37 checks (needs no local omp; writes only inside its own /tmp directory)
 bun run test:registry # drive the takeover against the host's real model registry, 28 checks, seconds (needs no local omp, no credentials)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
