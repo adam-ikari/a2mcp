@@ -1,6 +1,6 @@
 {
   "name": "a2mcp",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Expose a running omp session's tools over MCP (Streamable HTTP), plus file transfer over HTTP through a quick tunnel",
   "license": "MIT",
   "type": "module",
