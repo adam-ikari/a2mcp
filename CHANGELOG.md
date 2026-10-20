@@ -219,7 +219,7 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - 内容: 见上 2026-10-20 的「接入面收成两条路」一节（新脚本、新探针 `test:mcp-call`、两份 README 的新小节与提示词补句、`docs/protocol.md` 时序末尾的参考指针、`docs/testing.md` 一行与起宿主前置六改七、站点卡、开发命令列表两份各加一行）。
 - 边界: 脚本测到的是「桥答得对、握手序列对」，不是「所有 agent 会照抄」——提示词那段是引导不是强制。Windows 无 `python3` 时脚本跑不起来，那是「既无 MCP 客户端能力、又无 python3」的机器的边界，文档指向 `mcp.json` 原生路，这里不内嵌解释器。探针是起宿主的独立探针（与 `test:install`/`test:bootstrap` 同级），不进 `bun test`，单测计数不动。Go 跨平台二进制方案讨论后否掉（会翻成第二套二进制分发系统 + CI 加编译链）。
 - 回归（发版前重跑的一遍，2026-10-20）: `bun test` 233 项 660 断言全绿；`lint` / `tsc` 干净；`MCP-CALL OK` 6 项（真宿主 + 假 404 服务器两条都过）；`BOOTSTRAP OK` 47 项；`PACKAGE OK`、npm 组如实 info 跳过、tarball 里没有 `scripts/`；站点 `build` + `check` 全过（首页卡新链 `/intro#两条接入路` 锚点在 dist 里核到）。
-- 发版之后核远程路：push 后从公开 git URL 装进临时 HOME（`test:install` 端到端组），`initialize` 回 `serverInfo.version` 0.5.3，一次 `tools/call` 通。〔占位——发布时按当场输出补全〕
+- 发版之后核远程路：push 后从公开 git URL `omp install https://github.com/adam-ikari/a2mcp.git` 装进临时 HOME，落盘 `a2mcp@0.5.3`；起宿主后 `initialize` 回 `serverInfo.version` 0.5.3；再用本次交付的 `scripts/mcp-call.py` 对这座远程装起的宿主跑 `call bash`，退 0、stdout `remote-053-ok`——装法、协议、参考客户端三样在同一次真机跑里一起验通。
 
 ## v0.5.2 — 文档面回到 git URL：包名收回为预留形态
 
