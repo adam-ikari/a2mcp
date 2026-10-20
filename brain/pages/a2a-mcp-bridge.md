@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-20T11:32:51"
+updated: "2026-10-20T12:06:27"
 ---
 
 <!-- compiled_truth -->
@@ -1005,4 +1005,10 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   kind: reversal
   summary: "翻的是 0.6.0 那条「工具不交出公网主机名」的一半：工具仍然不开隧道、也不把一条自己的隧道交给调用方（持 token 的调用方不能绕过操作员把宿主文件发布出去），但隧道开着时它会把那条已经存在的主机名作为 publicUrl 报出来——读一个现成状态，不新增暴露面。翻掉的另一半是它的推论「回包不提隧道」：远端 agent 拿回包拼不出文件地址，于是自己起了第二条隧道。AGENTS.md 例外清单第二条与 docs/protocol.md 的「工具不再交出公网主机名」按此改口。"
   source: "2026-10-20：远端 agent 拿到回包却拼不出文件地址"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-20T12:06:27
+  kind: decision
+  summary: "v0.7.0 发布（2026-10-20，commit 581acd4 + annotated tag v0.7.0，GitHub Release 已立）。minor 位的套用：2026-10-18 立的判据是「远程调用方拿到的东西变了进 minor」，这版命中一条——xfer_share 与 xfer_status 的回包多一个 publicUrl 字段（操作员那条 /a2mcp tunnel 开着时是同一条 /xfer/ 路由在那个公网主机名下的地址，没开是 null，usage.public 改口点名 SSH 转发与请操作员开隧道两条路）。工具仍然不开隧道也不关它，读的是一个已经存在的主机名；这是把 0.6.0 那条「工具不交出公网主机名」翻掉一半（timeline 里那条 reversal 记了）。发布形状照 v0.6.0：发布提交只动 package.json 与 CHANGELOG 两个文件，package.json 的 description 没动（插件的面貌没变，那句话是 omp plugin list 上显示的）。发版后核远程那条路（先例 bae9d01 的单文件 follow-up、commit e3ab3fa）：临时 HOME 从公开 git URL 装到 a2mcp@0.7.0，initialize 回包打印 0.7.0 即版本号自证，一次 tools/call read 200 并落 start/done 两条审计。回归：bun test 254 项 751 断言、lint/tsc 干净、tree 3、registry 5497 行、BOOTSTRAP OK 47、MCP-CALL OK 6、SMOKE OK（22 个工具）、HARDEN OK 34、SCENARIOS 41 步 0 失败、takeover 34 项 65.8 秒、审批 VERDICT B、test:obtain PASS 41、test:install PACKAGE OK 55、站点 build + check 全过。"
+  source: "v0.7.0 发布轮"
   affects: [a2a-mcp-bridge]
