@@ -1,5 +1,6 @@
 /**
- * Where the binaries behind `xfer_*` come from.
+ * Where the two binaries the bridge can go and fetch come from: `dufs` behind
+ * `xfer_*`, and `cloudflared` behind the operator's `/a2mcp tunnel`.
  *
  * ## Why this file exists
  *
@@ -128,9 +129,10 @@ export type Pins = Record<BinaryName, Record<string, Pin>>;
  * `win32-arm64` is absent on purpose: dufs publishes an aarch64 Windows build and
  * cloudflared does not — its release list has `windows-386.exe` and
  * `windows-amd64.exe` and nothing for arm64 (read from the GitHub release API on
- * 2026-10-19). One binary is not a working `xfer_share`, so the pair is not pinned
- * and a Windows-on-ARM host gets the "no pinned build" answer instead of a partial
- * table.
+ * 2026-10-19). The two were pinned together while one share needed both binaries.
+ * Since the share stopped carrying its own tunnel, what a Windows-on-ARM host is
+ * missing is the operator's tunnel rather than `xfer_share`; the dufs half could be
+ * pinned alone, and has not been.
  */
 const PINS: Pins = {
 	dufs: {

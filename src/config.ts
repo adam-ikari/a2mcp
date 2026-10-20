@@ -26,9 +26,9 @@ import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
  * Both are optional in the file: absent means the names below.
  */
 export interface XferConfig {
-	/** HTTP file server that serves the shared path. */
+	/** HTTP file server that serves the shared path (src/xfer.ts). */
 	dufs: string;
-	/** Tunnel binary that publishes it. */
+	/** Tunnel binary the operator's `/a2mcp tunnel` publishes the bridge port with. */
 	cloudflared: string;
 }
 

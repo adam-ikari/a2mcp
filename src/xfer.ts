@@ -3,12 +3,12 @@
  *
  * ## What this is, and what it is not
  *
- * There is no transfer protocol here. The bytes never touch JSON-RPC: a tool call
- * says *which* path to hand out, `dufs` serves that path over HTTP, and a
- * cloudflared quick tunnel (src/tunnel.ts) gives it a public hostname. A caller
- * then moves files with `curl`, `rclone`, a browser or a WebDAV client — GET to
- * download, PUT to upload — the same thing they would do against any other HTTP
- * file server.
+ * There is no transfer protocol here. The bytes never touch JSON-RPC: a tool call says
+ * *which* path to hand out, `dufs` serves that path on a loopback port, and the bridge
+ * proxies it under `/xfer/` on its own port (src/server.ts). A caller then moves files
+ * with `curl`, `rclone`, a browser or a WebDAV client — GET to download, PUT to upload —
+ * the same thing they would do against any other HTTP file server, with the same Bearer
+ * token the MCP calls use.
  *
  * That shape was chosen against the alternative, an encode-and-chunk protocol on
  * the MCP channel: MCP has no binary content type (JSON-RPC is text; its image and
@@ -17,21 +17,27 @@
  * Driving an existing HTTP server costs nothing per byte and gives range requests,
  * resumable downloads and directory listings for free.
  *
+ * One port, one gate, rather than one per surface: a cloudflared quick tunnel fronts
+ * exactly one origin (src/tunnel.ts), so files and tools share a hostname by sharing
+ * this port. Whether that hostname exists at all is the operator's call — `/a2mcp
+ * tunnel` — and never a tool's. Without it the route is reachable on the host and
+ * through whatever port forward the operator set up, and nothing more.
+ *
  * ## Why `dufs`
  *
- * One static binary per platform, no runtime, no config file, no account: GET
- * (with Range), PUT, DELETE, MKCOL/PROPFIND for WebDAV clients, directory
- * listings, and built-in HTTP basic auth so a public hostname is not an open door.
- * `cloudflared` is the other half, and the bridge goes looking for both of them the
- * same way.
+ * One static binary per platform, no runtime, no config file, no account: GET with
+ * Range, PUT, MKCOL, PROPFIND with a directory listing, and HTTP basic auth, which
+ * keeps the loopback port shut even though the bridge is the only thing meant to knock
+ * on it. Verbs the bridge does not ask for stay refused: `--allow-upload` is the only
+ * permission granted, so DELETE and MOVE come back 403 from the file server.
  *
- * The binaries are named, and the bridge can go and get them: `xfer.dufs` /
- * `xfer.cloudflared` point at a program, PATH is searched for that name, and when
- * nothing answers, `src/obtain.ts` downloads the pinned build, verifies it against
- * the sha256 pinned beside the version, and installs it into the bridge's bin
- * directory (`~/.local/bin`, or `%LOCALAPPDATA%\a2mcp\bin` on Windows). A value
- * containing a `/` or a `\` is the operator saying "use exactly this" and is never
- * downloaded for. See `src/obtain.ts` for why that is the shape it is.
+ * `xfer.dufs` names the program, PATH is searched for that name, and when nothing
+ * answers, `src/obtain.ts` downloads the pinned build, verifies it against the sha256
+ * pinned beside the version, and installs it into the bridge's bin directory
+ * (`~/.local/bin`, or `%LOCALAPPDATA%\a2mcp\bin` on Windows). A value containing a `/`
+ * or a `\` is the operator saying "use exactly this" and is never downloaded for. See
+ * `src/obtain.ts` for why that is the shape it is. `cloudflared` is resolved the same
+ * way, by the operator's tunnel command rather than by a share.
  *
  * ## What is deliberately left to the host
  *
@@ -49,8 +55,8 @@ import { isAbsolute, join, resolve } from "node:path";
 import { auditXfer } from "./audit.ts";
 import type { XferConfig } from "./config.ts";
 import { type BinaryName, defaultBinDir, type ObtainDeps, type Resolved, resolveBinary } from "./obtain.ts";
-import type { McpContent, McpTool } from "./server.ts";
-import { openQuickTunnel, type QuickTunnel, type TunnelOpener } from "./tunnel.ts";
+import type { McpContent, McpTool, XferRoute } from "./server.ts";
+import { XFER_ROUTE } from "./server.ts";
 
 /** How long a share stays open when the caller does not say. */
 const DEFAULT_TTL_SECONDS = 3600;
@@ -61,17 +67,19 @@ export const XFER_TOOL_NAMES = ["xfer_share", "xfer_status", "xfer_stop"] as con
 /**
  * The catalog entries, written the way a caller reads them: what the tool does,
  * what the argument means, and the one thing neither of those implies — that the
- * URL is a capability. Handing it out hands over the directory.
+ * share rides on the token. Whoever holds it holds the directory.
  */
 export const XFER_TOOLS: McpTool[] = [
 	{
 		name: "xfer_share",
 		description:
-			"Serve a host path over plain HTTP and publish it through a cloudflared quick tunnel. " +
-			"Returns a URL with HTTP basic auth credentials embedded: download with GET, upload with PUT, " +
-			"or point any WebDAV client at it. Range requests and directory listings work. " +
+			"Serve a host path over plain HTTP at the bridge's own /xfer/ route, under the same " +
+			"Bearer token as the tool calls: download with GET (range requests work), upload with PUT, " +
+			"or point any WebDAV client at the route. " +
 			"The share closes itself at `ttlSeconds` (default 3600) or on xfer_stop. " +
-			"The URL is a capability — whoever holds it can read and write that path until it closes.",
+			"Reachable on the host's loopback; a public hostname appears only while the operator's " +
+			"`/a2mcp tunnel` is open, at the same /xfer/ path. " +
+			"Sharing a path under this token shares it with every holder of that token.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -90,12 +98,13 @@ export const XFER_TOOLS: McpTool[] = [
 	},
 	{
 		name: "xfer_status",
-		description: "Report the current share, if any: path, local port, public URL, and when it closes.",
+		description: "Report the current share, if any: path, the route to use, and when it closes.",
 		inputSchema: { type: "object", properties: {} },
 	},
 	{
 		name: "xfer_stop",
-		description: "Close the current share: stop the HTTP server and the tunnel. Safe to call when nothing is shared.",
+		description:
+			"Close the current share: stop the file server and take the /xfer/ route down. Safe to call when nothing is shared.",
 		inputSchema: { type: "object", properties: {} },
 	},
 ];
@@ -108,30 +117,33 @@ export interface XferToolResult {
 interface Share {
 	path: string;
 	port: number;
-	url: string;
-	host: string;
-	user: string;
-	secret: string;
+	/** The internal credential: what the proxy presents to the file server. */
+	auth: string;
 	startedAt: number;
 	expiresAt: number;
 	server: ChildProcess;
-	tunnel: QuickTunnel;
 	timer: ReturnType<typeof setTimeout>;
 }
 
 export interface XferDeps {
-	/** Test seam: replace the tunnel opener (the real one needs cloudflared on PATH). */
-	openTunnel?: TunnelOpener;
 	/** Test seam: replace how a missing binary is found or fetched (src/obtain.ts). */
 	resolveBinary?: typeof resolveBinary;
 	/** Forwarded to the resolver: `binDir`, `fetchImpl`, `base`, `target`, the caps. */
 	obtain?: ObtainDeps;
+	/**
+	 * The bridge's own origin with the route on it, as a caller would type it. A getter,
+	 * because the port is not known until the server is listening and a share can outlive
+	 * a rebind.
+	 */
+	bridgeUrl?(): string;
 	now?(): number;
 }
 
 export interface Xfer {
 	handles(name: string): boolean;
 	call(name: string, args: unknown, sid: string | null): Promise<XferToolResult>;
+	/** Where `/xfer/*` forwards to, or null when nothing is shared. */
+	target(): XferRoute | null;
 	stop(): Promise<void>;
 }
 
@@ -194,7 +206,8 @@ async function waitForServer(
 			throw new Error(`the file server exited with code ${child.exitCode} before it served anything`);
 		}
 		try {
-			const r = await fetch(`http://127.0.0.1:${port}/`, { headers: { authorization: auth } });
+			const r = await fetch(`http://127.0.0.1:${port}${XFER_ROUTE}/`, { headers: { authorization: auth } });
+			// Anything under 500 counts: the process is up and talking HTTP.
 			if (r.status < 500) return;
 			last = `status ${r.status}`;
 		} catch (e) {
@@ -202,33 +215,33 @@ async function waitForServer(
 		}
 		await Bun.sleep(150);
 	}
-	throw new Error(`the file server did not answer on 127.0.0.1:${port} within ${timeoutMs}ms (${last})`);
+	throw new Error(`the file server did not answer on 127.0.0.1:${port}${XFER_ROUTE}/ within ${timeoutMs}ms (${last})`);
 }
 
 export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
-	const openTunnel: TunnelOpener = deps.openTunnel ?? openQuickTunnel;
 	const now = deps.now ?? Date.now;
 	const find = deps.resolveBinary ?? resolveBinary;
 	const obtain = deps.obtain ?? {};
-	/** One call per binary per share: PATH first, then the pinned download (src/obtain.ts). */
+	/** PATH first, then the pinned download (src/obtain.ts). */
 	const resolveBin = (name: BinaryName, configured: string, sid: string | null): Promise<Resolved> =>
 		find(name, configured, sid, obtain);
 	let share: Share | null = null;
+
+	/** What a caller types. The port is the bridge's, not the file server's. */
+	const routeUrl = (): string => `${deps.bridgeUrl?.() ?? ""}${XFER_ROUTE}/`;
 
 	async function close(reason: string): Promise<void> {
 		const s = share;
 		if (!s) return;
 		share = null;
 		clearTimeout(s.timer);
-		// The waiter is registered before the signal is sent, and the two statements
-		// are not separated by an await: the file server answers SIGTERM within a few
-		// milliseconds, and `tunnel.stop()` below is real event-loop time enough for
-		// its exit to be delivered inside that await (test/xfer.test.ts). On Windows
-		// there is no SIGTERM to answer — `kill` ends the process there — so the exit
-		// arrives even sooner and the 2 s fallback below never fires.
+		// The waiter is registered before the signal is sent and the two statements are
+		// not separated by an await: the file server answers SIGTERM within a few
+		// milliseconds, and an exit delivered before anyone is listening is an exit
+		// nobody hears (test/xfer.test.ts). On Windows there is no SIGTERM to answer —
+		// `kill` ends the process there — so the 2 s fallback below never fires.
 		const dead = exited(s.server);
 		s.server.kill("SIGTERM");
-		await s.tunnel.stop();
 		// The port is what has to be free before another share can be opened, and it
 		// is released when the child exits, not when the signal is sent.
 		const gone = await Promise.race([dead.then(() => true), Bun.sleep(2000).then(() => false)]);
@@ -272,7 +285,7 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 		}
 
 		// One share at a time: a second `xfer_share` replaces the first rather than
-		// leaving a public URL open that the caller has stopped thinking about.
+		// leaving a route open that the caller has stopped thinking about.
 		const replaced = share !== null;
 		if (replaced) await close("replaced");
 
@@ -292,10 +305,19 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 					"127.0.0.1",
 					"--port",
 					String(port),
+					// Told its own prefix, the file server emits prefix-correct absolute
+					// references — the directory page's CSS and JS, the `?json` listing, the
+					// PROPFIND hrefs — so a caller following one stays on the route. The
+					// constant is the one the proxy matches on (src/server.ts).
+					"--path-prefix",
+					XFER_ROUTE,
 					"--allow-upload",
 					// dufs takes credentials and their role in one string: `user:pass@/path:rw`.
 					// Without the `@…` half it refuses the argument outright — which is how this
 					// was found, a bare `user:pass` exits 1 with "Invalid auth".
+					// The path here is relative to the share root, NOT to the prefix: writing
+					// `@${XFER_ROUTE}:rw` matches nothing and every request comes back 403,
+					// including the ones with the right credentials.
 					"--auth",
 					`${user}:${secret}@/:rw`,
 				],
@@ -314,18 +336,14 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 			return text(why, true);
 		}
 
-		let tunnel: QuickTunnel;
-		let cf: Resolved;
 		try {
 			await waitForServer(server, port, auth, 10_000, () => spawnFailure);
-			cf = await resolveBin("cloudflared", cfg.cloudflared, sid);
-			tunnel = await openTunnel({ bin: cf.path, port });
 		} catch (e) {
 			const why = (e as Error).message;
 			server.kill("SIGKILL");
 			const missing = /ENOENT|not found|127/.test(`${why}${serverErr}`);
 			const hint = missing
-				? ` — the bridge resolves '${cfg.dufs}' and '${cfg.cloudflared}' itself: PATH first, then a pinned download into ${defaultBinDir(process.env, process.platform)}. A configured value containing '/' or '\\' is used exactly as given and never fetched`
+				? ` — the bridge resolves '${cfg.dufs}' itself: PATH first, then a pinned download into ${defaultBinDir(process.env, process.platform)}. A configured value containing '/' or '\\' is used exactly as given and never fetched`
 				: "";
 			await auditXfer(sid, "share", { path, port }, why);
 			return text(`${why}${hint}`, true);
@@ -333,50 +351,43 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 
 		const startedAt = now();
 		const expiresAt = startedAt + ttl * 1000;
-		const host = tunnel.url.replace(/^https?:\/\//, "");
 		const timer = setTimeout(() => {
 			void close("ttl expired");
 		}, ttl * 1000);
 		// A pending share must not keep the process alive on its own; shutdown closes
 		// it explicitly.
 		timer.unref?.();
-		share = {
-			path,
-			port,
-			url: `https://${user}:${secret}@${host}/`,
-			host,
-			user,
-			secret,
-			startedAt,
-			expiresAt,
-			server,
-			tunnel,
-			timer,
-		};
+		share = { path, port, auth, startedAt, expiresAt, server, timer };
 
-		await auditXfer(sid, "share", { path, port, ttl }, null);
+		const url = routeUrl();
+		await auditXfer(sid, "share", { path, port, ttl, route: `${XFER_ROUTE}/` }, null);
 		return text({
-			url: share.url,
-			host: tunnel.url,
-			user,
-			secret,
+			url,
+			route: `${XFER_ROUTE}/`,
 			path,
 			port,
 			replaced,
 			startedAt: new Date(startedAt).toISOString(),
 			expiresAt: new Date(expiresAt).toISOString(),
 			usage: {
-				download: `curl -u ${user}:${secret} -O ${tunnel.url}/<name>`,
-				upload: `curl -u ${user}:${secret} -T <local> ${tunnel.url}/<name>`,
+				// `<TOKEN>` stays a placeholder: this object is read by the host's model
+				// and lands in logs, and the bridge's token belongs to neither.
+				download: `curl -H 'Authorization: Bearer <TOKEN>' -O ${url}<name>`,
+				upload: `curl -H 'Authorization: Bearer <TOKEN>' -T <local> ${url}<name>`,
+				public:
+					"the same /xfer/ path under the operator's public hostname while `/a2mcp tunnel` is open; " +
+					"loopback or an SSH forward only when it is not",
 			},
 			// Why this call took a few seconds: a version here means the bridge fetched
 			// that build during this call (src/obtain.ts), `null` means it was already there.
-			installed: { dufs: dufs.installed?.version ?? null, cloudflared: cf.installed?.version ?? null },
+			installed: { dufs: dufs.installed?.version ?? null },
 		});
 	}
 
 	return {
 		handles: (name) => (XFER_TOOL_NAMES as readonly string[]).includes(name),
+		target: () =>
+			share === null ? null : { port: share.port, baseUrl: `http://127.0.0.1:${share.port}`, auth: share.auth },
 		async call(name, args, sid) {
 			try {
 				if (name === "xfer_share") return await begin(args, sid);
@@ -391,9 +402,9 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 					return text({
 						serving: true,
 						path: share.path,
+						url: routeUrl(),
+						route: `${XFER_ROUTE}/`,
 						port: share.port,
-						url: share.url,
-						host: `https://${share.host}`,
 						startedAt: new Date(share.startedAt).toISOString(),
 						expiresAt: new Date(share.expiresAt).toISOString(),
 					});

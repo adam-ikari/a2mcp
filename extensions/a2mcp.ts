@@ -72,7 +72,9 @@ let liveCallTool: ReturnType<typeof buildCallTool> | null = null;
 let xfer: Xfer | null = null;
 
 /**
- * The operator-opened quick tunnel in front of the MCP endpoint, or `null`.
+ * The operator-opened quick tunnel in front of the bridge's port, or `null` — which
+ * makes it the public face of the MCP endpoint and of `/xfer` at the same time, because
+ * a quick tunnel fronts exactly one origin and both are served on it.
  *
  * Runtime state only — like the takeover toggle, it never touches the config
  * and dies with the bridge. One per process because `server` is one per
@@ -157,7 +159,11 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 					}
 				}
 				// Before the port opens: `getTools` and `callTool` below close over it.
-				xfer = createXfer(cfg.xfer);
+				// `bridgeUrl` is a getter because the share's advertised URL is this
+				// process's own origin, and the port is only known after the bind.
+				xfer = createXfer(cfg.xfer, {
+					bridgeUrl: () => (server && cfg ? `http://${cfg.host}:${server.port}` : ""),
+				});
 				server = await startServer(cfg, {
 					// The host's registry verbatim, plus the bridge's own transfer tools:
 					// `xfer_*` is served by this process (src/xfer.ts), not forwarded to the
@@ -180,6 +186,9 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 					// code. Two copies of a version number, and nothing compares them.
 					serverInfo: () => ({ name: "a2mcp", version: BRIDGE_VERSION }),
 					takeover: { setEnabled },
+					// The `/xfer` proxy asks this object where the file server is, per request
+					// (src/server.ts). Structurally it is the seam `XferRouteDeps` declares.
+					xfer,
 				});
 				if (!hasMainSession()) {
 					// The session this start was for ended while the bind was in flight, and its
@@ -225,11 +234,14 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 		// subagent emits it while the Main session is alive. Stopping here would take the
 		// endpoint down with a session that was never ours to serve.
 		if (hasMainSession()) return;
-		// The share holds a public URL and a spawned server; the endpoint going away
-		// has to take both with it, or the hostname outlives the bridge that opened it.
-		// The MCP tunnel is the same kind of promise: a public hostname pointing at a
-		// port this process is about to close. No audit here — a stop by teardown is
-		// the same "no record for a plain stop" rule `xfer.stop()` follows.
+		// The share is a spawned file server plus a route on this port: the endpoint
+		// going away has to take both with it, or `/xfer` would outlive the share it
+		// forwards to. The MCP tunnel is the same kind of promise — a public hostname
+		// pointing at a port this process is about to close, carrying the same `/xfer`
+		// path. No audit here — a stop by teardown is the same "no record for a plain
+		// stop" rule `xfer.stop()` follows. A `/xfer` request still in flight when the
+		// file server dies gets the 502 the route already answers with; the port is
+		// released last so an MCP call in flight can still finish (src/server.ts).
 		await mcpTunnel?.stop();
 		mcpTunnel = null;
 		tunnelOpening = null;
@@ -243,7 +255,7 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 
 	pi.registerCommand("a2mcp", {
 		description:
-			"Show a2mcp status, rotate its token with `a2mcp rotate`, show the full token with `a2mcp token`, or open (`a2mcp tunnel`) and close (`a2mcp tunnel stop`) a public quick tunnel in front of the MCP endpoint.",
+			"Show a2mcp status, rotate its token with `a2mcp rotate`, show the full token with `a2mcp token`, or open (`a2mcp tunnel`) and close (`a2mcp tunnel stop`) a public quick tunnel in front of the bridge endpoint — tool calls and the /xfer file route both ride it.",
 		handler: async (args, ctx) => {
 			try {
 				if (args.trim() === "rotate") {
@@ -299,7 +311,7 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 					}
 					if (mcpTunnel) {
 						ctx.ui.notify(
-							`a2mcp tunnel already open: ${mcpTunnel.url}/ — public; the Bearer token is the only gate; /a2mcp tunnel stop closes it`,
+							`a2mcp tunnel already open: ${mcpTunnel.url}/ — public; the Bearer token is the only gate; /xfer/ rides it too; /a2mcp tunnel stop closes it`,
 						);
 						return;
 					}
@@ -310,7 +322,7 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 							mcpTunnel = opened;
 							await auditTunnel("start", { url: opened.url, port }, null);
 							ctx.ui.notify(
-								`a2mcp tunnel: ${opened.url}/ — public; the Bearer token is the only gate; /a2mcp tunnel stop closes it`,
+								`a2mcp tunnel: ${opened.url}/ — public; the Bearer token is the only gate; /xfer/ rides it too; /a2mcp tunnel stop closes it`,
 							);
 						} catch (e) {
 							const why = (e as Error)?.message ?? String(e);

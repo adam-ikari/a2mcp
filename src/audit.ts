@@ -237,11 +237,13 @@ export function auditHostLlm(
  * One record per `xfer_*` tool call.
  *
  * The bridge owns these tools rather than forwarding them to the host, so nothing
- * in the host's own log accounts for them — and what they do is hand a host path
- * to an HTTP server behind a public hostname. Every action that opens, closes or
- * fails to open a share lands here, with `args` carrying the path, the local port
- * and the TTL rather than any content: the payload is whatever the caller moves
- * through that URL afterwards, which this log never sees.
+ * in the host's own log accounts for them — and what they do is hand a host path to
+ * a file server the bridge then serves at its own `/xfer` route, reachable by
+ * whoever holds the token (and by the public, while the operator's tunnel is open).
+ * Every action that opens, closes or fails to open a share lands here, with `args`
+ * carrying the path, the local port, the TTL and the route rather than any content:
+ * the payload is whatever the caller moves through that route afterwards, which this
+ * log never sees.
  */
 export function auditXfer(
 	sid: string | null,
