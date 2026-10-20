@@ -5,7 +5,7 @@
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
 | `bun run test:tree` | 仓库形状核验，3 项，无依赖 | 否 | `tree-probe: repo shape OK` |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 231 pass / 0 fail（17 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 233 pass / 0 fail（17 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
 | `bun run test:obtain` | 外部二进制获取核验，37 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
@@ -157,7 +157,7 @@
 | Windows 那两行按字节读 | 4 | `win32-x64` 那两行指向错 asset 也一样回 200，而本仓库没有一处运行 Windows 二进制，所以这两行按 Windows 主机会读的方式读一遍：dufs 的 zip 在这台机器上算出的 sha256 与表里一致、表里那个条目名由 `readZipEntry`（win32 安装走的同一段代码）读得出来（实测 4 721 664 字节）、cloudflared 的 `.exe` 前两个字节是 `4d5a`（HTTP 206 拿到的，不是归档）、报回的总长 55 325 120 在桥自己的 64 MB 上限之内。这四项说的是「字节与形状都对」，说不了「跑得起来」 |
 | 审计 | 3 | 日志里两个版本各一条 `install`，`share` 记录在 |
 
-这组核验里 cloudflared 走的是**写明路径**那一侧，所以「两个二进制都由一次 `xfer_share` 拉下来」这条它没有覆盖，单测也没有（单测把获取整个 stub 掉）。那一条要靠真宿主的端到端：隔离 `HOME`、`PATH` 削到只剩宿主自己，远程调 `xfer_share`。2026-10-17 头一遍跑绿是拿用完即删的脚本量的：14.0 秒返回，`installed` 是 `{"dufs":"0.46.0","cloudflared":"2026.10.1"}`，两个文件都落在桥自己的 `HOME` 里（6.4 MB 与 38.4 MB，`0755`），登记各一行，审计是 `install` 两条加 `share`、`stop` 各一条，loopback GET 字节一致、PUT 201 落盘、错密码 401、`xfer_stop` 后端口释放，操作者真正的 `~/.local/bin` 里依然没有 `dufs`。同一趟在出网差的时候也真跑过另一遍：dufs 装成功，cloudflared 那 40 MB 在流里停住，120 秒到点回 `isError` 带失败原文，共享没开成、dufs 服务被收走、没有孤儿进程，整趟 229 秒——冷装两个二进制最坏就是两个 120 秒加握手，这两遍合起来把上限与正常值都量到了。第二天这一遍升格成 `test:install` 的第五组（见上一节），从此它是提交里的核验，脚本不再是唯一证人。
+这组核验里 cloudflared 走的是**写明路径**那一侧，所以「两个二进制都由一次 `xfer_share` 拉下来」这条它没有覆盖，单测也没有（单测把获取整个 stub 掉）。那一条要靠真宿主的端到端：隔离 `HOME`、`PATH` 削到只剩宿主自己，远程调 `xfer_share`。2026-10-17 头一遍跑绿是拿用完即删的脚本量的：14.0 秒返回，`installed` 是 `{"dufs":"0.46.0","cloudflared":"2026.10.1"}`，两个文件都落在桥自己的 `HOME` 里（6.4 MB 与 38.4 MB，`0755`），登记各一行，审计是 `install` 两条加 `share`、`stop` 各一条，loopback GET 字节一致、PUT 201 落盘、错密码 401、`xfer_stop` 后端口释放，操作者真正的 `~/.local/bin` 里依然没有 `dufs`。同一趟在出网差的时候也真跑过另一遍：dufs 装成功，cloudflared 那 40 MB 在流里停住，120 秒到点回 `isError` 带失败原文，共享没开成、dufs 服务被收走、没有孤儿进程，整趟 229 秒——冷装两个二进制最坏就是两个 120 秒加握手，这两遍合起来把上限与正常值都量到了。第二天这一遍升格成 `test:install` 的第五组（见上一节），从此它是提交里的核验，脚本不再是唯一证人。**那道 120 秒总墙上时钟本身在 2026-10-20 被一台真 Windows 机器量穿**：52.7 MB 的 `.exe` 在它里面取不完，报出的还是同一句超时——它分不清「慢」和「死」。现在它换成了 30 秒无字节空闲窗加 10 分钟总期限（`docs/protocol.md` 的取回三道门），慢流只要一直在进字节就能装完，死连接 30 秒内报死；单测 `test/obtain.test.ts` 里三条滴流/停顿/永不收敛的形状守的就是这一换，两遍真机读数（229 秒旧形状与 Windows 超时）都留在原处不重写。
 
 真隧道单列，只 `info:` 报告不断言：拿第一节下载并验过哈希的那份 cloudflared 起一次真 quick tunnel，主机名确实 announce 出来了，但从发布它的那台机器 curl 回去报证书错误——本机网络对代理域名重签 TLS。于是断言那一路用注入的开洞器，硬检查一律打在 `127.0.0.1:<port>` 上。还有一处现象记在 `test/obtain-probe.ts` 的文件头而没有解释：探针自己同时握住真 cloudflared 与那次公网取回时，两次都是本地各项全过、然后不再返回。它留在文件头，是因为没查清原因的事既不能写成结论，也不能写成断言。
 

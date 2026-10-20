@@ -4,6 +4,16 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## 2026-10-20 — 取回改进度感知：Windows 真机把 120 秒墙上时钟量穿了
+
+维护者的 Windows 机器第一次真跑 `/a2mcp tunnel`，回来的报错是 `downloading cloudflared-windows-amd64.exe failed: The operation timed out.`。撞上的不是隧道，是 `src/obtain.ts` 的第一次安装：`download()` 用一道 `AbortSignal.timeout` 管整条响应体，默认 120 秒——那 52.7 MB 的裸 `.exe` 要在里面走完，约需 450 KB/s 持续吞吐。这条限制此前写在代码注释与 `docs/protocol.md` 里，原话是「没在目标平台上跑过的限制该有的样子」，这次它第一次在目标平台上跑了，样子正是注释预言的那样：慢但活的连接与根本不答的连接，拿到的是同一句 `The operation timed out.`，操作者无从分辨该等一等还是该绕行。`xfer_share` 的两个二进制走同一条 `download()`，隧道只是第一个把这条撞出来的入口。
+
+- fix: `download()` 换成三道门——64 MB 体积上限不动，新增 **30 秒无字节空闲窗**（计时器在请求发出前武装，覆盖 connect/headers/首字节；每来一块字节重置，死了 30 秒内报死，不再拖满总时长）与 **10 分钟总期限**（一直滴但不收敛的流仍要有终点）；两类超时各有名字（`stalled … no bytes for …` 带已收字节数 / `gave up after … ms with only … bytes received`）。超时类失败的消息尾上点名既有逃生门：把二进制放上 PATH，或配置 `xfer.<name>` 写绝对路径——桥按原样用、一个字节都不下载。测试缝 `deps.timeoutMs` 拆成 `deps.idleMs` + `deps.totalMs`，默认值生产侧生效，`resolveBinary` 的调用面貌不变。
+- test: `bun test` 231 → 233（`test/obtain.test.ts` 30 → 32）。旧的那条「停住的 body 撞 deadline」重写成三条形状：小步滴流的**真钉字节**（假发布机新增按块发真内容的形态）总时长远超空闲窗照样装成——这是旧墙上时钟 denial 的那台 Windows 的形状；块间一个超过空闲窗的停顿 → `stalled` 并带出逃生门句子；永不收敛的滴流 → 总期限消息。变异一道：删掉每块的 `armIdle()` 重置 → 滴流与停顿两条红、恢复全绿。
+- docs: `docs/protocol.md` 取回一节那句「64 MB 与 120 秒墙上时钟」改成三道门的形状与这次读数的来历；`docs/testing.md` 第五组那段 2026-10-17 的 229 秒读数原文保留、段尾补一句这条限制被真机量穿与换代（历史不重写）；单测计数三份文档与站点卡同步 233。
+- 边界：这台 Linux 测不了 Windows 的真执行，新预算下的真机首跑要等维护者那侧回读；持续低于约 90 KB/s 的连接在 10 分钟里也放不进 52.7 MB——那不是这里的洞，是逃生门的地盘，错误消息现在直接把它指给操作者（浏览器手动下载那份 `.exe`，配置写绝对路径，`/a2mcp tunnel` 立刻能开）。断点续传不做：为一条连接加半个下载器，违背这个包管理器「最小」的定位。
+- 回归：`bun test` 233/233（660 expect）、`tsc` / `lint` 干净；`test:obtain` 真网络复跑与站点 `build` + `check` 随发布门禁跑（见 v0.5.1 总览节）。
+
 ## 2026-10-20 — 安装形态切到 npm：`omp install a2mcp`，落盘的是 tarball 不是整棵仓库
 
 维护者的判据是「安装的内容应该精简，不要整个 git 安装」。量先把话坐实：`omp install <git-url>`（带 `#tag` 也一样）落盘的是整棵仓库的 checkout，2.3 MB，`docs/`、`brain/`、`test/`、`website/` 全带上——bun 的 git 安装路不读 `files` 字段，git 形态没有只装子集的办法；宿主对 tarball URL 直接拒收（实测 `Invalid package name`），本地 `.tgz` 走 link 报 `ENOTDIR`。宿主认的远程形态因此只剩两种，其中受 `files` 控制的只有 npm 包名那一种：`bun pm pack` 出的 tarball 63.6 KB、15 个文件，加载真正读的 `extensions/` 与 `src/` 都在里面。这一轮把安装切到 `omp install a2mcp`，git URL 降为兼容写法——开头的「不发布到 npm」那条旧决定跟着翻面，brain 三页同句的旧话与 timeline 一条 reversal 同步改。
