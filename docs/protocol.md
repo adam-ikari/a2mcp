@@ -6,27 +6,28 @@ a2mcp 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable HTTP 子
 
 | 项 | 行为 |
 | --- | --- |
-| 端点 | MCP 侧不校验 URL path，任意路径的 POST/DELETE 均受理；惯例用 `/`（`http://127.0.0.1:<port>/`）。例外是 `/host-llm`，见「宿主推理切换」 |
-| POST | 单条 JSON-RPC 2.0 消息；**不支持 batch**（顶层数组 → 400）；请求体上限 128MB（`maxRequestBodySize`） |
-| GET | `405` 空响应体（不实现 SSE 端点与流式推送） |
-| DELETE | 结束会话，见「会话生命周期」 |
-| 其他方法（PUT 等） | `405` |
-| 响应头 | 一律 `Content-Type: application/json`；`initialize` 额外返回 `mcp-session-id` |
+| 端点 | MCP 侧不校验 URL path，任意路径的 POST/DELETE 均受理；惯例用 `/`（`http://127.0.0.1:<port>/`）。两个例外：`/xfer` 前缀是文件路由（见「桥自己的工具：`xfer_*`」），`/host-llm` 见「宿主推理切换」 |
+| POST | 单条 JSON-RPC 2.0 消息；**不支持 batch**（顶层数组 → 400）；请求体上限 128MB（`maxRequestBodySize`）。`/xfer/` 上的 PUT 上传受的是同一道上限 |
+| GET | 非文件路由 → `405` 空响应体（不实现 SSE 端点与流式推送）；`/xfer/…` 交给文件路由 |
+| DELETE | 非文件路由 → 结束会话，见「会话生命周期」；`/xfer/…` 上的 DELETE 原样转发，文件服务器回 403（桥只向它要了上传权限） |
+| 其他方法（PUT 等） | 非文件路由 → `405`；`/xfer/…` 原样转发 |
+| 响应头 | MCP 响应一律 `Content-Type: application/json`；`initialize` 额外返回 `mcp-session-id`。文件路由是透传，只有逐跳头与 `www-authenticate` 被删 |
 | CORS | 不发送（回环工具，非浏览器场景） |
 
 ### 请求处理顺序
 
 错误按以下顺序**先到先判**（例如「未鉴权 + 缺会话头」这一条，鉴权在前，给出 401）：
 
-1. HTTP 方法（非 POST/DELETE → 405）
-2. 鉴权（→ 401）
-3. `/host-llm` 路由（受理 `POST`；这条路径上的其他方法 405，不进 JSON-RPC 分支）
-4. body 解析（→ 400 parse error）
-5. JSON-RPC 形状校验（→ 400 invalid request）
-6. 会话强制，仅对非 `initialize` 消息（→ 400 / 404）
-7. `notifications/*` 前缀 → `202` 空响应体
-8. 方法分发（未知方法 → `-32601`）
-9. 兜底异常 → 500（细节只进宿主 stderr）
+1. 路径与 HTTP 方法：`/xfer` 前缀（`/xfer` 与 `/xfer/…`）是文件路由，方法原样放过；其他路径非 POST/DELETE → 405
+2. 鉴权（→ 401）。两个面共用同一个 Bearer token
+3. `/xfer` 前缀 → 反代到文件服务器，见「桥自己的工具：`xfer_*`」。不进 JSON-RPC 分支，也不写审计：审计记的是共享的开与停，不是每一次 GET/PUT
+4. `/host-llm` 路由（受理 `POST`；这条路径上的其他方法 405，不进 JSON-RPC 分支）
+5. body 解析（→ 400 parse error）
+6. JSON-RPC 形状校验（→ 400 invalid request）
+7. 会话强制，仅对非 `initialize` 消息（→ 400 / 404）
+8. `notifications/*` 前缀 → `202` 空响应体
+9. 方法分发（未知方法 → `-32601`）
+10. 兜底异常 → 500（细节只进宿主 stderr）
 
 ## 一个进程，一套端口
 
@@ -163,43 +164,47 @@ providers:
 
 ### 桥自己的工具：`xfer_*`
 
-`tools/list` 里那三个名字不是宿主的工具，是桥自己服务的（`src/xfer.ts`）。**按「`tools/list` 里每个名字都是宿主工具」写死的客户端要改：目录是宿主注册表逐字加恰好这三个。** 三者都由桥分派，不进宿主的 `getToolByName()`，也不过宿主的审批门；每次动作写一条审计，`tool: "xfer"`（`phase: "done"`，`args.action` 为 `share` / `close` / `stop` / `install`，`args` 带路径、本地端口与 TTL，不含任何内容）。
+`tools/list` 里那三个名字不是宿主的工具，是桥自己服务的（`src/xfer.ts`）。**按「`tools/list` 里每个名字都是宿主工具」写死的客户端要改：目录是宿主注册表逐字加恰好这三个。** 三者都由桥分派，不进宿主的 `getToolByName()`，也不过宿主的审批门；每次动作写一条审计，`tool: "xfer"`（`phase: "done"`，`args.action` 为 `share` / `close` / `stop` / `install`，`args` 带路径、本地端口、TTL 与路由，不含任何内容）。
 
 **`xfer_share`** — 参数 `{ path, ttlSeconds? }`。`path` 必填，是文件或目录（`~` 与 `~/x` 展开到宿主家目录，相对路径按宿主的 working directory 解析）；`ttlSeconds` 缺省 3600。成功时 `result.content[0].text` 是一段 JSON：
 
 ```json
-{ "url": "https://omp:<secret>@<random>.trycloudflare.com/",
-  "host": "https://<random>.trycloudflare.com",
-  "user": "omp", "secret": "<12 字节 base64url>",
+{ "url": "http://127.0.0.1:44347/xfer/",
+  "route": "/xfer/",
   "path": "<绝对路径>", "port": 52137, "replaced": false,
   "startedAt": "2026-10-16T04:35:23.000Z", "expiresAt": "2026-10-16T05:35:23.000Z",
-  "usage": { "download": "curl -u omp:<secret> -O https://<random>.trycloudflare.com/<name>",
-             "upload": "curl -u omp:<secret> -T <local> https://<random>.trycloudflare.com/<name>" } }
+  "usage": { "download": "curl -H 'Authorization: Bearer <TOKEN>' -O http://127.0.0.1:44347/xfer/<name>",
+             "upload": "curl -H 'Authorization: Bearer <TOKEN>' -T <local> http://127.0.0.1:44347/xfer/<name>",
+             "public": "the same /xfer/ path under the operator's public hostname while `/a2mcp tunnel` is open; loopback or an SSH forward only when it is not" },
+  "installed": { "dufs": null } }
 ```
 
-- `url` 带凭据，`host` 不带；`port` 是本地端口，`dufs` 只绑 `127.0.0.1`，公网那一侧由 quick tunnel 转发。字节不经 MCP 通道：`tools/call` 只送一条指令，下行 `curl -u omp:<secret> -O <host>/<name>`、上行 `curl -u omp:<secret> -T <local> <host>/<name>`，Range 续传、目录列表与 WebDAV 客户端都是 `dufs` 的能力。
+- 共享不再有公网那一半：桥把 `dufs` 反向下代理到自己端点的 `/xfer/` 路由上，`url` 就是那条路由，`port` 是 `dufs` 自己听的回环端口。`usage` 里的 `<TOKEN>` 是占位符，桥不回自己的 token——拿着 token 的人配置里读得到，回包里不需要再抄一份。
+- 代理的契约（`src/server.ts` 的 `proxyXfer`）：`/xfer` 前缀之后的路径**逐字转发**，query 带上（`?json` 可用）；`Authorization` 一律换成桥为这次共享生成的 basic-auth 对，调用方带什么都不影响；逐跳头两边都删，回包额外删 `www-authenticate`；`Accept-Encoding` 改写为 `identity`，避免上游压缩后桥再压缩一遍；`redirect: "manual"`，上游的 3xx 原样报给调用方而不是由桥跟着跑。`dufs` 起不来或共享已经关掉，回 `502`，端口号只进宿主 stderr。
+- 路径逐字转发靠的是 `dufs --path-prefix /xfer`：目录列表里的绝对引用、`?json` 的 `uri_prefix`、WebDAV 的 `D:href` 都带着前缀，跟着一个链接不会掉出路由。不加这个旗标时它们写成根绝对路径（`/__dufs_v0.46.0__/index.css`、`/up.txt`），代理剥掉前缀就全指错地方——这一条是 0.46.0 真机量出来的，`test:obtain` 与 `test:install` 每轮各验一次。
+- 桥只向文件服务器要了上传（`--allow-upload`），`DELETE` 与 `MOVE` 回 403；`MKCOL`、`PROPFIND`、Range 与目录列表是 `dufs` 自带的能力，WebDAV 客户端和浏览器都能直接用。
 - 同一时刻只有一个共享：第二次 `xfer_share` 先关掉前一个，回包 `replaced: true`。
-- 两个二进制由桥自己找齐（`src/obtain.ts`）。配置里的值带 `/` 或 `\` 就按那条路径用，缺了也不下载，这是「这台机器不许下载」的写法；不带分隔符就扫本机 `PATH`（Windows 中按 `PATHEXT` 的后缀逐个试），其次复用桥自己装过的那一份（登记在 `<agentDir>/a2mcp.installs.json`），都没有才去下载：版本与 asset 名是代码里的字面量，字节回来先比对同一处钉住的 sha256，再取出要的那一个文件——`.tar.gz` 交给 `tar` 解到临时目录并检查条目没跑出目录之外，`.zip` 在本仓库自己的读取器里展开那一个条目、一个字节都不落盘，裸 `.exe` 直接就是它——最后以 `0755` 原子写入安装目录（Windows 上文件名带 `.exe`，目录是 `%LOCALAPPDATA%\a2mcp\bin`；`0755` 是 POSIX 的位，在那边没有意义）。不请求 `latest`，也不向给字节的那台服务器要校验和；升级是改这个仓库的一次提交。桥不会覆盖一个不是自己装的文件，报它的哈希了事。两条都钉死了 Linux x64/arm64、macOS x64/arm64、Windows x64 五项：`dufs` 0.46.0（Linux 取 musl 静态构建，Windows 是 zip 里的 `dufs.exe`），`cloudflared` 2026.10.1（Linux 是裸 ELF，macOS 是 `.tgz` 里一个 `cloudflared`，Windows 是 `.exe`）。`win32-arm64` 这一行是空的，因为上游不发那个构建，桥在那里直接拒绝下载并说出缺什么。下载过三道门：64 MB 的体积上限、30 秒的无字节空闲窗、10 分钟的总期限。空闲窗在请求发出前就武装、每来一块字节就重新计时，连接死了 30 秒内就报，不会拖满总时长；还在进字节的慢流可以一路跑到总期限。这个形状是 2026-10-20 一次真机读数换来的：此前是一道 120 秒的墙上时钟管全身，慢连接与死连接拿的是同一句 `The operation timed out.`，Windows 主机上 52.7 MB 的 `.exe` 在它里面取不完（450 KB/s 起步的门槛）。超时之外还有一种失败：哈希与钉值不符则拒绝安装，说的是字节本身。两条超时都点名逃生门——把二进制放上 `PATH`，或在配置 `xfer.<name>` 写它的绝对路径，桥就按原样用、不再下载。`bun run test:obtain` 每轮把钉表里十个 asset 的 URL 全部 `HEAD` 一遍，本机这一行真下、真跑，Windows 那两行真下、只到字节为止（zip 解出 `dufs.exe`、`.exe` 认出 PE 头），跑不了。
-- 失败一律 `200` + `isError: true`，text 就是原因：缺 `path` 为 `xfer_share needs a 'path' — the file or directory to serve`；路径 `stat` 失败为 `cannot serve <path>: <原因>`；`dufs` 或 `cloudflared` 起不来为子进程/隧道的错误原文。获取二进制失败的另外写一条 `install` 审计，带上是哪个 asset、钉的是哪个哈希；成功的那条同样在 `spawn` 之前落盘。
+- 文件服务器由桥自己找（`src/obtain.ts`）。配置里的值带 `/` 或 `\` 就按那条路径用，缺了也不下载，这是「这台机器不许下载」的写法；不带分隔符就扫本机 `PATH`（Windows 中按 `PATHEXT` 的后缀逐个试），其次复用桥自己装过的那一份（登记在 `<agentDir>/a2mcp.installs.json`），都没有才去下载：版本与 asset 名是代码里的字面量，字节回来先比对同一处钉住的 sha256，再取出要的那一个文件——`.tar.gz` 交给 `tar` 解到临时目录并检查条目没跑出目录之外，`.zip` 在本仓库自己的读取器里展开那一个条目、一个字节都不落盘，裸 `.exe` 直接就是它——最后以 `0755` 原子写入安装目录（Windows 上文件名带 `.exe`，目录是 `%LOCALAPPDATA%\a2mcp\bin`；`0755` 是 POSIX 的位，在那边没有意义）。不请求 `latest`，也不向给字节的那台服务器要校验和；升级是改这个仓库的一次提交。桥不会覆盖一个不是自己装的文件，报它的哈希了事。两条都钉死了 Linux x64/arm64、macOS x64/arm64、Windows x64 五项：`dufs` 0.46.0（Linux 取 musl 静态构建，Windows 是 zip 里的 `dufs.exe`），`cloudflared` 2026.10.1（Linux 是裸 ELF，macOS 是 `.tgz` 里一个 `cloudflared`，Windows 是 `.exe`）。`win32-arm64` 这一行是空的，因为上游不发 `cloudflared` 的那个构建；两张表是共享还要两个二进制那会儿一起钉的，如今 `xfer_share` 只需要 `dufs`，这一行可以单补文件服务器，目前没补。下载过三道门：64 MB 的体积上限、30 秒的无字节空闲窗、10 分钟的总期限。空闲窗在请求发出前就武装、每来一块字节就重新计时，连接死了 30 秒内就报，不会拖满总时长；还在进字节的慢流可以一路跑到总期限。这个形状是 2026-10-20 一次真机读数换来的：此前是一道 120 秒的墙上时钟管全身，慢连接与死连接拿的是同一句 `The operation timed out.`，Windows 主机上 52.7 MB 的 `.exe` 在它里面取不完（450 KB/s 起步的门槛）。超时之外还有一种失败：哈希与钉值不符则拒绝安装，说的是字节本身。两条超时都点名逃生门——把二进制放上 `PATH`，或在配置 `xfer.<name>` 写它的绝对路径，桥就按原样用、不再下载。`bun run test:obtain` 每轮把钉表里十个 asset 的 URL 全部 `HEAD` 一遍，本机这一行真下、真跑，Windows 那两行真下、只到字节为止（zip 解出 `dufs.exe`、`.exe` 认出 PE 头），跑不了。
+- 失败一律 `200` + `isError: true`，text 就是原因：缺 `path` 为 `xfer_share needs a 'path' — the file or directory to serve`；路径 `stat` 失败为 `cannot serve <path>: <原因>`；文件服务器起不来为子进程的错误原文。获取二进制失败的另外写一条 `install` 审计，带上是哪个 asset、钉的是哪个哈希；成功的那条同样在 `spawn` 之前落盘。
 
-**`xfer_status`** — 无参数。有共享：`{"serving": true, "path", "port", "url", "host", "startedAt", "expiresAt"}`；没有：`{"serving": false}`。
+**`xfer_status`** — 无参数。有共享：`{"serving": true, "path", "port", "url", "route", "startedAt", "expiresAt"}`；没有：`{"serving": false}`。
 
 **`xfer_stop`** — 无参数。有共享：`{"stopped": true, "path"}`；没有：`{"stopped": false, "note": "nothing was shared"}`，没共享也不报错。
 
-**关闭时机**：TTL 到期、`xfer_stop`、或桥停止（宿主退出）。到期与顶替走同一条关闭路径——`dufs` 收 `SIGTERM`、隧道关闭——并写一条 `xfer` 审计（`args.why` 为 `replaced` / `ttl expired` / `bridge stopped`）。
+**关闭时机**：TTL 到期、`xfer_stop`、或桥停止（宿主退出）。到期与顶替走同一条关闭路径——`dufs` 收 `SIGTERM`，等它真的退出（监听先注册再发信号，`exit` 只发一次）——并写一条 `xfer` 审计（`args.why` 为 `replaced` / `ttl expired` / `bridge stopped`）。关完之后 `/xfer/` 回 404。
 
-**URL 是能力**：谁拿到它，谁就能读、能写那条路径，直到共享关闭。
+**token 是能力**：拿着它的人，在共享关闭之前能读能写那条路径。每次共享生成的那对 basic-auth 只出现在桥代发的请求里，工具回包、审计记录、文档都不写它；`www-authenticate` 被删掉，调用方看不到它的存在。
 
 ### 操作员的隧道：`/a2mcp tunnel`
 
-宿主会话里的命令，不是 MCP 方法也不是 HTTP 端点：它出现在 `tools/list` 之外的唯一理由是它根本不在协议面上——持 token 的远程调用方打不开它，只有坐在宿主会话里的操作员能。它做的事是把 `openQuickTunnel`（`src/tunnel.ts`）与 `resolveBinary`（`src/obtain.ts`）这两个 `xfer_share` 已经在用的部件，指向桥自己的 MCP 端口：一条随机 `https://<随机>.trycloudflare.com` 主机名，公网那一侧到此为止，`Authorization` 头之后才是宿主工具。
+宿主会话里的命令，不是 MCP 方法也不是 HTTP 端点：它出现在 `tools/list` 之外的唯一理由是它根本不在协议面上——持 token 的远程调用方打不开它，只有坐在宿主会话里的操作员能。它做的事是把 `openQuickTunnel`（`src/tunnel.ts`）与 `resolveBinary`（`src/obtain.ts`）这两个部件指向桥自己的端口：一条随机 `https://<随机>.trycloudflare.com` 主机名，公网那一侧到此为止，`Authorization` 头之后才是宿主工具。quick tunnel 只接受一个 `--url`，所以顶的是整个端口：MCP 端点和开着共享的 `/xfer/` 路由共用这一个主机名。
 
 - **运行态**。与 takeover 开关同款：不落盘、不进配置、重启即无。每进程一条（`server` 每进程一条），第二次 `/a2mcp tunnel` 复用已开的那条并重报 URL，不另起子进程——这与 `xfer_share` 的「第二次顶掉第一次」刻意相反，因为这里没有「该换哪条」的语义。两个命令同时在途由在途保护合并成一个 spawn（与 `bringingUp` 之于绑定同一条规则）。
 - **生命周期**。`/a2mcp tunnel stop` 关闭；`session_shutdown` 释放端口时一并拆（SIGTERM，两秒不退补 SIGKILL），公网主机名不活得比开它的桥久。
 - **审计**。开与关各一条 `tool: "tunnel"`（`phase: "done"`，`sid: null`——操作员发起，没有调用方会话可归属），`args.action` 为 `start` / `stop`，带 `url` 与本地 `port`；打开失败的记录带 `error` 原文。token 不进记录，主机名本身不是秘密。
 - **cloudflared 从哪来**。与「传文件」那一节完全同一套：`xfer.cloudflared` 带 `/` 或 `\` 就按路径用（不许下载的那台机器的写法），否则 PATH、桥装登记、钉版本+sha256 拉取；安装另记一条 `install`。
 
-边界同 `xfer_share`：隧道的可用性取决于 Cloudflare 边缘，30 秒内等不到主机名就报错了事；本机网络对 `*.trycloudflare.com` 重签 TLS，公网半程的回环验证只能算人工证据（见 `docs/testing.md`）。
+边界只有一处要说清：隧道一开，出公网的是整个端口，正开着的 `/xfer/` 共享跟着一起出去；隧道关着，文件路由只在回环或 SSH 转发后面。隧道本身的可用性取决于 Cloudflare 边缘，30 秒内等不到主机名就报错了事；本机网络对 `*.trycloudflare.com` 重签 TLS，公网半程的回环验证只能算人工证据（见 `docs/testing.md`）。
 
 ### `tools/call`
 

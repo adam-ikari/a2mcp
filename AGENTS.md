@@ -43,10 +43,13 @@ paid for with auditing and documentation:
   that is not the global `fetch`) are in `docs/protocol.md` under 宿主推理切换.
 - The three `xfer_*` tools (`xfer_share` / `xfer_status` / `xfer_stop`, `src/xfer.ts`)
   are served by the bridge rather than forwarded to the host: they resolve the path
-  themselves, hand it to `dufs` behind a cloudflared quick tunnel, and are appended to
-  `tools/list` after the host registry — so they bypass the host's approval gate and
-  bring no sandbox of their own. The cost is auditing (`tool: "xfer"`, one record per
-  call) and documentation. Asked for by the maintainer; the contract and usage are in
+  themselves, put `dufs` on it bound to loopback, and mount it as the `/xfer/` route on the
+  bridge's own port — and they are appended to `tools/list` after the host registry, so they
+  bypass the host's approval gate and bring no sandbox of their own. The cost is auditing
+  (`tool: "xfer"`, one record per call) and documentation; what bounds the route is the same
+  Bearer token that opens the port. The tool returns no credential and no public hostname:
+  going outside is the operator's `/a2mcp tunnel`, not the tool's decision. Asked for by the
+  maintainer; the contract and usage are in
   `docs/protocol.md` under 桥自己的工具 (`xfer_*`) and in the README under 传文件.
 - `src/obtain.ts` puts a binary on the host's disk. When a name in the `xfer` block
   answers to nothing on PATH, the bridge downloads the pinned release asset, checks its
@@ -62,10 +65,11 @@ paid for with auditing and documentation:
   and its bytes were hashed, not because a platform looked missing — `win32-arm64` has no
   row because cloudflared ships no Windows ARM64 executable, and the bridge says so rather
   than installing half a pair.
-- `/a2mcp tunnel` puts a public hostname in front of the bridge's own MCP port. It is the
+- `/a2mcp tunnel` puts a public hostname in front of the bridge's own port. It is the
   operator's command in the host session — not a tool, not an HTTP endpoint — and it runs
-  the same `resolveBinary` + `openQuickTunnel` machinery `xfer_share` uses against
-  `server.port`, which makes the Bearer token the only gate between the Cloudflare edge
+  `resolveBinary` + `openQuickTunnel` against `server.port`. A quick tunnel fronts exactly
+  one origin, so that single hostname and single Bearer token carry both the MCP endpoint and
+  the `/xfer/` file route, which makes the token the only gate between the Cloudflare edge
   and the host's tools. Runtime state like the takeover switch: never in the config, torn
   down with the port so a public hostname cannot outlive the bridge. Paid for with one
   `tool: "tunnel"` audit record per open and close and the 跨机转发 / 操作员的隧道 sections

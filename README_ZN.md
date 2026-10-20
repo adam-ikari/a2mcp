@@ -134,7 +134,7 @@ a2mcp listening on http://127.0.0.1:<port> (token <前6字符>…)
 | `host` | 监听地址，默认 `127.0.0.1`（改成 `0.0.0.0` 会额外告警） |
 | `host_llm` | `"deny"` \| `"allow"`（默认）：宿主启动时自己的会话能不能发模型请求，见「宿主推理接管」。它只决定**启动状态**；桥跑起来之后，远程一侧随时可以用 HTTP 切换，与这里写的是什么无关 |
 | `xfer.dufs` | 服务共享路径的 HTTP 文件服务器，默认 `dufs`：先查 PATH，查不到就按钉死的版本拉一份构建，装进桥自己的安装目录（POSIX 是 `~/.local/bin`，Windows 是 `%LOCALAPPDATA%\a2mcp\bin`）。写的值里带 `/` 或 `\` 就当作路径直接用，桥一次都不下载。见「传文件」 |
-| `xfer.cloudflared` | 发布隧道的二进制，默认 `cloudflared`：查找和下载的规则同 `xfer.dufs`，本文写作时钉的是 2026.10.1 |
+| `xfer.cloudflared` | `/a2mcp tunnel` 用来发布桥端口的隧道二进制，默认 `cloudflared`：查找和下载的规则同 `xfer.dufs`，本文写作时钉的是 2026.10.1。`xfer_share` 不找它，一次共享只需要文件服务器 |
 
 字段就这些：四个顶层字段加一个可选 `xfer` 块。**没有工具黑白名单、没有文件沙箱**——多余字段被忽略，桥不替宿主做权限决定。`host_llm` 例外：它管的不是调用方能执行什么（那由 token 和宿主工具权限决定），是宿主自己能不能推理。
 
@@ -151,7 +151,7 @@ a2mcp listening on http://127.0.0.1:<port> (token <前6字符>…)
 - `/a2mcp` — 显示当前监听地址、端口与 token 前缀（隧道开着时行尾会带上它的 URL）
 - `/a2mcp rotate` — 轮换 token（写完配置后需同步更新远程 `mcp.json`）
 - `/a2mcp token` — 打印完整 token（状态行只显示前缀）
-- `/a2mcp tunnel` — 在 MCP 端点前面起一条 cloudflared 快速隧道，打印公网 URL（`https://<随机>.trycloudflare.com`）。运行态，不落配置，见「跨机转发」
+- `/a2mcp tunnel` — 在桥的端口前面起一条 cloudflared 快速隧道，打印公网 URL（`https://<随机>.trycloudflare.com`）。一条隧道只顶一个端口，MCP 端点和开着共享的 `/xfer/` 路由都从它走。运行态，不落配置，见「跨机转发」
 - `/a2mcp tunnel stop` — 关闭隧道
 
 ## 远程连接示例
@@ -212,7 +212,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 `mcp.json` 的 `url` 写 `http://127.0.0.1:<localport>/`。
 
-第二种形态是隧道，命令在宿主会话里：`/a2mcp tunnel` 起一个 cloudflared，把一个随机 `https://<随机>.trycloudflare.com` 主机名指到桥的端口并把 URL 打出来，远程侧直接把它写进 `mcp.json` 的 `url`。要说清的面貌：隧道一开，这个端点就暴露在公网，Bearer token 是唯一闸门。它是运行态，与 takeover 开关同款：不落盘、重启即无；`/a2mcp tunnel stop` 可关，桥拆端口时（宿主没有 Main 会话了）也一并拆掉，公网主机名不会活得比开它的桥久。`cloudflared` 不在 PATH 时按配置 `xfer.cloudflared` 的钉值加 sha256 拉取，规则与「传文件」完全同一套。开关各记一条审计（`tool: "tunnel"`），token 不进记录。
+第二种形态是隧道，命令在宿主会话里：`/a2mcp tunnel` 起一个 cloudflared，把一个随机 `https://<随机>.trycloudflare.com` 主机名指到桥的端口并把 URL 打出来，远程侧直接把它写进 `mcp.json` 的 `url`。quick tunnel 只顶一个 origin，所以这就是这个端口的公网面目：工具调用和 `/xfer/` 文件路由走同一个主机名、同一个 token。要说清的面貌：隧道一开，这个端点就暴露在公网，Bearer token 是唯一闸门。它是运行态，与 takeover 开关同款：不落盘、重启即无；`/a2mcp tunnel stop` 可关，桥拆端口时（宿主没有 Main 会话了）也一并拆掉，公网主机名不会活得比开它的桥久。`cloudflared` 不在 PATH 时按配置 `xfer.cloudflared` 的钉值加 sha256 拉取，规则与「传文件」完全同一套。开关各记一条审计（`tool: "tunnel"`），token 不进记录。
 
 ## 审批
 
@@ -236,13 +236,15 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 ## 传文件
 
-传文件走普通 HTTP：`xfer_share` 把一条宿主路径交给 [`dufs`](https://github.com/sigoden/dufs)，由 cloudflared quick tunnel 发布成公网主机名，回一个内嵌 basic-auth 凭据的 URL（`https://omp:<secret>@<random>.trycloudflare.com/`）、本地端口与到期时间。下行 `curl -u omp:<secret> -O <host>/<name>`，上行 `-T`，Range 可续传，WebDAV 客户端可用。共享在 TTL（默认 3600 秒）到期、`xfer_stop`、桥停止时关闭；第二次共享顶掉第一次。`xfer_status` 与 `xfer_stop` 不收参数。字节不经过 JSON-RPC，桥不自带字节协议。
+传文件走普通 HTTP。`xfer_share` 把一条宿主路径交给 [`dufs`](https://github.com/sigoden/dufs)，dufs 在 `127.0.0.1` 上找一个空端口监听，桥再把这个端口挂到自己端点的 `/xfer/` 路由后面。回包给出的是路由（`http://127.0.0.1:<port>/xfer/`）、文件服务器的端口和到期时间，没有第二份凭据。调用 `tools/list` 用的那个 Bearer token 同时给 `GET` 和 `PUT` 授权：代理替掉请求里带来的 `Authorization`，换上桥为这次共享生成的 basic-auth 对，回程再删掉文件服务器的 `www-authenticate` 头。下行 `curl -H 'Authorization: Bearer <token>' -O <url>/<name>`，上行 `-T`，Range 可续传，WebDAV 客户端可用，浏览器打开就是 dufs 自己的目录列表。`DELETE` 和 `MOVE` 回 403，桥只向文件服务器要了上传。共享在 TTL（默认 3600 秒）到期、`xfer_stop`、桥停止时关闭；第二次共享顶掉第一次。`xfer_status` 与 `xfer_stop` 不收参数。字节不经过 JSON-RPC，桥不自带字节协议。
 
-**这个 URL 就是一份能力**：谁拿着它，谁就能读、能写那条路径，直到共享关闭。
+路由开在回环端口上，本机之外一个字节都进不来。公网主机名只有一个来源：操作员跑 `/a2mcp tunnel`。回包里的 `usage.public` 说的就是这件事。
 
-前置的两个二进制桥自己找：先查 PATH，没有就按版本加 sha256 钉死去拉（`dufs` 0.46.0、`cloudflared` 2026.10.1，各五个平台行，在 `src/obtain.ts`；每个哈希都由 `bun run test:obtain` 对着 GitHub 实际下发的字节复验），装进桥自己的目录（POSIX `~/.local/bin`，Windows `%LOCALAPPDATA%\a2mcp\bin`）。不请求 `latest`，不向发字节的服务器要校验和。配置值里出现 `/` 或 `\` 就按那条路径用，一次都不下载。不是桥装的文件桥不动：拒绝覆盖，把它的 sha256 打出来。装过什么记在 `<agentDir>/a2mcp.installs.json`。
+**token 就是一份能力**：拿着它的人，在共享关闭之前能读能写那条路径。共享自己不再往外发凭据：每次生成的那对 basic-auth 只出现在桥代发的请求里，工具回包、审计记录、文档都不写它。
 
-`win32-arm64` 没有钉表行，原因在上游：`cloudflared` 不发 Windows ARM64 构建，桥报缺哪一对而不是装半个。win32 那两行验到字节、没验到执行——URL 应答、zip 哈希对上、条目能按 Windows 主机将要调的那段代码读出、`.exe` 是 PE 且没超下载上限，都在 `test:obtain` 里；Windows 上的第一次 `xfer_share` 也是这些字节的第一次执行。
+文件服务器桥自己找：先查 PATH，没有就按版本加 sha256 钉死去拉（`dufs` 0.46.0，五个平台行，在 `src/obtain.ts`；每个哈希都由 `bun run test:obtain` 对着 GitHub 实际下发的字节复验），装进桥自己的目录（POSIX `~/.local/bin`，Windows `%LOCALAPPDATA%\a2mcp\bin`）。不请求 `latest`，不向发字节的服务器要校验和。配置值里出现 `/` 或 `\` 就按那条路径用，一次都不下载。不是桥装的文件桥不动：拒绝覆盖，把它的 sha256 打出来。装过什么记在 `<agentDir>/a2mcp.installs.json`。`cloudflared` 在同一张钉表里、走同一套规则，只是现在归 `/a2mcp tunnel` 去拉，共享不过问。
+
+`win32-arm64` 没有钉表行，原因在上游：`cloudflared` 不发 Windows ARM64 构建。从前一次 `xfer_share` 要用到两个二进制，两张表就一起钉；现在共享只吃 `dufs`，这个平台可以单补文件服务器那一行，目前没有补。win32 那两行验到字节、没验到执行——URL 应答、zip 哈希对上、条目能按 Windows 主机将要调的那段代码读出、`.exe` 是 PE 且没超下载上限，都在 `test:obtain` 里；Windows 上的第一次 `xfer_share` 也是这些字节的第一次执行。
 
 需要拉取的共享会等拉完，回包 `installed` 点名拉的版本，本来就在 PATH 的是 `null`。每次调用一条审计（`tool: "xfer"`），拉取的几次各配一条 `install`。
 
@@ -271,7 +273,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 - **token 即工具执行全权（默认配置下）**：宿主默认 `approvalMode: yolo`，拿到 token 就能在宿主会话里直接执行任意暴露的工具（含 `bash`），不经过审批。配置文件 `0600`，不要进版本库。
 - **桥不做权限决定**：`tools/list` 是宿主 `Main` 会话注册表原样透传，外加桥自己的三个 `xfer_*`；包含 `hidden` 工具与宿主当前对自己模型禁用的工具——**omp 是什么权限，桥就是什么权限**。要收紧，配宿主，桥没有第二套名单。
-- **执行走宿主原生工具**：桥注入真实的 settings 与 UI，宿主的审批门照常生效。例外是 `xfer_*`：桥自己分派、不过那道门——持 token 的人能把桥可读的任意路径发布到公网。
+- **执行走宿主原生工具**：桥注入真实的 settings 与 UI，宿主的审批门照常生效。例外是 `xfer_*`：桥自己分派、不过那道门——持 token 的人能把桥可读的任意路径挂到 `/xfer/` 路由上，这一读一写宿主没被问过。拦住它的是同一个 token、回环绑定和每次调用一条审计。
 - **远程调用可能唤醒宿主自己的 agent**：长命令超过宿主超时（实测默认 300 秒）会被转后台，完成通知让宿主会话醒过来推理，花宿主的 token。对策是接管开关，见「宿主推理接管」。
 - **调用与列表同源**：只接受出现在 `tools/list` 里的名字；别名与未注册名字一律拒绝，不区分「被过滤」与「不存在」。
 - **`POST /host-llm` 是桥有自己意见的那条路**：直接伸手进宿主会话（换注册表行、override 设置、替换进程 `fetch`），代价是审计（`tool: "host_llm"`）与文档；它限制宿主自己的推理，只听持 token 的人。
@@ -317,7 +319,7 @@ bun install
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
-bun test              # 单测：test/*.test.ts（233 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
+bun test              # 单测：test/*.test.ts（253 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
 bun run test:obtain   # 钉死的两个二进制：本机这一行真下载、钉表十个 asset 全 HEAD、Windows 那两行按字节读，37 项（不需要本机 omp；只往它自己那个 /tmp 目录里写）
 bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）

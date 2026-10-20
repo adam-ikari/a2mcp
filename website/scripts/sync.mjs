@@ -57,9 +57,9 @@ cpSync(join(REPO, "docs"), CONTENT, { recursive: true });
 // from what that page actually says.
 const PAGE_DESCRIPTIONS = {
 	"protocol.md":
-		"桥实现的 MCP 2025-11-25 Streamable HTTP 子集：处理顺序、会话生命周期、错误码总表、桥自己的 xfer_* 三个工具与那条 quick tunnel、POST /host-llm 的宿主推理切换，以及它放弃的东西。",
+		"桥实现的 MCP 2025-11-25 Streamable HTTP 子集：处理顺序、会话生命周期、错误码总表、桥自己的 xfer_* 三个工具与那条 /xfer/ 文件路由、操作员的 quick tunnel、POST /host-llm 的宿主推理切换，以及它放弃的东西。",
 	"testing.md":
-		"核验矩阵：仓库形状、233 项单测（含命名守卫、占位模型、PowerShell 字面核对）、真实模型注册表、加固、发布包端到端、外部二进制获取、宿主推理 deny/restore、一键脚本、端到端场景与审批边界。各项的判据、实测数字与变异记录在正文。",
+		"核验矩阵：仓库形状、253 项单测（含命名守卫、占位模型、PowerShell 字面核对）、真实模型注册表、加固、发布包端到端、外部二进制获取、宿主推理 deny/restore、一键脚本、端到端场景与审批边界。各项的判据、实测数字与变异记录在正文。",
 	"computer-use.md":
 		"computer use 让模型看屏幕猜坐标去点按，本桥让调用方按名字调工具。执行走的是本机工具自己的实现，目录由 tools/list 一条条给出名字和参数。",
 };
@@ -154,7 +154,7 @@ features:
     details: DAP 调试器（xd://debug）、LSP（xd://lsp）这类设备不进工具目录，远程 agent 用 read/write 的 path 参数就能读写和执行。有什么设备，跟着本机 omp 装了哪些扩展走。
     link: /intro#设备
   - title: 传文件走普通 HTTP
-    details: xfer_share 收一条宿主路径，交给 dufs 服务，外面套一条 cloudflared quick tunnel，回来的 URL 内嵌 basic auth；字节不经过 JSON-RPC。前置的两个二进制 PATH 上找不到，桥按钉死的版本加归档 sha256 拉一份装进自己的目录。那个 URL 就是一份能力：拿着它的人能读能写那条路径，直到共享关掉。
+    details: xfer_share 收一条宿主路径，交给 dufs 服务，挂在桥自己端口的 /xfer/ 路由下；字节不经过 JSON-RPC，要的还是那个 Bearer token。公网那一面是操作员的 /a2mcp tunnel：一条 quick tunnel 只顶一个 origin，所以文件路由和工具调用走同一个主机名、同一个 token。PATH 上找不到 dufs，桥按钉死的版本加归档 sha256 拉一份装进自己的目录。token 就是那份能力：拿到它的人能读能写这条路由背后的路径，直到共享关掉。
     link: /intro#传文件
   - title: 宿主推理可以整体关掉
     details: 远程调用可能唤醒宿主自己的 agent，花宿主的 token。host_llm 配置与 POST /host-llm 把这件事变成开关：deny 在位时宿主的会话发不出任何模型请求，核验探针对着一个真在听的计数 sink 数过——零是数出来的。
@@ -172,7 +172,7 @@ features:
     details: 客户端要实现的全部约定：处理顺序、会话生命周期、错误码总表。
     link: /protocol
   - title: 测试与核验
-    details: 233 项单测之外，七个核验大多拉起真实的 omp 跑完整流程：deny 那一个对着真在听的计数 sink 数出零，发布包那一个装回去跑通才算过。各项覆盖什么、怎么判读，测试页写着。
+    details: 253 项单测之外，七个核验大多拉起真实的 omp 跑完整流程：deny 那一个对着真在听的计数 sink 数出零，发布包那一个装回去跑通才算过。各项覆盖什么、怎么判读，测试页写着。
     link: /testing
 ---
 `;

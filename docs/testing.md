@@ -5,24 +5,24 @@
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
 | `bun run test:tree` | 仓库形状核验，3 项，无依赖 | 否 | `tree-probe: repo shape OK` |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 233 pass / 0 fail（17 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 253 pass / 0 fail（18 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
-| `bun run test:obtain` | 外部二进制获取核验，37 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
+| `bun run test:obtain` | 外部二进制获取核验，41 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，34 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，56 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:takeover` | 宿主推理 deny/restore 核验，34 项，约 65 秒 | 是 | `takeover probe: all assertions met` |
-| `bun run test:install` | 发布包自包含 + 端到端，52 项（npm 真装那组 4 项在包发到 registry 之前按 `info:` 跳过——包名形态是预留，这一组就是不发不跑） | 是 | `PACKAGE OK` |
+| `bun run test:install` | 发布包自包含 + 端到端，55 项（其中 npm 真装那组 4 项在包发到 registry 之前按 `info:` 跳过——包名形态是预留，这一组就是不发不跑） | 是 | `PACKAGE OK` |
 | `bun run test:mcp-call` | 参考客户端 `scripts/mcp-call.py` 核验，6 项（真宿主走一遍 + 一只强制 404 的假服务器验重握手；没有 python3 整段 `info:` 跳过、退 0） | 是 | `MCP-CALL OK` |
 | `bun run test:bootstrap` | 一键脚本的判断核验，47 项，约 9 秒 | 第五组要 | `BOOTSTRAP OK` |
 | `bun run test:scenario` | 端到端场景，8 个叙事 / 41 步，约 45 秒 | 是 | `SCENARIOS: 41 steps, 0 failed` |
 
-统一前置（七个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 与 `test:mcp-call` 不认——前者要跑的 `omp install` 与被它装的东西必须是同一个，后者起的宿主就是它驱动的那座桥，都固定用 PATH 上那份。`test:mcp-call` 还多一样前置：它跑的是 `python3 scripts/mcp-call.py`，本机没有 `python3` 时整段按 `info:` 跳过、退 0（与 install 的 npm 组、bootstrap 的缺依赖跳过同一条纪律，CI 不因缺可选依赖红）。`test:bootstrap` 前五组连真宿主都不起：它用脚本自己造在临时目录里的记账 `omp` stub 和一只记录 argv 的假 `curl`，PATH 上没有真宿主也照样跑，只有最后一组（真宿主）用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2MCP_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主自 18.11.0（18.12.1 上重测仍如此）按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的出网有两支：第五组让桥自己从 GitHub 拉两个二进制，约 46 MB，落点仍是它自己那个临时 `HOME`；第六组真跑一次 `omp install a2mcp`，那是这趟唯一碰 registry 的地方——registry 答不到它整组按 `info:` 跳过，CI 不因网络红。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2mcp-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（七个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 与 `test:mcp-call` 不认——前者要跑的 `omp install` 与被它装的东西必须是同一个，后者起的宿主就是它驱动的那座桥，都固定用 PATH 上那份。`test:mcp-call` 还多一样前置：它跑的是 `python3 scripts/mcp-call.py`，本机没有 `python3` 时整段按 `info:` 跳过、退 0（与 install 的 npm 组、bootstrap 的缺依赖跳过同一条纪律，CI 不因缺可选依赖红）。`test:bootstrap` 前五组连真宿主都不起：它用脚本自己造在临时目录里的记账 `omp` stub 和一只记录 argv 的假 `curl`，PATH 上没有真宿主也照样跑，只有最后一组（真宿主）用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2MCP_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主自 18.11.0（18.12.1 上重测仍如此）按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的出网有两支：第五组让桥自己从 GitHub 拉文件服务器那一个二进制（6.4 MB，从前是两个、约 46 MB），落点仍是它自己那个临时 `HOME`；第六组真跑一次 `omp install a2mcp`，那是这趟唯一碰 registry 的地方——registry 答不到它整组按 `info:` 跳过，CI 不因网络红。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2mcp-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
 七个宿主核验、`test:obtain`、`test:bootstrap` 与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。`test:mcp-call` 那一段依赖 `python3`，`ubuntu-latest` 镜像自带，所以它在 CI 里真跑；换到没有 python3 的机器就按 `info:` 跳过。
 
-## `test:install` — 发布包自包含核验 + 端到端（52 项）
+## `test:install` — 发布包自包含核验 + 端到端（55 项）
 
 **核验发布的 tarball 装得上去、装完就能加载、起宿主能通。** 六组：
 
@@ -30,10 +30,10 @@
 | --- | --- | --- |
 | manifest | 6 | 有 `name`；有 `version`（否则 omp 显示 `@undefined`）；声明 `pi.extensions`（加载开关）；**无 runtime 依赖**（`@oh-my-pi/*` 由宿主 shim 提供）；`files[]` 同时含 `extensions/` 与 `src/` |
 | 打包 | 3 | `npm pack` 出 tarball；体积 < 500KB（不含 `node_modules`）；解开是 `package/` 根 |
-| 内容 | 15 | 入口 `extensions/a2mcp.ts` 与 `src/` 下每一个 `*.ts` 都在 tarball 里（清单由 `readdirSync(src)` 现读，新增模块不需要改探针，`src/obtain.ts`、`src/tunnel.ts`、`src/xfer.ts` 就是这样自己进的名）；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块，当前 10）；整包除 `@oh-my-pi/pi-coding-agent` 之外不引任何宿主包，而这一项确实读到了 import（不是空过） |
+| 内容 | 16 | 入口 `extensions/a2mcp.ts` 与 `src/` 下每一个 `*.ts` 都在 tarball 里（清单由 `readdirSync(src)` 现读，新增模块不需要改探针，`src/obtain.ts`、`src/tunnel.ts`、`src/xfer.ts` 就是这样自己进的名）；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块，当前 11）；整包除 `@oh-my-pi/pi-coding-agent` 之外不引任何宿主包，而这一项确实读到了 import（不是空过） |
 | 端到端 | 11 | 每次先卸载再 `omp install .`——装的是链接，所以宿主加载的就是工作区；断言该路径不是实体拷贝；桥被发现并广播监听地址；首次启动只写 `host`/`host_llm`/`port`/`token` 加一个 `xfer`（里面是两个二进制名，没有路径也没有沙箱字段）；`initialize` 返回协议版本；`tools/list` 非空，且桥自己那三个传输工具确实出现在目录里（名字从 `src/xfer.ts` 的 `XFER_TOOL_NAMES` 现读，不在探针里抄第二份；不断言具体数量——宿主装几个扩展就变几个，写死会静默过期。这一条原先断言的是「目录里没有桥自带的工具」，桥自带工具之后标签已经不成立而断言也永远不会红，改成正面断言的来龙去脉写在 `test/install-probe.ts` 的注释里）；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
-| 两个二进制都由一次 `xfer_share` 拉下来 | 13 | 给这个宿主削过的 `PATH`（`omp` 所在目录 + bun + `/usr/bin` + `/bin`）上 `dufs` 与 `cloudflared` 都不应答——这两条不成立就整组跳过并说明原因，这台机器证不了不等于桥错了；宿主照样起；`xfer_share` 的答复里没有一句是关于获取的；两个文件都在桥自己的 `HOME` 里且是 `0755`（6.4 MB 与 38.4 MB）；登记两个版本各一行、`target` 是本机平台；审计两条 `install` 且不是 `isError`；回包 `installed` 同时点名两个版本；loopback GET 字节一致、错密码 401、`xfer_stop` 后端口释放；操作者真正的 `~/.local/bin` 前后一样 |
-| 包名形态落在盘上的形状（预留形态） | 4 | 临时 `HOME` 里真跑 `omp install a2mcp`（真 registry）：登记进 `omp-plugins.lock.json`；落盘目录里有 `package.json`、`extensions/`、`src/`；**没有** `docs`、`brain`、`test`、`website`、`.github`、`scripts`——精简这条就断言在这里，落的是打包的 tarball 不是整棵仓库的检出；装好的版本号是合法 semver（不与工作树比相等，bump 之后、publish 之前的窗口不该让 CI 红）。registry 答不到（网络断了，或包还没发上去）整组按 `info:` 跳过，不计入项数。今天的答案是后者：包不发，这一组每天如实跳过 |
+| 文件服务器由一次 `xfer_share` 拉下来 | 15 | 给这个宿主削过的 `PATH`（`omp` 所在目录 + bun + `/usr/bin` + `/bin`）上没有 `dufs`——有的话整组按 `info:` 跳过并说清它躲在哪个目录，这台机器证不了不等于桥错了；宿主照样起；`xfer_share` 的答复里没有一句是关于获取的；文件落在桥自己的 `HOME` 里且是 `0755`（6.4 MB）；登记一行、`target` 是本机平台；审计一条 `install` 且不是 `isError`；回包 `installed` 只点名 `dufs`；`url` 是桥自己端口上的 `/xfer/`，回包里不含 token；带 token 的 GET 字节一致、错 token 401、目录列表 200 且每个绝对引用都带前缀、`?json` 的 `uri_prefix` 是 `/xfer/`；`xfer_stop` 之后路由 404、`dufs` 那个回环端口释放；操作者真正的 `~/.local/bin` 前后一样 |
+| 包名形态落在盘上的形状（预留形态） | 4 | 临时 `HOME` 里真跑 `omp install a2mcp`（真 registry）：登记进 `omp-plugins.lock.json`；落盘目录里有 `package.json`、`extensions/`、`src/`；**没有** `docs`、`brain`、`test`、`website`、`.github`、`scripts`——精简这条就断言在这里，落的是打包的 tarball 不是整棵仓库的检出；装好的版本号是合法 semver（不与工作树比相等，bump 之后、publish 之前的窗口不该让 CI 红）。registry 答不到（网络断了，或包还没发上去）整组按 `info:` 跳过，跑出来的 ok 行就少这四项。今天的答案是后者：包不发，这一组每天如实跳过 |
 
 第三组是关键：入口 import 的是 `../src/*.ts`，`files[]` 漏掉任何一个都会**装得上、加载时才炸**。逐个断言文件名会被新增的模块绕过，走 import 图才抓得到。
 
@@ -41,11 +41,11 @@
 
 端到端这组装法用 `omp install .`（本地路径，链接）而不是 README 那条 git URL 命令：链接指向工作区，宿主加载的就是当前代码，改坏了工作区才会如实红在这组上；远程装的是那份拷贝，验不到工作区。**本地安装在这里是测试夹具，不是受支持的安装方式**——对外受支持的是 git URL 那一条；包名形态是预留（名字没发到 registry，那条命令今天会停在依赖解析），见 README。
 
-第五组是那天那遍端到端的提交版。它盯的形状此前谁都没覆盖：`test:obtain` 里 cloudflared 是写明路径那一侧，`bun test` 把获取整个 stub 掉，于是「一次 `xfer_share`、`PATH` 上什么都没有、两个二进制都自己拉」只被一个用完即删的脚本证明过。代价是每轮 CI 多出约 46 MB 出网（6.4 与 38.4），跑顺时整个探针 23 秒。
+第五组是那天那遍端到端的提交版，盯的形状随着共享换了一面：一次 `xfer_share`、`PATH` 上什么都没有、桥自己把文件服务器拉下来并挂到 `/xfer/` 路由上。这一条 `bun test` 覆盖不到（单测把获取整个 stub 掉），`test:obtain` 那一侧打的是 `dufs` 自己的回环端口，代理这一跳只有第五组真跑过。代价是每轮 CI 多出 6.4 MB 出网（从前是两个二进制、约 46 MB），跑顺时整个探针 23 秒。
 
-这一组硬的是安装那三样——文件、登记、审计。`xfer_share` 先解析 dufs 再起服务，起好了才解析 cloudflared，再开洞，所以隧道成不成它们都该成立。共享本身和它后面那个 GET 只报告不硬：quick tunnel 要 Cloudflare 的边缘，而本仓库早就定过（`test/obtain-probe.ts`）那一边断了不算这个代码的证据。「答复里没有一句是关于获取的」这一条例外——它问的是工具回了什么，不是有没有回成功，所以获取一旦回归，隧道那边正断着它也照样红。
+这一组硬的是安装那三样——文件、登记、审计。`xfer_share` 先解析二进制再起服务，所以共享后面那半条路成不成，它们都该成立。共享本身和它后面那一串请求：只在共享真开起来的时候才跑，否则如实打印一句跳过。从前那半条路要等 Cloudflare 的边缘，本仓库早就定过（`test/obtain-probe.ts`）那一边断了不算这个代码的证据；现在共享不出网，「答复里没有一句是关于获取的」这一条照样红——它问的是工具回了什么，不是有没有回成功，所以获取一旦回归就藏不住。
 
-反证跑过两遍。把 `src/obtain.ts` 的下载上限从 64 MB 改成 1024 字节：这一组红五项（获取那条点名截断、两个文件缺失、登记无行、审计那条带 `isError`），其余四组全绿；往削过的 `PATH` 里塞一个 stub `dufs`：整组如实跳过，并在两项的括号里说清这台机器证不了。第一遍还顺手暴露了探针自己的一个毛病——登记文件不存在时 `readFileSync` 抛异常，后面的审计项与「操作者 `HOME` 没被动过」就此不跑，红是红了，报的是一处而不是全部；现在两处外部文件都先查在不在，共享回包也要先看形状（失败时工具回的是一个 JSON 字符串，`JSON.parse` 它 parse 得动）。
+反证跑过两遍，都在共享还要两个二进制那会儿。把 `src/obtain.ts` 的下载上限从 64 MB 改成 1024 字节：这一组红五项（获取那条点名截断、两个文件缺失、登记无行、审计那条带 `isError`），其余四组全绿；往削过的 `PATH` 里塞一个 stub `dufs`：整组如实跳过，并在两项的括号里说清这台机器证不了。换成 `/xfer/` 路由之后这两遍没重跑，所以那句「红五项」是当时的形状，今天该红几条按上面那张表读。第一遍还顺手暴露了探针自己的一个毛病——登记文件不存在时 `readFileSync` 抛异常，后面的审计项与「操作者 `HOME` 没被动过」就此不跑，红是红了，报的是一处而不是全部；现在两处外部文件都先查在不在，共享回包也要先看形状（失败时工具回的是一个 JSON 字符串，`JSON.parse` 它 parse 得动）。
 
 ## 插件发现与 HOME：实测结论
 
@@ -153,20 +153,20 @@
 
 四道变异跑过（都按 `cp` 出来的备份恢复，没有用 `git checkout`）：把钉值那次调用上的 `-Binary` 删掉 → 一项红；把 `$Plugin` 改一个字符 → 一项红；删掉 ps1 播种的 `Test-Path -PathType Leaf` 守卫 → create-only 那条红，其余十二项不动；把播种的 `$InstalledHost = $true` 改成两处 → 「只一次」那条红。红的都正好是盯着这一处的那条。
 
-## `test:obtain` — 外部二进制获取核验（37 项）
+## `test:obtain` — 外部二进制获取核验（41 项）
 
-**要回答的问题**：桥自己拉下来的那两个二进制，是不是真能用。`--auth user:pass@/:rw` 这组参数最后一次实测是在 0.43.0 上，而 `src/obtain.ts` 钉的是 0.46.0——没跑过就把版本号写进 README，那是猜。cloudflared 那一侧同样的规矩：钉表的哈希是从 release 元数据读的，读回来还得对着真下的字节复算一次。这条探针因此是钉值的门：它不绿，文档里那些版本就留空。
+**要回答的问题**：桥自己拉下来的那两个二进制，是不是真能用。`--auth user:pass@/:rw` 与 `--path-prefix /xfer` 这组参数，每轮都在这条探针真下的那个版本上跑一遍，本文写作时是 0.46.0——没跑过就把版本号写进 README，那是猜。cloudflared 那一侧同样的规矩：钉表的哈希是从 release 元数据读的，读回来还得对着真下的字节复算一次。这条探针因此是钉值的门：它不绿，文档里那些版本就留空。
 
 | 组 | 项 | 断言 |
 | --- | --- | --- |
 | 真下载（两个二进制各五项） | 10 | 本机平台在钉表里；`resolveBinary` 把文件装进它说的那个临时目录；`--version` 自己报出钉的那个版本；账本记下这次安装的哈希；第二次调用不重下 |
-| 由 `xfer_share` 驱动 | 2 | 空 PATH + 空安装目录，让工具自己完成获取，回包的 `installed.dufs` 点名它拉的那个版本；`installed.cloudflared` 是 `null`（cloudflared 在这里是写明路径的那一侧，按规则不下载） |
-| 拉来的二进制起真共享 | 8 | GET 字节一致（200）、Range（206）、PUT（201）且落盘、错密码 401、目录列表 200、`xfer_stop` 后端口释放、下一次共享复用安装而 `installed` 回到 `null` |
+| 由 `xfer_share` 驱动 | 4 | 空 PATH + 空安装目录，让工具自己完成获取，回包的 `installed.dufs` 点名它拉的那个版本；回包只点名这一个二进制（`cloudflared` 不是共享要的，写明的路径也只是逃生门那一侧）；`url` 是 `/xfer/` 路由而不是凭据；`usage` 要的是桥的 token，写的是 `<TOKEN>` 占位符 |
+| 拉来的二进制起真共享 | 10 | GET 字节一致（200）、Range（206）、PUT（201）且落盘、错密码 401、目录列表 200、列表里每个绝对引用都带 `/xfer/` 前缀、不带前缀的路径 `dufs` 自己回 400、`xfer_stop` 后端口释放、下一次共享复用安装而 `installed` 回到 `null` |
 | 钉表每一行的 URL | 10 | 两个二进制 × 五个平台，每个 asset 的 URL `HEAD` 一次要回 200。本机跑不了的那四个平台的行，单测只核对 URL 拼法，是否存在只有这里能说 |
 | Windows 那两行按字节读 | 4 | `win32-x64` 那两行指向错 asset 也一样回 200，而本仓库没有一处运行 Windows 二进制，所以这两行按 Windows 主机会读的方式读一遍：dufs 的 zip 在这台机器上算出的 sha256 与表里一致、表里那个条目名由 `readZipEntry`（win32 安装走的同一段代码）读得出来（实测 4 721 664 字节）、cloudflared 的 `.exe` 前两个字节是 `4d5a`（HTTP 206 拿到的，不是归档）、报回的总长 55 325 120 在桥自己的 64 MB 上限之内。这四项说的是「字节与形状都对」，说不了「跑得起来」 |
 | 审计 | 3 | 日志里两个版本各一条 `install`，`share` 记录在 |
 
-这组核验里 cloudflared 走的是**写明路径**那一侧，所以「两个二进制都由一次 `xfer_share` 拉下来」这条它没有覆盖，单测也没有（单测把获取整个 stub 掉）。那一条要靠真宿主的端到端：隔离 `HOME`、`PATH` 削到只剩宿主自己，远程调 `xfer_share`。2026-10-17 头一遍跑绿是拿用完即删的脚本量的：14.0 秒返回，`installed` 是 `{"dufs":"0.46.0","cloudflared":"2026.10.1"}`，两个文件都落在桥自己的 `HOME` 里（6.4 MB 与 38.4 MB，`0755`），登记各一行，审计是 `install` 两条加 `share`、`stop` 各一条，loopback GET 字节一致、PUT 201 落盘、错密码 401、`xfer_stop` 后端口释放，操作者真正的 `~/.local/bin` 里依然没有 `dufs`。同一趟在出网差的时候也真跑过另一遍：dufs 装成功，cloudflared 那 40 MB 在流里停住，120 秒到点回 `isError` 带失败原文，共享没开成、dufs 服务被收走、没有孤儿进程，整趟 229 秒——冷装两个二进制最坏就是两个 120 秒加握手，这两遍合起来把上限与正常值都量到了。第二天这一遍升格成 `test:install` 的第五组（见上一节），从此它是提交里的核验，脚本不再是唯一证人。**那道 120 秒总墙上时钟本身在 2026-10-20 被一台真 Windows 机器量穿**：52.7 MB 的 `.exe` 在它里面取不完，报出的还是同一句超时——它分不清「慢」和「死」。现在它换成了 30 秒无字节空闲窗加 10 分钟总期限（`docs/protocol.md` 的取回三道门），慢流只要一直在进字节就能装完，死连接 30 秒内报死；单测 `test/obtain.test.ts` 里三条滴流/停顿/永不收敛的形状守的就是这一换，两遍真机读数（229 秒旧形状与 Windows 超时）都留在原处不重写。
+这组核验把获取真跑了一遍，可它打的是 `dufs` 自己的回环端口，也不起宿主；「一次 `xfer_share`、`PATH` 上什么都没有、桥自己把二进制拉下来」这条要靠真宿主的端到端：隔离 `HOME`、`PATH` 削到只剩宿主自己，远程调 `xfer_share`。2026-10-17 头一遍跑绿是拿用完即删的脚本量的：14.0 秒返回，`installed` 是 `{"dufs":"0.46.0","cloudflared":"2026.10.1"}`，两个文件都落在桥自己的 `HOME` 里（6.4 MB 与 38.4 MB，`0755`），登记各一行，审计是 `install` 两条加 `share`、`stop` 各一条，loopback GET 字节一致、PUT 201 落盘、错密码 401、`xfer_stop` 后端口释放，操作者真正的 `~/.local/bin` 里依然没有 `dufs`。同一趟在出网差的时候也真跑过另一遍：dufs 装成功，cloudflared 那 40 MB 在流里停住，120 秒到点回 `isError` 带失败原文，共享没开成、dufs 服务被收走、没有孤儿进程，整趟 229 秒——冷装两个二进制最坏就是两个 120 秒加握手，这两遍合起来把上限与正常值都量到了。第二天这一遍升格成 `test:install` 的第五组（见上一节），从此它是提交里的核验，脚本不再是唯一证人；那一组现在按 `/xfer/` 路由与一个二进制的形状断言，这两遍读数留在原处不动。**那道 120 秒总墙上时钟本身在 2026-10-20 被一台真 Windows 机器量穿**：52.7 MB 的 `.exe` 在它里面取不完，报出的还是同一句超时——它分不清「慢」和「死」。现在它换成了 30 秒无字节空闲窗加 10 分钟总期限（`docs/protocol.md` 的取回三道门），慢流只要一直在进字节就能装完，死连接 30 秒内报死；单测 `test/obtain.test.ts` 里三条滴流/停顿/永不收敛的形状守的就是这一换，两遍真机读数（229 秒旧形状与 Windows 超时）都留在原处不重写。
 
 真隧道单列，只 `info:` 报告不断言：拿第一节下载并验过哈希的那份 cloudflared 起一次真 quick tunnel，主机名确实 announce 出来了，但从发布它的那台机器 curl 回去报证书错误——本机网络对代理域名重签 TLS。于是断言那一路用注入的开洞器，硬检查一律打在 `127.0.0.1:<port>` 上。还有一处现象记在 `test/obtain-probe.ts` 的文件头而没有解释：探针自己同时握住真 cloudflared 与那次公网取回时，两次都是本地各项全过、然后不再返回。它留在文件头，是因为没查清原因的事既不能写成结论，也不能写成断言。
 
@@ -177,9 +177,23 @@
 变异跑过两处：把 `cdOffset` 读错一位（`eocd + 16` 多加一个字节），十项里红六项——装不出 `dufs.exe`、deflate 与 stored 读不出、精确条目名/方法拒绝/上限拒绝三条各自的前置都不成立，只有「不是 zip 的字节找不到 EOCD」照样绿，因为它本来就该失败；去掉「值里带 `\` 就是路径」那半边，只有 `C:\…` 那一条红，其余全绿——这台机器上除了那条断言，没人替 Windows 用户守着这道门。
 
 ## 隧道那条读循环（`test/tunnel.test.ts`，4 项）
-`src/tunnel.ts` 读子进程的输出，从里面找主机名。那条循环开着多久等于共享开着多久，所以它手里那个缓冲区两个方向都会坏：收得太早就把主机名丢了，症状是隧道从来不 announce；完全不收，一个小时的共享就变成宿主进程里一个小时的内存增长。代码的写法是先搜，搜不到才把缓冲区收成尾部的一半。
+`src/tunnel.ts` 读子进程的输出，从里面找主机名。那条循环开着多久等于隧道开着多久，而隧道现在是操作员命令开起来的，一直开到 `/a2mcp tunnel stop` 或者桥拆端口，所以它手里那个缓冲区两个方向都会坏：收得太早就把主机名丢了，症状是隧道从来不 announce；完全不收，一次开着的几个小时就变成宿主进程里几个小时的内存增长。代码的写法是先搜，搜不到才把缓冲区收成尾部的一半。
 
 钉住它的是「主机名埋在比转录更多的输出后面」那一条，而这一条的难点在夹具，不在实现。子进程不加节奏地写（每行一次 `writeSync`，或者一整块写下去），到父进程这边是十来个体积不等的读事件，实测有一次把 200 KB 全塞进第一个事件——那样的流里压根没有几次能撞到上限，把实现写成「满了就不再追加」也不会红。每行之间加一个 `await Bun.sleep(5)`，流才真是一行一个事件。另一个坑更安静：`process.stdout.write` 的循环后面接一句 `console.log`，Bun 让那句同步写越过排队的异步写，主机名直接跑到第一个 chunk 里。夹具的注释写着这两条，因为下一个改这个文件的人会重新发明它们。
+
+## 共享的两半（`test/xfer-route.test.ts` 17 项 / `test/xfer.test.ts` 16 项）
+
+`/xfer` 是两段代码：`src/server.ts` 里那个反向代理，和 `src/xfer.ts` 里把文件服务器起起来、再把目标交给代理的工具。两个文件各测一段，夹具都是假的，假得有针对性。
+
+路由这边问的是代理对请求做了什么、对回答又撤掉了什么。文件服务器是测试现场跑起来的一只 `Bun.serve`，把递到它手里的每一项记下来，再按表回话。对着真 dufs 测不出这一层：真服务器只做寻常事，而要看的是不寻常的那几处——调用方的 `Authorization` 是被覆盖而不是被合并（合并会留下一条能绕过桥直接打 `dufs` 的头）、前缀原样传下去、301 只报不跟、`www-authenticate` 那道 `Basic realm` 挑战出不了回环。字节跟钉住的那个构建是否逐字一致是宿主核验的活（`test/obtain-probe.ts` 第二节、`test/install-probe.ts` 第五节），单测假不出来。
+
+同一个文件里另一组断言在量两条面的边界：没带 token 的文件请求 401，而文件服务器一次都没被碰，鉴权门在路由之前；没共享时 404，回话点名 `xfer_share`；往 `POST /xfer/echo` 里塞一段 JSON-RPC 仍然是文件请求，正文原样交给服务器、`callTool` 计数为零——MCP 那一支读 body 而根本不看 pathname，这条边界不钉住，一次上传就会被当成一次工具调用；`DELETE /xfer/f.txt` 是删文件，MCP 会话照旧能用，因为 `DELETE` 那一支原先在任何路径上都会结束会话；`xfer-private` 不是这条路由（GET 仍旧 405、`initialize` 仍旧 200、服务器零命中）；`GET /` 在有共享可服务的时候仍旧拒 405，而 `GET /xfer/` 正常出目录；`HEAD` 拿到头而不带正文；服务器不再回话时是 502，正文里查不到 `127.0.0.1`，端口和 `Unable to connect` 只在宿主 stderr。共享活着的时候，目录与调用那一面逐项没变。
+
+工具这边测的是真二进制问不出来的接线：挑的那个端口就是它服务的那个端口，自己编的那对凭据就是服务器校验的那对，而这对凭据只待在进程里。回包里 `user`/`secret`/`host` 三个字段是消失，不是留空——留空会让人去找已经不存在的凭据。审计记的是路由 `/xfer/`：操作员读日志要知道当时什么东西可达，公网那一半属于隧道自己的记录。
+
+夹具那只能当 dufs 的脚本得写成带 shebang 的可执行文件，因为 `xfer.dufs` 是一个程序名而不是一行 shell：第一版把 `bun <file>` 整串塞进名字里，spawn 就去找一个文件名等于这整串字符的东西。就绪那一探也踩过一次：它问的是带前缀的根，那是一个目录，回的是 listing 而不是文件，当文件读会抛，抛出来的 500 让就绪循环一路等下去。
+
+`xfer_stop` 那条钉的是一个真发生过的死法：`close` 发完 SIGTERM 先 await 了一次才订阅子进程的 exit，而 dufs 应 SIGTERM 只要几毫秒，事件在有人听之前就发完了，那个 await 永远不返回，于是 `xfer_stop` 挂在一个其实已经关掉的共享上。开窗的那次 await 是隧道拆除，现在没有了；留下断言的是 kill 与订阅仍然相邻，判据是返回耗时低于 2 秒——超过 2 秒就是 SIGKILL 兜底在替它说话，那不算听见。TTL 那条同样不猜时长：模块里那个 `setTimeout` 的处理函数要杀一个子进程，假时钟杀不了它，所以断言等的是处理函数自己写下的那条记录。
 
 ## `test:hardening` — 加固核验（34 项）
 
@@ -276,7 +290,7 @@
 
 顺带一处过期维护：那条保留测试里每 20 对让路的理由在串行之后不成立了，注释按新的行为改写，让路本身去掉。
 
-## 入口那一层（`test/entry.test.ts`，23 项）
+## 入口那一层（`test/entry.test.ts`，24 项）
 
 `extensions/a2mcp.ts` 此前没有任何单测能引到它——不起了宿主就摸不到，而它管的是这台服务器的生死。它现在被直接 import：`$A2MCP_CONFIG` 指到临时文件，端口写 `0`，`Main` 会话是真注册进 `AgentRegistry.global()` 的假货。不 mock 任何模块：入口的每个决定最后都要落到一个能被连接的端口上，所以断言一律是「从广播里解析出那个端口，然后去连它」。连不上就是没在服务，200 就是在服务——这比数调用次数结实，而 `mock.module` 在本机还有个硬伤：Bun 的模块 mock 是进程级的，`test/config.test.ts` 的 `loadConfig` 会被同一进程里的 mock 换掉，一次 `bun test` 就绿不回来了。
 
