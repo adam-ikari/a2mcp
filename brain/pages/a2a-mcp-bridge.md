@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-20T02:01:03"
+updated: "2026-10-20T04:44:35"
 ---
 
 <!-- compiled_truth -->
@@ -956,4 +956,9 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   kind: decision
   summary: "v0.5.0 发布（2026-10-20，commit 297eb55 + annotated tag，GitHub Release 已立）。minor 位的套用：2026-10-18 立的判据是「远程调用方拿到的东西变了进 minor」，这版命中四条——零配置机器从连不上变成连得上（auto-model 占位）、Windows 上同一句 xfer_share 的行为不再取决于手动拖包（win32-x64 钉行 + 自解 zip）、桥多了一条操作员可开的公网入口（/a2mcp tunnel，工具面没变但端点可达面貌变了）、全新机器那条引导路补上 Windows 一支（bootstrap.ps1 + create-only 播种）。发布形状照 v0.4.0：发布提交只动 package.json 与 CHANGELOG 两个文件；版本号唯一真相在 package.json，协议页样例是占位写法所以没有第二份要跟。发版后核远程那条路（先例 bae9d01 的单文件 follow-up，commit e3ab3fa）：临时 HOME 从公开 git URL 装到 a2mcp@0.5.0，initialize 回包打印 0.5.0 即版本号自证，一次 tools/call read 200 并落 start/done 两条审计。"
   source: "v0.5.0 发布轮（plan winter-heath-falcon）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-20T04:44:35
+  kind: decision
+  summary: "2026-10-20 二进制取回的下载预算换门：维护者 Windows 真机报 cloudflared-windows-amd64.exe 下载超时，把旧代码里没在目标平台量过的 120 秒总墙上时钟量穿（52.7MB 裸 exe 要约 450KB/s 持续吞吐才能跑赢）。换成进度感知两道门：30 秒收不到字节判断流（每收到数据重置，请求发出前武装），10 分钟总期限兜底滴流；两类失败各报已收字节，并把既有逃生门（PATH 或 xfer 配置里写绝对路径）点名进错误文案。不加快照镜像、不加断点续传。慢网新预算的 Windows 首跑读数待维护者回测。"
   affects: [a2a-mcp-bridge]
