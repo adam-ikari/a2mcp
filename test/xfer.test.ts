@@ -36,6 +36,8 @@ process.env.A2MCP_AUDIT = auditFile;
 
 /** The origin the bridge tells this module it is on — the getter's answer in a test. */
 const BRIDGE_ORIGIN = "http://127.0.0.1:3456";
+/** What `/a2mcp tunnel` would have announced, without a cloudflared in the test. */
+const PUBLIC_ORIGIN = "https://calm-river-abc.trycloudflare.com";
 
 /** The text half of a tool result; these tools never answer with anything else. */
 const textOf = (r: XferToolResult) => r.content.flatMap((c) => (c.type === "text" ? [c.text] : [])).join("");
@@ -98,7 +100,15 @@ writeFileSync(stub, STUB, { mode: 0o755 });
 
 const opened: Xfer[] = [];
 
-function makeXfer(over: { dufs?: string; resolveBinary?: typeof resolveBinary; bridgeUrl?: string } = {}) {
+function makeXfer(
+	over: {
+		dufs?: string;
+		resolveBinary?: typeof resolveBinary;
+		bridgeUrl?: string;
+		/** A value, or a getter so one test can open and close the tunnel between calls. */
+		publicUrl?: string | null | (() => string | null);
+	} = {},
+) {
 	const x = createXfer(
 		{ dufs: over.dufs ?? stub, cloudflared: "cloudflared-not-used-here" },
 		{
@@ -106,6 +116,11 @@ function makeXfer(over: { dufs?: string; resolveBinary?: typeof resolveBinary; b
 			// Passing no `bridgeUrl` at all is the case the fallback in `routeUrl`
 			// exists for: the answer then names the route and nothing about the origin.
 			...(over.bridgeUrl ? { bridgeUrl: () => over.bridgeUrl as string } : {}),
+			...("publicUrl" in over
+				? {
+						publicUrl: typeof over.publicUrl === "function" ? over.publicUrl : () => over.publicUrl as string | null,
+					}
+				: {}),
 		},
 	);
 	opened.push(x);
@@ -154,12 +169,13 @@ describe("the xfer tool surface", () => {
 		}
 	});
 
-	test("the catalog tells a caller the route and the token, and no tunnel", () => {
+	test("the catalog tells a caller the route, the token, and where the public URL comes from", () => {
 		// This is what a remote model reads before deciding to share anything.
 		const share = XFER_TOOLS[0].description;
 		expect(share).toContain("/xfer/");
 		expect(share).toContain("Bearer");
 		expect(share).toContain("/a2mcp tunnel");
+		expect(share).toContain("publicUrl");
 		expect(share).not.toContain("quick tunnel");
 		expect(share).not.toContain("basic auth");
 	});
@@ -262,6 +278,7 @@ describe("xfer_share lifecycle", () => {
 		expect(r.isError).toBe(false);
 		const body = JSON.parse(textOf(r)) as {
 			url: string;
+			publicUrl: string | null;
 			route: string;
 			port: number;
 			expiresAt: string;
@@ -271,6 +288,12 @@ describe("xfer_share lifecycle", () => {
 			host?: string;
 		};
 		expect(body.url).toBe(`${BRIDGE_ORIGIN}${XFER_ROUTE}/`);
+		// No tunnel in this test: the field is present and null, and the usage line
+		// names the two routes left instead of leaving the caller to guess one.
+		expect(body.publicUrl).toBeNull();
+		expect(body.usage.public).toContain("no public address");
+		expect(body.usage.public).toContain("SSH port forward");
+		expect(body.usage.public).toContain("/a2mcp tunnel");
 		expect(body.route).toBe(`${XFER_ROUTE}/`);
 		expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
 		// The fields the tunnel era returned are gone rather than emptied: a caller
@@ -315,6 +338,30 @@ describe("xfer_share lifecycle", () => {
 		const x = makeXfer({ bridgeUrl: undefined });
 		const body = JSON.parse(textOf(await x.call("xfer_share", { path: dir }, "sid-2"))) as { url: string };
 		expect(body.url).toBe(`${XFER_ROUTE}/`);
+	});
+
+	test("reports the operator's tunnel as publicUrl, and follows it per call", async () => {
+		// The tunnel is the operator's: this test only turns the getter's answer on
+		// and off, which is all the module is allowed to observe.
+		let tunnel: string | null = PUBLIC_ORIGIN;
+		const x = makeXfer({ bridgeUrl: BRIDGE_ORIGIN, publicUrl: () => tunnel });
+
+		const started = JSON.parse(textOf(await x.call("xfer_share", { path: dir }, "sid-5"))) as {
+			publicUrl: string | null;
+			usage: Record<string, string>;
+		};
+		expect(started.publicUrl).toBe(`${PUBLIC_ORIGIN}${XFER_ROUTE}/`);
+		expect(started.usage.public).toContain("Bearer <TOKEN>");
+		expect(started.usage.public).toContain(`${PUBLIC_ORIGIN}${XFER_ROUTE}/<name>`);
+
+		const open = JSON.parse(textOf(await x.call("xfer_status", {}, "sid-5"))) as { publicUrl: string | null };
+		expect(open.publicUrl).toBe(`${PUBLIC_ORIGIN}${XFER_ROUTE}/`);
+
+		// Status answers for the moment it is asked: closing the tunnel takes the
+		// address away without touching the share.
+		tunnel = null;
+		const closed = JSON.parse(textOf(await x.call("xfer_status", {}, "sid-5"))) as { publicUrl: string | null };
+		expect(closed.publicUrl).toBeNull();
 	});
 
 	test("status reports the open share and stop frees the port", async () => {
