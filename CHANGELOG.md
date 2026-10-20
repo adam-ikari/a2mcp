@@ -1,8 +1,18 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**不发布到 npm** —— 安装方式只有 `omp install <git-url>` 一条，见 README。可安装的 Release 现在是 `v0.5.0`（2026-10-20）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**现在发布到 npm，安装主路是 `omp install a2mcp`** —— 原先那句「不发布到 npm、安装方式只有 `omp install <git-url>` 一条」于 2026-10-20 翻面（见那一节），git URL 降为兼容形态，仍是一条命令装。可安装的 Release 现在是 `v0.5.0`（2026-10-20）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
+
+## 2026-10-20 — 安装形态切到 npm：`omp install a2mcp`，落盘的是 tarball 不是整棵仓库
+
+维护者的判据是「安装的内容应该精简，不要整个 git 安装」。量先把话坐实：`omp install <git-url>`（带 `#tag` 也一样）落盘的是整棵仓库的 checkout，2.3 MB，`docs/`、`brain/`、`test/`、`website/` 全带上——bun 的 git 安装路不读 `files` 字段，git 形态没有只装子集的办法；宿主对 tarball URL 直接拒收（实测 `Invalid package name`），本地 `.tgz` 走 link 报 `ENOTDIR`。宿主认的远程形态因此只剩两种，其中受 `files` 控制的只有 npm 包名那一种：`bun pm pack` 出的 tarball 63.6 KB、15 个文件，加载真正读的 `extensions/` 与 `src/` 都在里面。这一轮把安装切到 `omp install a2mcp`，git URL 降为兼容写法——开头的「不发布到 npm」那条旧决定跟着翻面，brain 三页同句的旧话与 timeline 一条 reversal 同步改。
+
+- scripts: `bootstrap.sh` / `bootstrap.ps1` 的默认 spec 换成包名 `a2mcp`。钉值的来源原则不变——「钉值必须来自插件将被取来的同一个地方」——按原则扩一支：spec 是 npm 包名就从 `https://registry.npmjs.org/<name>/latest` 读（tarball 里那份 package.json 保留 `devDependencies`，`tar -xzOf` 验过），github URL 形状维持原有的 raw 推导；包名形态不再要 git，git 的要求收到「spec 是 URL 形状」那条分支上。
+- docs: 两份 README 的安装主命令换成 `omp install a2mcp`（探针从行首读它，git URL 改成行内代码，不再占行首）；加一段为什么（2.3 MB 对 64 KB）；老用户从 git 形态换过来要先 `omp plugin uninstall` 再装，旧检出不会被原地替换。Windows 一键行改成经典形态 `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm <raw> | iex"`（维护者：「更像一键安装风格」），传开关的 scriptblock 形态保留。
+- test: `bootstrap-probe.ts` 的清单 URL 从 README 那行现推，两条分支与脚本同一对；假 curl 那组现在喂 registry 的 body；live 项按版本门控——registry 上那份与本分支同版本才断言钉相等，bump 之后、publish 之前的窗口只断言读数合法，CI 不为这个窗口红。`install-probe.ts` 新增第六组：临时 `HOME` 里真跑 `omp install a2mcp`，核登记落进 lock、落盘有 `package.json`/`extensions`/`src` 而没有 `docs`/`brain`/`test`/`website`/`.github`/`scripts`（「精简」这条就断言在这里），版本只断言合法 semver；registry 答不到整组 `info:` 跳过。`test:bootstrap` 46 → 47 项（git 要求拆成 URL 形态要、包名形态不要两条），`test:install` 48 → 52 项。
+- fix: `docs/testing.md` 里那句「git 抓取由 `test:install` 前三组覆盖」是错的——那三组从 manifest 到 import 图都在本地，一次网都不出；每天真出网的远程安装只有新加的 npm 那一组，改对了。
+- 边界：Windows 上的 npm 装法这一轮没有真机读数（宿主同一条 bun 解析路，ps1 只过字面核对）；registry `latest` 缓存陈旧是宿主自己的已知问题（manager 注释 #11634），`--no-cache` 在宿主侧，不是这里新加的洞；npm 发布之后不撤 git tag 与 GitHub Release，旧装法的机器照常工作。
 
 ## 2026-10-19 — `/a2mcp tunnel`：一条命令把公网 URL 架在桥的端口上
 

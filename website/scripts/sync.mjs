@@ -160,7 +160,7 @@ features:
     details: 远程调用可能唤醒宿主自己的 agent，花宿主的 token。host_llm 配置与 POST /host-llm 把这件事变成开关：deny 在位时宿主的会话发不出任何模型请求，核验探针对着一个真在听的计数 sink 数过——零是数出来的。
     link: /intro#宿主推理接管
   - title: 装它分两条路
-    details: 机器上已经有 omp，就那一条 omp install <git-url>；新机器一条脚本管宿主那一层，扩展仍然按同一条命令装。bootstrap.sh 可以不克隆、从管道进去跑；bootstrap.ps1 也照样不落盘直接跑，2026-10-19 在真 Windows 上跑通第一次（宿主已在的分支），自装宿主并写占位 models.yml 那半还没有真机执行。
+    details: 机器上已经有 omp，就那一条 omp install a2mcp——装的是 registry 上那份约 64 KB 的 tarball，git URL 落的是整棵仓库的检出，降为兼容写法；新机器一条脚本管宿主那一层，扩展仍然按同一条命令装。bootstrap.sh 可以不克隆、从管道进去跑；bootstrap.ps1 也照样不落盘直接跑，2026-10-19 在真 Windows 上跑通第一次（宿主已在的分支），自装宿主并写占位 models.yml 那半还没有真机执行。
     link: /intro#安装
   - title: 接上远程 agent
     details: 本机 omp 首次启动时广播接口地址并生成 token，抄进远程客户端的 mcp.json 就连上。默认只监听 127.0.0.1，跨机器走 SSH 端口转发。
