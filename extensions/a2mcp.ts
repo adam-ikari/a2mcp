@@ -161,8 +161,12 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 				// Before the port opens: `getTools` and `callTool` below close over it.
 				// `bridgeUrl` is a getter because the share's advertised URL is this
 				// process's own origin, and the port is only known after the bind.
+				// `publicUrl` is the same idea one level out: the operator's tunnel may
+				// open or close while a share lives, and the tool reports that state
+				// without ever opening a tunnel of its own.
 				xfer = createXfer(cfg.xfer, {
 					bridgeUrl: () => (server && cfg ? `http://${cfg.host}:${server.port}` : ""),
+					publicUrl: () => mcpTunnel?.url ?? null,
 				});
 				server = await startServer(cfg, {
 					// The host's registry verbatim, plus the bridge's own transfer tools:

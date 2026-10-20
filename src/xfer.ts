@@ -21,7 +21,9 @@
  * exactly one origin (src/tunnel.ts), so files and tools share a hostname by sharing
  * this port. Whether that hostname exists at all is the operator's call — `/a2mcp
  * tunnel` — and never a tool's. Without it the route is reachable on the host and
- * through whatever port forward the operator set up, and nothing more.
+ * through whatever port forward the operator set up, and nothing more. A share
+ * reports the hostname while it is up (`publicUrl`, read at call time) and says
+ * there is none while it is down; it never opens one.
  *
  * ## Why `dufs`
  *
@@ -77,8 +79,8 @@ export const XFER_TOOLS: McpTool[] = [
 			"Bearer token as the tool calls: download with GET (range requests work), upload with PUT, " +
 			"or point any WebDAV client at the route. " +
 			"The share closes itself at `ttlSeconds` (default 3600) or on xfer_stop. " +
-			"Reachable on the host's loopback; a public hostname appears only while the operator's " +
-			"`/a2mcp tunnel` is open, at the same /xfer/ path. " +
+			"Reachable on the host's loopback; while the operator's `/a2mcp tunnel` is open the reply's " +
+			"`publicUrl` is the same /xfer/ route on that hostname. " +
 			"Sharing a path under this token shares it with every holder of that token.",
 		inputSchema: {
 			type: "object",
@@ -136,6 +138,13 @@ export interface XferDeps {
 	 * a rebind.
 	 */
 	bridgeUrl?(): string;
+	/**
+	 * The operator's public origin for this port — the `/a2mcp tunnel` hostname — or
+	 * null while no tunnel is open. A getter for the same reason `bridgeUrl` is one:
+	 * the tunnel comes and goes while a share lives, so a reply answers for the moment
+	 * it is asked, not for the moment the share began.
+	 */
+	publicUrl?(): string | null;
 	now?(): number;
 }
 
@@ -229,6 +238,16 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 
 	/** What a caller types. The port is the bridge's, not the file server's. */
 	const routeUrl = (): string => `${deps.bridgeUrl?.() ?? ""}${XFER_ROUTE}/`;
+
+	/**
+	 * The same route under the operator's tunnel, or null when there is none. Read
+	 * per call: `/a2mcp tunnel` may open or close between two `xfer_status` calls,
+	 * and this module only ever reports that state — it never starts a tunnel.
+	 */
+	const publicRouteUrl = (): string | null => {
+		const origin = deps.publicUrl?.()?.replace(/\/+$/, "") ?? "";
+		return origin.length === 0 ? null : `${origin}${XFER_ROUTE}/`;
+	};
 
 	async function close(reason: string): Promise<void> {
 		const s = share;
@@ -360,9 +379,11 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 		share = { path, port, auth, startedAt, expiresAt, server, timer };
 
 		const url = routeUrl();
+		const publicUrl = publicRouteUrl();
 		await auditXfer(sid, "share", { path, port, ttl, route: `${XFER_ROUTE}/` }, null);
 		return text({
 			url,
+			publicUrl,
 			route: `${XFER_ROUTE}/`,
 			path,
 			port,
@@ -374,9 +395,12 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 				// and lands in logs, and the bridge's token belongs to neither.
 				download: `curl -H 'Authorization: Bearer <TOKEN>' -O ${url}<name>`,
 				upload: `curl -H 'Authorization: Bearer <TOKEN>' -T <local> ${url}<name>`,
+				// No tunnel means no public address, and the reply says which two ways
+				// in are left rather than leaving a remote caller to invent a third.
 				public:
-					"the same /xfer/ path under the operator's public hostname while `/a2mcp tunnel` is open; " +
-					"loopback or an SSH forward only when it is not",
+					publicUrl === null
+						? "no public address — `/a2mcp tunnel` is closed; use an SSH port forward to the bridge port, or ask the operator to run `/a2mcp tunnel`"
+						: `curl -H 'Authorization: Bearer <TOKEN>' -O ${publicUrl}<name>`,
 			},
 			// Why this call took a few seconds: a version here means the bridge fetched
 			// that build during this call (src/obtain.ts), `null` means it was already there.
@@ -403,6 +427,7 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 						serving: true,
 						path: share.path,
 						url: routeUrl(),
+						publicUrl: publicRouteUrl(),
 						route: `${XFER_ROUTE}/`,
 						port: share.port,
 						startedAt: new Date(share.startedAt).toISOString(),
