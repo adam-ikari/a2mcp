@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-19T16:37:51"
+updated: "2026-10-20T02:01:03"
 ---
 
 <!-- compiled_truth -->
@@ -950,4 +950,10 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
 - time: 2026-10-19T16:37:51
   kind: decision
   summary: "/a2mcp tunnel (2026-10-19): the bridge may hold a public listener, as the operators fourth opinion path. Operator-only host-session command (never a tool, never an HTTP route) piping openQuickTunnel + resolveBinary onto server.port; runtime state like the takeover switch (no config, no restart survival); idempotent reuse on second call, deliberately NOT xfer_shares replace semantics; torn down with the port so a trycloudflare hostname cannot outlive the bridge; audited as tool tunnel with sid null; the Bearer token is the only gate and the docs say so in the notification itself."
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-20T02:01:03
+  kind: decision
+  summary: "v0.5.0 发布（2026-10-20，commit 297eb55 + annotated tag，GitHub Release 已立）。minor 位的套用：2026-10-18 立的判据是「远程调用方拿到的东西变了进 minor」，这版命中四条——零配置机器从连不上变成连得上（auto-model 占位）、Windows 上同一句 xfer_share 的行为不再取决于手动拖包（win32-x64 钉行 + 自解 zip）、桥多了一条操作员可开的公网入口（/a2mcp tunnel，工具面没变但端点可达面貌变了）、全新机器那条引导路补上 Windows 一支（bootstrap.ps1 + create-only 播种）。发布形状照 v0.4.0：发布提交只动 package.json 与 CHANGELOG 两个文件；版本号唯一真相在 package.json，协议页样例是占位写法所以没有第二份要跟。发版后核远程那条路（先例 bae9d01 的单文件 follow-up，commit e3ab3fa）：临时 HOME 从公开 git URL 装到 a2mcp@0.5.0，initialize 回包打印 0.5.0 即版本号自证，一次 tools/call read 200 并落 start/done 两条审计。"
+  source: "v0.5.0 发布轮（plan winter-heath-falcon）"
   affects: [a2a-mcp-bridge]
