@@ -4,6 +4,17 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## 2026-10-20 — 一次调用一个 id：审计行里的 id 就是宿主 transcript 里的 toolCallId
+
+一次远程调用在宿主那侧与桥那侧各留一份记录，两份都只有一半。宿主的 `~/.omp/agent/sessions/**.jsonl` 里记着 `tool_execution_start`：完整参数在，结果永远没有——远程调用不走消息流，那份 transcript 里既没有 `tool_execution_end` 也没有 `isError`。桥的审计日志反过来：结果与远端归因在，长参数被折成 `<len,sha256>`。操作员要回答的那句「远程客户端跑了什么、成了没有」需要两份合起来看，而两份此前各铸一个 UUID、无从对上——实测同一次调用在审计日志里是 `138f5ab0-…`，在宿主 transcript 里是 `30012d7d-…`，能配上的只有时间戳，在忙的宿主上猜时间戳就是猜。
+
+- feat: `src/bridge.ts` 一次调用只铸一个 id——分派处铸出的那个既配对审计的 `start` 与 `done`，也作为 `toolCallId` 交给宿主那次执行。id 向下流、不往上回传，所以改的是内部签名，对外形状一个字没动（`tools/call` 回包、`tools/list`、配置、token 都不变）。审计行里的 `id` 现在就是宿主 transcript 里那次调用的 `toolCallId`，`grep <id> ~/.omp/agent/sessions/` 取回参数正文。
+- 边界: id 仍然是桥铸的 UUID、不是调用方发来的 JSON-RPC id，按 JSON-RPC id 查日志依然查不到任何东西。宿主把 toolCallId 当不透明字符串用（`activity/index.ts` 只拿它做 Map key，不解析格式），所以复用同一个 UUID 不改宿主的任何约定；宿主自己发起的调用照旧用它自己的 `call_<hex>`，那条路径没动。
+- 理由: 审计日志该记「谁、什么工具、结果如何、边界在哪、桥自己动手做了什么」，不该是参数正文的副本——正文的权威副本在宿主那里，抄一份脱敏的既没省下多少字节，又把可读性丢了。指针比副本便宜，也比副本准。
+- test: `bun test` 254 → 255。`test/host-call.test.ts` 多一项：审计那一对的 `id` 就是宿主工具被调用时的 `toolCallId`，宿主 render 事件用的也是同一个 id。反证在旧代码上验过——那一项红，报出两个不同的 UUID（`494acd8c-…` 与 `a62e7da0-…`）。
+- docs: 协议页的审计一节加一条「id 是去宿主 transcript 取参数正文的钥匙」，两份 README 的审计日志一条各补一句（`id` 与 `toolCallId` 是同一个，两份记录各缺另一半）。
+- 版本位: 远程调用方经协议拿到的东西没变，按 2026-10-18 那条判据不进 minor；这一笔不发版。
+
 ## 2026-10-20 — 隧道开着时，共享回包带上公网地址
 
 远端 agent 拿到 `xfer_share` 的回包却拼不出文件地址：`url` 是宿主自己的回环 origin（`http://127.0.0.1:<桥端口>/xfer/`），在远端机器上指向远端自己；公网入口只有操作员那条 `/a2mcp tunnel`，而回包从前不带它。远端能想到的最短路径于是是自己再起一条隧道。现在隧道开着时，`xfer_share` 与 `xfer_status` 多一个 `publicUrl`（`https://<随机>.trycloudflare.com/xfer/`），隧道没开就是 `null`。

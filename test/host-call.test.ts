@@ -220,6 +220,28 @@ describe("buildCallTool host hand-off", () => {
 		expect(done).toMatchObject({ isError: false, id: start?.id });
 	});
 
+	test("the audit id is the id the host was called with", async () => {
+		// The join key between the two halves of one call's record. The host's
+		// session transcript keeps the full arguments and never the outcome; the
+		// audit log keeps the outcome and the remote attribution but folds long
+		// arguments to `<len,sha256>`. An operator asking "what did the remote
+		// client run, and did it work" needs both, so the two have to be joinable
+		// by something better than a timestamp guess. Before this, the bridge
+		// minted a UUID for the audit pair and another for the host, and the two
+		// id spaces did not overlap at all.
+		const h = mount({});
+		await h.call("read", { path: "/etc/hostname" }, "sess-join");
+		const start = await untilRecord((l) => l.sid === "sess-join" && l.phase === "start");
+		const done = await untilRecord((l) => l.sid === "sess-join" && l.phase === "done");
+		// The audit pair and the host's tool call share one id.
+		expect(start?.id).toBe(h.seen[0]?.toolCallId);
+		expect(done?.id).toBe(h.seen[0]?.toolCallId);
+		// And that id is the one the host wrote the call under in its transcript,
+		// so `grep <audit id> <agentDir>/sessions/` finds the arguments the audit
+		// log folded away.
+		expect(h.events[0]?.toolCallId).toBe(h.seen[0]?.toolCallId);
+	});
+
 	test("args reach the host tool unchanged, and nothing is validated on the way", async () => {
 		const args = { path: "/tmp/x", edits: [{ oldText: "a" }] };
 		const h = mount({});

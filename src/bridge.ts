@@ -135,7 +135,11 @@ export function buildCallTool(
 	pi: ExtensionAPI,
 	extCtx: ExtensionContext,
 ): (name: string, args: unknown, sid?: string | null) => Promise<{ content: McpContent[]; isError: boolean }> {
-	const runHost = async (name: string, args: unknown): Promise<{ content: McpContent[]; isError: boolean }> => {
+	const runHost = async (
+		name: string,
+		args: unknown,
+		toolCallId: string,
+	): Promise<{ content: McpContent[]; isError: boolean }> => {
 		const ref = AgentRegistry.global().get(MAIN_AGENT_ID);
 		if (!ref?.session) {
 			return { content: [{ type: "text", text: "main session not available" }], isError: true };
@@ -158,8 +162,8 @@ export function buildCallTool(
 			localProtocolOptions: extCtx.localProtocolOptions,
 		};
 		// Mirror the host's own tool events (see emitRenderEvent for why a failure
-		// here is dropped).
-		const toolCallId = randomUUID();
+		// here is dropped). The id is the one the dispatcher minted for this call, so
+		// the host's transcript records it under the same name the audit log does.
 		emitRenderEvent(session.agent, () => ({ type: "tool_execution_start", toolCallId, toolName: name, args }));
 		let r: Awaited<ReturnType<typeof tool.execute>>;
 		try {
@@ -186,7 +190,11 @@ export function buildCallTool(
 		return { content, isError: !!r.isError };
 	};
 
-	const run = async (name: string, args: unknown): Promise<{ content: McpContent[]; isError: boolean }> => {
+	const run = async (
+		name: string,
+		args: unknown,
+		toolCallId: string,
+	): Promise<{ content: McpContent[]; isError: boolean }> => {
 		// One message for "not registered" and "not in catalog": a caller holding
 		// the token learns nothing about which names exist behind the curtain.
 		// Same registry as the catalog, so a name the caller read in `tools/list` is a
@@ -194,20 +202,33 @@ export function buildCallTool(
 		if (!servedTools(pi).some((t) => t.name === name)) {
 			return { content: [{ type: "text", text: `tool '${name}' is not exposed by this bridge` }], isError: true };
 		}
-		return runHost(name, args);
+		return runHost(name, args, toolCallId);
 	};
 
 	return async (name, args, sid) => {
+		// One id for the whole call, used twice: it pairs the two audit records, and
+		// it is the id the host's own session transcript records the call under.
+		//
+		// The two records are halves of one thing. The transcript keeps the full
+		// arguments and never the outcome — it has no `tool_execution_end` and no
+		// `isError` for a remote call. The audit log keeps the outcome and the remote
+		// attribution but folds long arguments to `<len,sha256>`. So an operator
+		// asking "what did the remote client run, and did it work" needs both, and
+		// they used to be unjoinable: two UUIDs were minted for the same call — this
+		// one for the audit pair, another for the host — so the only way to pair
+		// them was a timestamp guess, and a guess across a busy host is a guess.
+		// One id makes the join a lookup: the id in the audit line is the
+		// `toolCallId` the host wrote the call under, under `<agentDir>/sessions/`.
+		const id = randomUUID();
 		// Dispatch-time record: if the call never settles (host approval
 		// waiting for a UI that does not exist), the start line is the trace.
 		// Awaited, so "the start is on disk" is true before the call runs rather
 		// than racing it — that ordering is what makes the line evidence of
 		// anything rather than a record of a request that once happened.
-		const id = randomUUID();
 		await auditStart(id, sid ?? null, name, args);
 		let r: { content: McpContent[]; isError: boolean };
 		try {
-			r = await run(name, args);
+			r = await run(name, args, id);
 		} catch (e) {
 			r = { content: [{ type: "text", text: (e as Error)?.message ?? String(e) }], isError: true };
 		}
