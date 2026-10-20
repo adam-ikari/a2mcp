@@ -197,7 +197,7 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - 内容: 见上 2026-10-20 的两节——「安装形态切到 npm」（两份引导脚本、两个探针、两份 README、testing.md、站点卡、CI 注释）与「取回改进度感知」（download 两道门、两类失败各带已收字节、失败文案点名逃生门、三条流控形状测试、protocol.md 三门描述）。
 - 边界: npm 包在 registry 上还没有，这一版按维护者改的序先发 GitHub，`npm publish` 排在登录之后补上；在那之前 `omp install a2mcp` 会停在依赖解析，装机器用 git URL 那条兼容写法。Windows 上的 npm 装法本轮没有真机读数（ps1 过的是十三项字面核对，宿主同一条 bun 解析路径）；Windows 慢网在新预算下的首跑读数待维护者回测（持续低于约 90 KB/s 的连接在 10 分钟总期限下仍取不完，那是手动放文件加 `xfer.cloudflared` 绝对路径的地盘）；registry 的 `latest` 缓存陈旧是宿主自己的已知问题（manager 注释 #11634），`--no-cache` 在宿主侧；git tag 与既有 GitHub Release 不撤，旧装法机器照常工作。
 - 回归（发版前重跑的一遍，2026-10-20）: `bun test` 233 项 660 断言全绿；`lint` / `tsc` 干净；`BOOTSTRAP OK`（47 项，真 HOME 装、lock 登记、二次运行幂等、卸载回收）；`test:obtain` 真网络 PASS（钉表十行 200、Windows zip 哈希对钉值、真隧道 announce）；`PACKAGE OK`，npm 真装组 info 跳过（registry 上 404，publish 前属预期）；站点 `build` + `check` 全过。
-- 发版之后核了两条远程路：〔占位——npm 路：临时 HOME `omp install a2mcp` 落盘清单 + `initialize` 回 0.5.1；git 兼容路：抽一次 `tools/call`。结果进 follow-up 单文件提交，本节这句随 follow-up 补全〕
+- 发版之后核了两条远程路：git 兼容路已核（push 后从公开 URL 装进临时 HOME，`initialize` 回 `serverInfo.version` 0.5.1，一次 `tools/call` 通）；npm 路待 publish——本机 `npm whoami` 对 npmjs.org 仍是 ENEEDAUTH，且 `~/.npmrc` 的默认 registry 指着 npmmirror，publish 时要 `--registry` 指死 npmjs.org，那条核验随 publish 后的复跑补全。
 
 ## v0.5.0 — 没有模型配置的机器也连得上，Windows 拿齐两个二进制，公网端点多了操作员的一条命令
 
