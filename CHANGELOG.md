@@ -1,6 +1,6 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**不发布到 npm** —— 安装方式只有 `omp install <git-url>` 一条，见 README。可安装的 Release 现在是 `v0.4.0`（2026-10-18）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**不发布到 npm** —— 安装方式只有 `omp install <git-url>` 一条，见 README。可安装的 Release 现在是 `v0.5.0`（2026-10-20）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
@@ -169,6 +169,20 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.5.0 — 没有模型配置的机器也连得上，Windows 拿齐两个二进制，公网端点多了操作员的一条命令
+
+**这一版对远程调用方变的是可达面：零模型配置的机器上桥自己填占位模型（此前那类机器根本起不到能应答的端口），`xfer_share` 在 Windows 上把 `dufs` 与 `cloudflared` 真取得到（此前钉表没有 win32 行，那句工具在那台机器上只能报错），操作员多了一条 `/a2mcp tunnel`（端点可以在没有 SSH 的那台机器上直接经公网连上）。** 传输、鉴权、工具面的形状一个字没动：MCP Streamable HTTP `2025-11-25`、单 Bearer token、`tools/list` 还是宿主注册表逐字加那三个 `xfer_*`。token 不换代——装着 v0.4.0 的机器 `omp install` 同 URL 重装即可，远程 `mcp.json` 不用动。
+
+- feat: `src/auto-model.ts`——每个 `session_start` 检查 `Main` 会话的模型槽，空槽填不可达占位 `a2mcp/offline`（RFC 6761 保留域 baseUrl），槽里有模型一步都不做；纯运行态，不碰 `agent.db` 与 `models.yml`。两份引导脚本在「自装宿主且 `models.yml` 不存在」那条窄分支上播种同一张占位行（create-only）。`omp --mode rpc` 那条无头路靠磁盘文件救，运行态占位行救不了它——两半各守一道门。
+- feat: win32 的 obtain 补全——钉表加 `win32-x64` 两行（本机整包下载复算哈希）、`.zip` 由桥自己的读取器展开、平台从依赖注入让 Linux 测 win32 分支。`win32-arm64` 那行照旧是空的，上游不发那个构建，桥直接拒绝并说出缺什么。
+- feat: `/a2mcp tunnel`——操作员的宿主会话命令，把 `openQuickTunnel` + `resolveBinary` 那套既有机器架在桥自己的端口上，公告 `https://<随机>.trycloudflare.com` 公网 URL；运行态、幂等复用、随端口拆，开与关各一条 `tool: "tunnel"` 审计（`sid: null`，token 不进记录）。这是 AGENTS.md 例外清单的第四条路径：隧道一开，Bearer token 就是公网端点的唯一闸门。
+- feat: `scripts/bootstrap.ps1`——PowerShell 那份引导（与 `.sh` 的字面 parity 由 `test/bootstrap-ps1.test.ts` 守着）；真 Windows 机器首跑过 DryRun 与真跑（`-File` 与不落盘 scriptblock 两种形态），官方安装器与播种两支仍未在那台机器上真执行，边界按支级写。
+- fix: 两份脚本结尾的 `models.yml` 提示按分支说话（写了才报路径，没写就明说这台没写）。
+- test: `bun test` 194 → 231（17 文件；占位模型 8 项、bootstrap ps1 九项扩到十三项、tunnel 五项）。探针侧 `test:bootstrap` 28 → 46 项（自装分支用假 `curl` 驱动到落文件为止），`test:obtain` 31 → 37 项（win32 那两行真下、只验到字节）。
+- docs: 安装一节重排成「omp 安装一条命令 + 一键安装分三个系统」；指南原位瘦身（README 各机制段收到「是什么、怎么用」，细节交还 `docs/`，被删事实逐一核对落点）；`docs/protocol.md` 新增「占位模型」与「操作员的隧道」两节；AGENTS.md 例外清单 three paths 改 four paths。
+- 边界: **Windows 那一支验到字节，没验到执行**——`dufs.exe` 与 `cloudflared.exe` 的真 spawn 发生在没有 Windows 的机器之外才算，`/a2mcp tunnel` 在 win32 上的那条路同样如此。tunnel 的公网半程 2026-10-19 真宿主手工回过一次 `initialize` 200（stop 后 530），同日 `test:obtain` 的真隧道又撞上本机网络对代理域名重签 TLS——两个读数都按实测记，哪个都不是每日证据。
+- 回归（发版前在 18.12.1 上重跑的一遍，2026-10-20）：`lint` / `tsc` 干净，`bun test` 231/231（657 个 expect）；`SMOKE OK`（`tools/list` 22 个）、`tree` 形状 OK、`registry` 对着真注册表 5497 行装配 23.0ms、`HARDEN OK`、`SCENARIOS: 41 steps, 0 failed`、`takeover` 全断言 66.5s（推理 POST 1、元数据非 POST 1）、审批 `VERDICT: B`（挂起 ≥90001ms，审计 `start=1 done=0`）、`obtain` PASS（钉表十个 asset 全 HEAD）、`BOOTSTRAP OK` 46 项、`PACKAGE OK`（发布 tarball 自包含，操作者 `~/.local/bin` 前后一样）；站点 `build` + `check` 全过。版本号自证一条见下面发版后补的那行。
 
 ## v0.4.0 — 名字改到机制上：a2mcp
 
