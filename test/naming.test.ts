@@ -97,6 +97,24 @@ const ALLOWED: { file: string; text: string; why: string }[] = [
 		text: "a2a-mcp-bridge",
 		why: "links a historical document by its filename",
 	},
+	// The same two documents, named by the scripts that copy and check them.
+	{
+		file: join("website", "scripts", "sync.mjs"),
+		text: "a2a-mcp-bridge",
+		why: "names a historical design document by its filename",
+	},
+	{
+		file: join("website", "scripts", "render-check.mjs"),
+		text: "a2a-mcp-bridge",
+		why: "names a historical design document by its filename",
+	},
+	// The site's structured data keeps the old package name as an alternate name,
+	// so a search for it still lands here.
+	{
+		file: join("website", ".vitepress", "config.ts"),
+		text: "pi-a2a-ext",
+		why: "the alternateName in the site's structured data",
+	},
 ];
 
 const SCAN_DIRS = ["src", "extensions", "test", "scripts", ".github", "docs", "website"];
