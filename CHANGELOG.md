@@ -252,6 +252,7 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - 内容: 见上 2026-10-20 的「隧道开着时，共享回包带上公网地址」一节（`XferDeps` 的 `publicUrl` getter、`xfer_share` 与 `xfer_status` 的回包字段、`usage.public` 的两种形态、`bun test` 253→254 与那组新断言、两份 README 与三份 docs、AGENTS.md 例外清单第二条）。
 - 边界: 这一版不新增暴露面——隧道是操作员开的，工具只报它已经有的主机名（主机名本来就不是秘密，隧道审计里就写着它）。公网那半程仍然只有人工证据：本机网络对 `*.trycloudflare.com` 重签 TLS，回环那侧的验证算不了公网半程（`docs/testing.md` 那条判样沿用）。协议页另加一条判据：回包里若还出现 `user` / `secret` / `host`，那是宿主还跑着 0.6.0 之前的版本（那版每次共享自带一条 cloudflared），判据是 `initialize` 回的 `serverInfo.version`。
 - 回归（发版前这一遍，2026-10-20，宿主 omp 18.12.1）: `bun test` 254 项 751 断言全绿；`lint` / `tsc` 干净；`tree` 3 项、`registry` 5497 行（13.3 ms 装配）、`BOOTSTRAP OK` 47 项、`MCP-CALL OK` 6 项、`SMOKE OK`（22 个工具）、`HARDEN OK` 34 项、`SCENARIOS: 41 steps, 0 failed`、`takeover` 34 项 65.8 秒（inference POST=1、元数据非 POST=1）、审批 `VERDICT: B`（90.0 秒挂起、start=1 done=0）；`test:obtain` PASS（41 项，真隧道 announce 到的那个主机名从发布它的那台机器 curl 回去仍是证书错误，那条读数照旧）、`test:install` `PACKAGE OK`（55 项，其中 npm 真装那组 4 项按 `info:` 跳过、第五组真下真跑）；站点 `build` + `check` 全过。
+- 发版之后核了一遍远程那条路：临时 `HOME` 里 `omp install https://github.com/adam-ikari/a2mcp.git` 装到 `a2mcp@0.7.0`，起的那份是装好的而不是工作树。`initialize` 回 `{"name":"a2mcp","version":"0.7.0"}`——版本号自证那条落在这行回包上；一次 `tools/call read /etc/hostname` 回 200 拿到内容，审计落下 `start` 与 `done` 两条，`sid` 是 `initialize` 给的那个会话号。
 
 ## v0.6.0 — 一个端口两张面：文件走 `/xfer` 路由，公网只归操作员那条隧道
 
