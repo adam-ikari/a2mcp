@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-20T04:44:35"
+updated: "2026-10-20T05:14:49"
 ---
 
 <!-- compiled_truth -->
@@ -961,4 +961,9 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
 - time: 2026-10-20T04:44:35
   kind: decision
   summary: "2026-10-20 二进制取回的下载预算换门：维护者 Windows 真机报 cloudflared-windows-amd64.exe 下载超时，把旧代码里没在目标平台量过的 120 秒总墙上时钟量穿（52.7MB 裸 exe 要约 450KB/s 持续吞吐才能跑赢）。换成进度感知两道门：30 秒收不到字节判断流（每收到数据重置，请求发出前武装），10 分钟总期限兜底滴流；两类失败各报已收字节，并把既有逃生门（PATH 或 xfer 配置里写绝对路径）点名进错误文案。不加快照镜像、不加断点续传。慢网新预算的 Windows 首跑读数待维护者回测。"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-20T05:14:49
+  kind: reversal
+  summary: "2026-10-20 安装主路回退：同日「切 npm 包名」的翻面再翻回去。维护者判据「保持 git 安装、不发包」，npm publish 不再排期；v0.5.1 的 README 曾写着 omp install a2mcp 而该名字在 registry 上是 404，命令停在依赖解析——文档不许躺会静默失败的命令，主路回到 omp install 加 git URL，v0.5.2 是这份文档纠偏（代码与 0.5.1 同源）。保留的不是话术是机制：两份引导脚本的 spec 形状二选一与 registry 读钉分支、tarball 打包与 files 治理、install 探针的预留形态组（不发不跑、如实 info 跳过）原样在树里，哪天发包哪天启用，compiled_truth 未为 npm 翻过面所以无需回改。两条免 git 的路量过并否掉：tgz 直装是宿主 link 路径的 ENOTDIR 死路（复核成立），把 dufs 与 cloudflared 打进发布物全五目标约 200 MB、单 Windows 一对约 60 MB，与「发布物是代码包」的定位不合。"
   affects: [a2a-mcp-bridge]
