@@ -1,15 +1,16 @@
 /**
  * `xfer_*`, the bridge's own transfer tools (src/xfer.ts).
  *
- * What these tests are for: the wiring the real binaries cannot be asked about.
- * The share flow runs against a stub file server written at run time (an
- * executable that takes the same command line: root, `--port`, `--auth
- * user:pass@/:rw`) and a stubbed tunnel opener, so the assertions are about *this*
- * module — that the port it picks is the port it serves on, that the credentials
- * it invents are the ones the server checks, that a share is audited, that `stop`
- * and the TTL really close it. Which flags `dufs` accepts and whether
- * `cloudflared` publishes a reachable hostname is real-machine work, not something
- * a unit test can fake its way to.
+ * What these tests are for: the wiring the real binaries cannot be asked about. The
+ * share flow runs against a stub file server written at run time — same command-line
+ * shape as `dufs` (root, `--port`, `--path-prefix`, `--auth user:pass@/:rw`), and the
+ * same rule that nothing outside the prefix is served — so the assertions are about
+ * *this* module: that the port it picks is the port it serves on, that the credentials
+ * it invents are the ones the server checks and stay inside the process, that a share
+ * is audited, that `stop` and the TTL really close it. Which flags `dufs` actually
+ * accepts, and whether the bytes it writes are byte-exact, is real-machine work
+ * (`test/obtain-probe.ts`, `test/install-probe.ts`), not something a unit test can
+ * fake its way to.
  */
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -18,7 +19,7 @@ import { join } from "node:path";
 
 import { auditStart } from "../src/audit.ts";
 import type { resolveBinary } from "../src/obtain.ts";
-import type { TunnelOpener } from "../src/tunnel.ts";
+import { XFER_ROUTE } from "../src/server.ts";
 import {
 	createXfer,
 	resolveXferPath,
@@ -32,6 +33,9 @@ const dir = mkdtempSync(join(tmpdir(), "a2mcp-xfer-"));
 const stubDir = mkdtempSync(join(tmpdir(), "a2mcp-stub-"));
 const auditFile = join(dir, "audit.log");
 process.env.A2MCP_AUDIT = auditFile;
+
+/** The origin the bridge tells this module it is on — the getter's answer in a test. */
+const BRIDGE_ORIGIN = "http://127.0.0.1:3456";
 
 /** The text half of a tool result; these tools never answer with anything else. */
 const textOf = (r: XferToolResult) => r.content.flatMap((c) => (c.type === "text" ? [c.text] : [])).join("");
@@ -49,11 +53,12 @@ const recordsFor = async (needle: string) => {
 };
 
 /**
- * A stand-in for dufs: same argument shape, serves the root over HTTP with the
- * given basic credentials, accepts PUT. Written as an executable with a shebang
- * because `xfer.dufs` names a program, not a shell line — the first version of this
- * test passed `bun <file>` as the binary name and spawn looked for a file with that
- * whole string as its name.
+ * A stand-in for dufs: same argument shape, serves the root over HTTP with the given
+ * basic credentials, accepts PUT, and — the half this module now depends on — only
+ * answers under the `--path-prefix` it was handed, 400 elsewhere. Written as an
+ * executable with a shebang because `xfer.dufs` names a program, not a shell line —
+ * the first version of this test passed `bun <file>` as the binary name and spawn
+ * looked for a file with that whole string as its name.
  */
 const STUB = `#!/usr/bin/env bun
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
@@ -62,6 +67,7 @@ const argv = process.argv.slice(2);
 const root = argv[0];
 const flag = (name) => { const i = argv.indexOf(name); return i === -1 ? undefined : argv[i + 1]; };
 const port = Number(flag("--port"));
+const prefix = flag("--path-prefix") ?? "";
 const creds = (flag("--auth") ?? "").split("@")[0];
 const expected = "Basic " + Buffer.from(creds).toString("base64");
 Bun.serve({
@@ -69,16 +75,19 @@ Bun.serve({
 	port,
 	fetch: async (req) => {
 		if (req.headers.get("authorization") !== expected) return new Response("denied", { status: 401 });
-		const p = join(root, new URL(req.url).pathname);
+		const raw = new URL(req.url).pathname;
+		if (prefix && raw !== prefix && !raw.startsWith(prefix + "/")) return new Response("outside the prefix", { status: 400 });
+		const under = prefix ? raw.slice(prefix.length) || "/" : raw;
+		const p = join(root, under);
 		if (req.method === "PUT") {
 			mkdirSync(dirname(p), { recursive: true });
 			await Bun.write(p, req);
 			return new Response("ok");
 		}
 		if (!existsSync(p)) return new Response("nope", { status: 404 });
-		// The readiness probe asks for "/", which is the root directory: a listing, not
-		// a file. Reading it as a file throws, and a 500 there is what a readiness loop
-		// keeps waiting on.
+		// The readiness probe asks for the prefixed root, which is a directory: a
+		// listing, not a file. Reading it as a file throws, and a 500 there is what a
+		// readiness loop keeps waiting on.
 		if (statSync(p).isDirectory()) return new Response("listing");
 		return new Response(readFileSync(p));
 	},
@@ -87,40 +96,16 @@ Bun.serve({
 const stub = join(stubDir, "stub-dufs");
 writeFileSync(stub, STUB, { mode: 0o755 });
 
-/**
- * The tunnel opener is faked, so this name is never executed — it only has to be a
- * path the real resolver (src/obtain.ts) accepts without reaching for the network.
- * A bare name here would be a request to download, which is what these tests are not
- * about.
- */
-const cloudStub = join(stubDir, "stub-cloudflared");
-writeFileSync(cloudStub, "#!/usr/bin/env bun\n", { mode: 0o755 });
-
 const opened: Xfer[] = [];
-/**
- * The stand-in tunnel opener. `stopMs` is how long its `stop()` takes: the real one
- * tears down a child process and therefore spends event-loop time, and that window is
- * where a share's other child dies.
- */
-function fakeTunnel(stopMs = 0): TunnelOpener {
-	return async (opts) => ({
-		url: `https://stub-tunnel-${opts.port}.trycloudflare.com`,
-		port: opts.port,
-		pid: 4242,
-		stop: async () => {
-			if (stopMs > 0) await Bun.sleep(stopMs);
-		},
-	});
-}
 
-function makeXfer(
-	over: { dufs?: string; cloudflared?: string; resolveBinary?: typeof resolveBinary; tunnelStopMs?: number } = {},
-) {
+function makeXfer(over: { dufs?: string; resolveBinary?: typeof resolveBinary; bridgeUrl?: string } = {}) {
 	const x = createXfer(
-		{ dufs: over.dufs ?? stub, cloudflared: over.cloudflared ?? cloudStub },
+		{ dufs: over.dufs ?? stub, cloudflared: "cloudflared-not-used-here" },
 		{
-			openTunnel: fakeTunnel(over.tunnelStopMs ?? 0),
 			...(over.resolveBinary ? { resolveBinary: over.resolveBinary } : {}),
+			// Passing no `bridgeUrl` at all is the case the fallback in `routeUrl`
+			// exists for: the answer then names the route and nothing about the origin.
+			...(over.bridgeUrl ? { bridgeUrl: () => over.bridgeUrl as string } : {}),
 		},
 	);
 	opened.push(x);
@@ -148,6 +133,11 @@ function portIsFree(port: number): boolean {
 	}
 }
 
+const internalSecret = (auth: string): string =>
+	Buffer.from(auth.replace(/^Basic /, ""), "base64")
+		.toString()
+		.split(":")[1];
+
 describe("the xfer tool surface", () => {
 	test("advertises exactly the names it handles", () => {
 		const x = makeXfer();
@@ -162,6 +152,16 @@ describe("the xfer tool surface", () => {
 			expect(t.inputSchema.type).toBe("object");
 			expect(t.description.length).toBeGreaterThan(40);
 		}
+	});
+
+	test("the catalog tells a caller the route and the token, and no tunnel", () => {
+		// This is what a remote model reads before deciding to share anything.
+		const share = XFER_TOOLS[0].description;
+		expect(share).toContain("/xfer/");
+		expect(share).toContain("Bearer");
+		expect(share).toContain("/a2mcp tunnel");
+		expect(share).not.toContain("quick tunnel");
+		expect(share).not.toContain("basic auth");
 	});
 });
 
@@ -212,103 +212,133 @@ describe("xfer_share refusals", () => {
 		const seen: Array<[string, string]> = [];
 		const x = makeXfer({
 			dufs: "dufs-nomatter-what-this-is-called",
-			cloudflared: "cloudflared-also-just-a-name",
 			resolveBinary: async (name, configured) => {
 				seen.push([name, configured]);
-				return name === "dufs"
-					? {
-							path: stub,
-							installed: {
-								name: "dufs",
-								version: "0.0.0-test",
-								target: "test-target",
-								sha256: "x".repeat(64),
-								dest: stub,
-							},
-						}
-					: { path: cloudStub, installed: null };
+				return {
+					path: stub,
+					installed: {
+						name: "dufs",
+						version: "0.0.0-test",
+						target: "test-target",
+						sha256: "x".repeat(64),
+						dest: stub,
+					},
+				};
 			},
 		});
 		const r = await x.call("xfer_share", { path: dir }, "sid-1");
 		expect(r.isError).toBe(false);
-		expect(seen).toEqual([
-			["dufs", "dufs-nomatter-what-this-is-called"],
-			["cloudflared", "cloudflared-also-just-a-name"],
-		]);
+		// Exactly one lookup: a share is the file server alone now, and cloudflared
+		// belongs to the operator's tunnel command.
+		expect(seen).toEqual([["dufs", "dufs-nomatter-what-this-is-called"]]);
 		// The caller is told what the bridge fetched, because that is where the seconds went.
-		expect(JSON.parse(textOf(r)).installed).toEqual({ dufs: "0.0.0-test", cloudflared: null });
+		expect(JSON.parse(textOf(r)).installed).toEqual({ dufs: "0.0.0-test" });
 	});
 
 	test("a resolver that cannot fetch is a refusal, not a half-open share", async () => {
 		const x = makeXfer({
-			resolveBinary: async (name) => {
-				if (name === "cloudflared") throw new Error("no pinned cloudflared build for test-target");
-				return { path: stub, installed: null };
+			resolveBinary: async () => {
+				throw new Error("no pinned dufs build for test-target");
 			},
 		});
 		const r = await x.call("xfer_share", { path: dir }, "sid-1");
 		expect(r.isError).toBe(true);
-		expect(textOf(r)).toContain("no pinned cloudflared build");
-		const rec = await recordsFor("no pinned cloudflared build");
-		expect(rec.length).toBeGreaterThan(0);
+		expect(textOf(r)).toContain("no pinned dufs build");
+		expect((await recordsFor("no pinned dufs build")).length).toBeGreaterThan(0);
+		// Nothing was left listening on a port nobody owns.
+		expect(x.target()).toBeNull();
 	});
 });
 
 describe("xfer_share lifecycle", () => {
-	test("serves the path, hands back a URL with credentials, and audits it", async () => {
+	test("serves the path at the bridge's route, and keeps its own credential in the process", async () => {
 		const shareDir = join(dir, "shared");
 		mkdirSync(shareDir, { recursive: true });
 		writeFileSync(join(shareDir, "hello.txt"), "hello over http\n");
 
-		const x = makeXfer();
+		const x = makeXfer({ bridgeUrl: BRIDGE_ORIGIN });
 		const r = await x.call("xfer_share", { path: shareDir, ttlSeconds: 60 }, "sid-2");
 		expect(textOf(r)).not.toContain("cannot");
 		expect(r.isError).toBe(false);
 		const body = JSON.parse(textOf(r)) as {
 			url: string;
-			host: string;
+			route: string;
 			port: number;
-			user: string;
-			secret: string;
 			expiresAt: string;
+			usage: Record<string, string>;
+			user?: string;
+			secret?: string;
+			host?: string;
 		};
-		expect(body.url.startsWith(`https://${body.user}:${body.secret}@`)).toBe(true);
-		expect(body.host).toContain("trycloudflare.com");
+		expect(body.url).toBe(`${BRIDGE_ORIGIN}${XFER_ROUTE}/`);
+		expect(body.route).toBe(`${XFER_ROUTE}/`);
 		expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
+		// The fields the tunnel era returned are gone rather than emptied: a caller
+		// reading `user`/`secret` would go looking for credentials that no longer exist.
+		expect(body.user).toBeUndefined();
+		expect(body.secret).toBeUndefined();
+		expect(body.host).toBeUndefined();
+		expect(Object.keys(body.usage).sort()).toEqual(["download", "public", "upload"]);
+		expect(body.usage.download).toContain("Bearer <TOKEN>");
+		expect(body.usage.download).toContain(`${BRIDGE_ORIGIN}${XFER_ROUTE}/<name>`);
 
-		// The stub checks the credentials the module invented, on the port it picked.
-		const good = await fetch(`http://127.0.0.1:${body.port}/hello.txt`, {
-			headers: { authorization: `Basic ${Buffer.from(`${body.user}:${body.secret}`).toString("base64")}` },
-		});
+		// The proxy's seam is the loopback origin and the internal credential, and the
+		// stub checks exactly those on the port the module picked.
+		const t = x.target();
+		if (!t) throw new Error("target() is null with a share open");
+		expect(t.port).toBe(body.port);
+		expect(t.baseUrl).toBe(`http://127.0.0.1:${body.port}`);
+		const good = await fetch(`${t.baseUrl}${XFER_ROUTE}/hello.txt`, { headers: { authorization: t.auth } });
 		expect(good.status).toBe(200);
 		expect(await good.text()).toBe("hello over http\n");
-		const bad = await fetch(`http://127.0.0.1:${body.port}/hello.txt`, {
+		const bad = await fetch(`${t.baseUrl}${XFER_ROUTE}/hello.txt`, {
 			headers: { authorization: `Basic ${Buffer.from("omp:wrong").toString("base64")}` },
 		});
 		expect(bad.status).toBe(401);
+		// What the stub checked is a credential the tool result never mentions.
+		expect(textOf(r)).not.toContain(internalSecret(t.auth));
 
-		const rec = JSON.parse((await recordsFor(shareDir))[0] ?? "{}") as { tool?: string; isError?: boolean };
+		const rec = JSON.parse((await recordsFor(shareDir))[0] ?? "{}") as {
+			tool?: string;
+			isError?: boolean;
+			args?: string;
+		};
 		expect(rec.tool).toBe("xfer");
 		expect(rec.isError).toBe(false);
+		// The record names the route the bytes go out at. An operator reading this log
+		// wants to know what was reachable, and `/xfer/` on the bridge's own port is the
+		// answer — the public half is the tunnel's business and its own record.
+		expect(JSON.parse(rec.args ?? "{}")).toMatchObject({ path: shareDir, route: `${XFER_ROUTE}/` });
+	});
+
+	test("a bridge whose origin is not yet known still answers with the route", async () => {
+		const x = makeXfer({ bridgeUrl: undefined });
+		const body = JSON.parse(textOf(await x.call("xfer_share", { path: dir }, "sid-2"))) as { url: string };
+		expect(body.url).toBe(`${XFER_ROUTE}/`);
 	});
 
 	test("status reports the open share and stop frees the port", async () => {
-		const x = makeXfer();
+		const x = makeXfer({ bridgeUrl: BRIDGE_ORIGIN });
+		expect(x.target()).toBeNull();
 		expect(JSON.parse(textOf(await x.call("xfer_status", {}, "sid-3")))).toEqual({ serving: false });
 
 		const started = JSON.parse(textOf(await x.call("xfer_share", { path: dir }, "sid-3"))) as { port: number };
 		expect(typeof started.port).toBe("number");
+		expect(x.target()).not.toBeNull();
 		const status = JSON.parse(textOf(await x.call("xfer_status", {}, "sid-3"))) as {
 			serving: boolean;
 			port: number;
 			path: string;
+			url: string;
 		};
 		expect(status.serving).toBe(true);
 		expect(status.port).toBe(started.port);
 		expect(status.path).toBe(dir);
+		expect(status.url).toBe(`${BRIDGE_ORIGIN}${XFER_ROUTE}/`);
 
 		const stopped = JSON.parse(textOf(await x.call("xfer_stop", {}, "sid-3"))) as { stopped: boolean };
 		expect(stopped.stopped).toBe(true);
+		expect(x.target()).toBeNull();
 		expect(portIsFree(started.port)).toBe(true);
 		expect(JSON.parse(textOf(await x.call("xfer_stop", {}, "sid-3")))).toEqual({
 			stopped: false,
@@ -329,15 +359,15 @@ describe("xfer_share lifecycle", () => {
 		expect((await recordsFor("replaced")).length).toBeGreaterThan(0);
 	});
 
-	test("stop returns when the file server dies while the tunnel is being torn down", async () => {
-		// The shape that wedged the real thing: `close` sent SIGTERM, awaited the tunnel,
-		// and only then subscribed to the file server's exit. dufs answers SIGTERM in a
-		// few milliseconds, so the event had already been emitted by the time anyone was
-		// listening, the wait never resolved, and `xfer_stop` hung forever on a share
-		// that was in fact fully closed. The stub's stop() spends that milliseconds of
-		// event-loop time; a stub that resolves immediately keeps the kill and the
-		// subscription adjacent and proves nothing.
-		const x = makeXfer({ tunnelStopMs: 150 });
+	test("stop comes back as soon as the file server is seen to exit", async () => {
+		// The shape that once wedged the real thing: `close` sent SIGTERM and only
+		// subscribed to the child's exit after an await, and dufs answers SIGTERM in a few
+		// milliseconds — the event had been emitted before anyone was listening, the wait
+		// never resolved, and `xfer_stop` hung on a share that was in fact closed. The
+		// await that opened the window was the tunnel teardown, and it is gone; what is
+		// pinned here is that the kill and the subscription stayed adjacent, so the exit
+		// is heard rather than fallen back over.
+		const x = makeXfer();
 		const started = JSON.parse(textOf(await x.call("xfer_share", { path: dir }, "sid-6"))) as { port: number };
 
 		const began = Date.now();
@@ -347,8 +377,8 @@ describe("xfer_share lifecycle", () => {
 		]);
 		expect(answered).not.toBeNull();
 		expect(answered?.stopped).toBe(true);
-		// And it came back because the server was seen to exit, not because a fallback
-		// timer expired.
+		// And it came back because the server was seen to exit, not because the 2 s
+		// SIGKILL fallback expired.
 		expect(Date.now() - began).toBeLessThan(2000);
 		expect(portIsFree(started.port)).toBe(true);
 	});
@@ -369,6 +399,7 @@ describe("xfer_share lifecycle", () => {
 			if (!expired) await Bun.sleep(20);
 		}
 		expect(expired).toContain("ttl expired");
+		expect(x.target()).toBeNull();
 		expect(portIsFree(started.port)).toBe(true);
 	});
 });

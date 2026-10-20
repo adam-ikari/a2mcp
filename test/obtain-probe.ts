@@ -11,8 +11,10 @@
  * cannot run is otherwise checked by nobody. That what extracts is a binary answering
  * the command line `src/xfer.ts` builds: `--auth user:pass@/:rw` is the flag that was
  * found the hard way, and it was found on dufs 0.43.0, so the pin moving to 0.46.0 had
- * to be re-measured and not assumed. And that a share opened with the fetched binary
- * behaves: GET, a Range request, a PUT that lands on disk, a wrong password, a
+ * to be re-measured and not assumed; `--path-prefix` is the newer one, and its half is
+ * measured here as well — the file server refusing a path outside the prefix, and its
+ * own listing referencing paths inside it. And that a share opened with the fetched
+ * binary behaves: GET, a Range request, a PUT that lands on disk, a wrong password, a
  * directory listing, and the port afterwards.
  *
  * The two Windows rows are read as bytes rather than as a status, because nothing in
@@ -33,19 +35,20 @@
  * The unit half (`test/obtain.test.ts`) pins the logic against a local server; this
  * half is the only thing that can say the table's hashes are real.
  *
- * ## What the tunnel gets here
+ * ## Where the tunnel fits here
  *
- * The assertions run against a stubbed tunnel opener. This machine's network re-signs
- * TLS for proxied hostnames, so a `*.trycloudflare.com` URL cannot be fetched back from
- * the machine that published it, and a check that depends on that measures the network.
- * The real tunnel is still opened, in section 5, by the cloudflared this probe fetched
- * in section 1, inside a child with a hard timeout — not for cleanliness but because it
- * had to be: twice on 2026-10-17 a probe that held a real cloudflared and its public
- * fetch in its own process finished every local check and then never returned, sitting
- * on a full core with no syscall left to make (156 MB read, 59 MB written, neither
- * attributed). The bridge does not do either of those things: it talks to `127.0.0.1`
- * and to the release host, and hands the public URL to the caller. Every hard check
- * here runs against `127.0.0.1:<port>`.
+ * `xfer_share` does not open one: a share is the file server, and the public half is
+ * the operator's `/a2mcp tunnel` command (src/server.ts serves both surfaces on one
+ * port). Section 5 therefore tests the tunnel on its own terms — it opens a real one
+ * with the cloudflared fetched in section 1, inside a child with a hard timeout. That
+ * had to be a child, and not for cleanliness: twice on 2026-10-17 a probe holding a
+ * real cloudflared and its public fetch in its own process finished every local check
+ * and then never returned, sitting on a full core with no syscall left to make (156 MB
+ * read, 59 MB written, neither attributed). It is also why no assertion here reaches
+ * for a `*.trycloudflare.com` URL: this machine's network re-signs TLS for proxied
+ * hostnames, so a published hostname cannot be fetched back from the machine that
+ * published it, and a check that depends on that measures the network. Every hard
+ * check runs against `127.0.0.1:<port>`.
  *
  * Env:
  *   A2MCP_OBTAIN_TARGET   install destination override; default a temp dir, so this
@@ -60,7 +63,7 @@ import { join } from "node:path";
 
 import { auditStart } from "../src/audit.ts";
 import { pinnedUrl, pinsFor, readZipEntry, resolveBinary, targetKey } from "../src/obtain.ts";
-import type { TunnelOpener } from "../src/tunnel.ts";
+import { XFER_ROUTE } from "../src/server.ts";
 import { createXfer } from "../src/xfer.ts";
 
 let failures = 0;
@@ -152,55 +155,68 @@ await mkdir(shareDir, { recursive: true });
 const HELLO = "hello over http, from the fetched dufs\n";
 await writeFile(join(shareDir, "hello.txt"), HELLO);
 
-// The path the resolver wrote in section 1, not the operator's own copy: naming it
-// here is the escape-hatch branch (`installed.cloudflared` must come back null), and
-// section 4 then publishes through the build this repository pinned.
+// The path the resolver wrote in section 1, not the operator's own copy. A share does
+// not read this name any more — the operator's tunnel command does — and it is passed
+// here so the config the probe drives is the config a real host has. Section 4
+// publishes through the build this repository pinned.
 const cloudflared = join(binDir, "cloudflared");
 await access(cloudflared, constants.X_OK).catch(() => fail(`${cloudflared} is not there after section 1`));
 
 const fresh = join(work, "bin2");
 const freshLedger = join(work, "installs2.json");
 const deps2 = { env, binDir: fresh, ledger: freshLedger };
-// The tunnel is stubbed for the assertions, for two measured reasons (2026-10-17): this
-// network cannot serve a `*.trycloudflare.com` hostname back to the machine that
-// published it, and holding that real connection inside the probe left the process
-// spinning afterwards — a full core, no syscalls, every later await starved. What this
-// section asserts is the resolver and `dufs`, and the real tunnel gets its own section
-// at the end, inside a child that can be killed.
-const stubTunnel: TunnelOpener = async (opts) => ({
-	url: `https://probe-stub-${opts.port}.trycloudflare.com`,
-	port: opts.port,
-	pid: 0,
-	stop: async () => {},
-});
-const xfer = createXfer({ dufs: "dufs", cloudflared }, { obtain: deps2, openTunnel: stubTunnel });
+// No tunnel anywhere in this section, and none in the tool either: a share is the file
+// server now. The assertions run on the loopback port through the same seam the bridge
+// proxies against (`xfer.target()`), which is the only path left that a caller of this
+// probe can reach without the operator's `/a2mcp tunnel`. That the stub-free binary
+// answers *only* under the prefix it was handed is checked here too, because the
+// coupling between `src/server.ts`'s matcher and `src/xfer.ts`'s argv is what makes the
+// file server's own absolute references stay on the route.
+const xfer = createXfer({ dufs: "dufs", cloudflared }, { obtain: deps2 });
 const res = await xfer.call("xfer_share", { path: shareDir, ttlSeconds: 300 }, "probe-sid");
 const bodyText = res.content.map((c) => (c.type === "text" ? c.text : "")).join("");
 if (res.isError) fail(`xfer_share refused: ${bodyText}`);
 const share = JSON.parse(bodyText) as {
 	url: string;
-	host: string;
-	user: string;
-	secret: string;
+	route: string;
 	port: number;
-	installed: { dufs: string | null; cloudflared: string | null };
+	usage: Record<string, string>;
+	installed: { dufs: string | null };
+	user?: string;
+	secret?: string;
 };
 check(share.installed.dufs === dufsPin.version, "xfer_share names the build it fetched", String(share.installed.dufs));
 await access(join(fresh, "dufs"), constants.X_OK).catch(() =>
 	fail("xfer_share did not leave the binary where it said"),
 );
-check(share.installed.cloudflared === null, "nothing was fetched for cloudflared (named as a path)", "null");
+check(
+	!("cloudflared" in share.installed),
+	"the share reports the one binary it resolves",
+	JSON.stringify(share.installed),
+);
+check(
+	share.user === undefined && share.secret === undefined && share.url.endsWith(`${XFER_ROUTE}/`),
+	"the answer carries a route, not credentials",
+	share.url,
+);
+check(
+	share.usage.download.includes("Bearer <TOKEN>"),
+	"usage asks for the bridge token, not a password",
+	share.usage.download,
+);
 
-const local = `http://127.0.0.1:${share.port}`;
-const auth = `Basic ${Buffer.from(`${share.user}:${share.secret}`).toString("base64")}`;
+const target2 = xfer.target();
+if (!target2) fail("target() answered null with a share open");
+const local = target2.baseUrl;
+const auth = target2.auth;
 
-const get = await fetch(`${local}/hello.txt`, { headers: { authorization: auth } });
+const get = await fetch(`${local}${XFER_ROUTE}/hello.txt`, { headers: { authorization: auth } });
 check(get.status === 200 && (await get.text()) === HELLO, "GET returns the bytes it holds", String(get.status));
 
-const range = await fetch(`${local}/hello.txt`, { headers: { authorization: auth, range: "bytes=0-4" } });
+const range = await fetch(`${local}${XFER_ROUTE}/hello.txt`, { headers: { authorization: auth, range: "bytes=0-4" } });
 check(range.status === 206 && (await range.text()) === HELLO.slice(0, 5), "Range requests work", String(range.status));
 
-const put = await fetch(`${local}/uploaded.txt`, {
+const put = await fetch(`${local}${XFER_ROUTE}/uploaded.txt`, {
 	method: "PUT",
 	headers: { authorization: auth },
 	body: "written by the probe\n",
@@ -208,16 +224,28 @@ const put = await fetch(`${local}/uploaded.txt`, {
 check(put.status < 300, "PUT is accepted", String(put.status));
 check((await readFile(join(shareDir, "uploaded.txt"), "utf8")) === "written by the probe\n", "the PUT landed on disk");
 
-const wrong = await fetch(`${local}/hello.txt`, {
-	headers: { authorization: `Basic ${Buffer.from(`${share.user}:wrong`).toString("base64")}` },
+const wrong = await fetch(`${local}${XFER_ROUTE}/hello.txt`, {
+	headers: { authorization: `Basic ${Buffer.from("omp:wrong").toString("base64")}` },
 });
 check(wrong.status === 401 || wrong.status === 403, "a wrong password is refused", String(wrong.status));
 
-const listing = await fetch(`${local}/`, { headers: { authorization: auth } });
+const listing = await fetch(`${local}${XFER_ROUTE}/`, { headers: { authorization: auth } });
 check(listing.status === 200, "the directory listing answers", String(listing.status));
+// The listing's own absolute references have to name the prefix, or a caller that
+// follows one leaves the route. This is the contract `--path-prefix` buys.
+const page = await listing.text();
+const refs = page.match(/(?:href|src)="\/[^"]*"/g) ?? [];
+check(
+	refs.every((r) => r.includes(`"${XFER_ROUTE}/`)),
+	"the listing's absolute references stay under the prefix",
+	refs.slice(0, 3).join(" "),
+);
+
+const outside = await fetch(`${local}/hello.txt`, { headers: { authorization: auth } });
+check(outside.status === 400, "the file server refuses a path outside its prefix", String(outside.status));
 
 await xfer.call("xfer_stop", {}, "probe-sid");
-const portFree = await fetch(`${local}/`, { headers: { authorization: auth } }).then(
+const portFree = await fetch(`${local}${XFER_ROUTE}/`, { headers: { authorization: auth } }).then(
 	() => false,
 	() => true,
 );

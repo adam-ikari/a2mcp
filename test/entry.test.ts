@@ -165,6 +165,20 @@ describe("session_start", () => {
 		expect(await ping(port as number)).toBe(200);
 	});
 
+	test("the /xfer route is on the bridge's port before anything is shared", async () => {
+		const r = newRunner();
+		await r.start();
+		const port = r.advertisedPort() as number;
+		// 404 rather than 405: the file route lives on the same port as the MCP endpoint,
+		// is real whether or not a share is open, and says plainly that there is nothing
+		// to serve yet. A 405 would tell a caller the bridge does not do files at all.
+		const res = await fetch(`http://127.0.0.1:${port}/xfer/`, { headers: { authorization: `Bearer ${TOKEN}` } });
+		expect(res.status).toBe(404);
+		expect(await res.text()).toContain("xfer_share");
+		const dark = await fetch(`http://127.0.0.1:${port}/xfer/`);
+		expect(dark.status).toBe(401);
+	});
+
 	test("announces a token prefix, never the whole token", async () => {
 		const r = newRunner();
 		await r.start();
