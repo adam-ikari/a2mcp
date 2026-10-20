@@ -20,7 +20,7 @@
 set -eu
 
 PLUGIN="a2mcp"
-DEFAULT_SPEC="https://github.com/adam-ikari/a2mcp.git"
+DEFAULT_SPEC="a2mcp"
 INSTALLER_URL="https://omp.sh/install"
 PIN_PACKAGE="@oh-my-pi/pi-coding-agent"
 
@@ -73,7 +73,7 @@ run() {
 usage() {
 	cat <<'EOF'
 Usage: sh bootstrap.sh [--dry-run] [--uninstall] [--reinstall] [--upgrade]
-       [--host-version <version>|latest] [--spec <git-url>]
+       [--host-version <version>|latest] [--spec <npm-name|git-url>]
 EOF
 }
 
@@ -104,14 +104,39 @@ done
 
 # --- where the host pin can be read from when no repo sits beside this script ---
 # Run through a pipe there is no ../package.json, and the pin that decides the host
-# version has to come from the same place the plugin will be cloned from. Only the
-# github.com shape is derived: guessing at another host's layout is a second system
-# nobody maintains. HEAD is what raw.githubusercontent.com resolves for the default
-# branch, so this keeps working if that branch is ever renamed.
-RAW_PKG=""
+# version has to come from the same place the plugin itself will be fetched from.
+# Two shapes are derived, and only these two: an https://github.com spec reads the
+# repo's raw package.json, anything else is treated as an npm name and reads the
+# registry's latest document (a scoped name carries its slash percent-encoded, as
+# the registry asks). Guessing at any other host's layout is a second system nobody
+# maintains. HEAD is what raw.githubusercontent.com resolves for the default branch,
+# so the github shape keeps working if that branch is ever renamed.
+REMOTE_PKG=""
 case "$SPEC" in
 https://github.com/*)
-	RAW_PKG=$(printf '%s' "${SPEC%.git}" | sed -nE 's|^https://github\.com/([^/]+)/([^/]+)/?$|https://raw.githubusercontent.com/\1/\2/HEAD/package.json|p')
+	REMOTE_PKG=$(printf '%s' "${SPEC%.git}" | sed -nE 's|^https://github\.com/([^/]+)/([^/]+)/?$|https://raw.githubusercontent.com/\1/\2/HEAD/package.json|p')
+	;;
+*)
+	# Only a syntactic npm name (optionally scoped, optionally with a trailing
+	# version; names start like the host's own validator says they do) reads as
+	# one: anything else — a path, ssh://, git+, the scp-style host:path form —
+	# stays without a guess.
+	if printf '%s' "$SPEC" | grep -Eq '^(@[A-Za-z0-9~-][A-Za-z0-9._-]*/)?[A-Za-z0-9~-][A-Za-z0-9._-]*(@[^@/:]+)?$'; then
+		# Cut a trailing @version/@tag, but never the leading @ of a scope —
+		# that is the only @ a bare scoped name carries. POSIX expansions and
+		# one sed only: the farm PATH this script is probed under has no awk.
+		NPM_NAME="$SPEC"
+		if [ "${NPM_NAME#\@}" != "$NPM_NAME" ]; then
+			# scoped: cut only when a second @ exists after the scope slash
+			if [ "${NPM_NAME#*/*@}" != "$NPM_NAME" ]; then
+				NPM_NAME=$(printf '%s' "$NPM_NAME" | sed -E 's|^(@[^/]+/[^@]+)@.*|\1|')
+			fi
+		else
+			NPM_NAME="${NPM_NAME%%@*}"
+		fi
+		NPM_NAME=$(printf '%s' "$NPM_NAME" | sed 's|/|%2F|')
+		REMOTE_PKG="https://registry.npmjs.org/$NPM_NAME/latest"
+	fi
 	;;
 esac
 
@@ -162,22 +187,22 @@ elif [ -n "$HOST_VERSION" ]; then
 elif [ -f "$PKG_JSON" ]; then
 	PIN_SOURCE="$PKG_JSON"
 	PIN=$(sed -n "s|.*\"$PIN_PACKAGE\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*|\1|p" "$PKG_JSON" | head -1)
-elif [ -z "$OMP_CMD" ] && [ -n "$RAW_PKG" ]; then
+elif [ -z "$OMP_CMD" ] && [ -n "$REMOTE_PKG" ]; then
 	# Only when the host is actually going to be installed: with a host already on
 	# PATH nothing here needs a version to fetch.
-	PIN_SOURCE="$RAW_PKG"
+	PIN_SOURCE="$REMOTE_PKG"
 	if has curl; then
 		# The body lands in a variable before the extraction runs, because in a
 		# pipeline curl's exit status is sed's and `set -e` would not see a failed
 		# fetch. No temp file: --dry-run has to keep leaving HOME untouched.
-		PIN_BODY=$(curl -fsSL --max-time 20 "$RAW_PKG" 2>/dev/null) || PIN_BODY=""
+		PIN_BODY=$(curl -fsSL --max-time 20 "$REMOTE_PKG" 2>/dev/null) || PIN_BODY=""
 		PIN=$(printf '%s\n' "$PIN_BODY" | sed -n "s|.*\"$PIN_PACKAGE\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*|\1|p" | head -1)
-		[ -n "$PIN" ] || warn "no pin readable from $RAW_PKG; pass --host-version <version> to choose the host version yourself"
+		[ -n "$PIN" ] || warn "no pin readable from $REMOTE_PKG; pass --host-version <version> to choose the host version yourself"
 	else
-		warn "no curl to read the pin from $RAW_PKG with; pass --host-version <version> to choose the host version yourself"
+		warn "no curl to read the pin from $REMOTE_PKG with; pass --host-version <version> to choose the host version yourself"
 	fi
 elif [ -z "$OMP_CMD" ]; then
-	PIN_SOURCE="spec '$SPEC', which is not an https://github.com URL to read a package.json from"
+	PIN_SOURCE="spec '$SPEC', which is neither an https://github.com URL nor an npm name to read a package.json from"
 fi
 if [ -n "$PIN" ] && ! printf '%s' "$PIN" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
 	warn "$PIN_PACKAGE is pinned to '$PIN' in $PIN_SOURCE, which is not an exact version; the host will be installed at latest instead"
@@ -316,7 +341,9 @@ elif installed_here; then
 fi
 
 if [ "$SKIP_INSTALL" -ne 1 ]; then
-	need git "let omp clone $SPEC"
+	case "$SPEC" in
+	https://github.com/* | *://* | git+*) need git "let omp clone $SPEC" ;;
+	esac
 	echo "This is the README's one install path, run verbatim:"
 	run "$OMP_LABEL" install "$SPEC"
 fi

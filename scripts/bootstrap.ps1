@@ -23,19 +23,22 @@
   this script turns its own comments into mojibake on the machines that run it.
 
   Usage:
-    # in memory, nothing written to disk (from a PowerShell session):
-    & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.ps1).Content)) -DryRun
+    # one line, in memory, nothing written to disk:
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.ps1 | iex"
+    # to pass switches in memory, the scriptblock form binds parameters:
+    powershell -NoProfile -Command "& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.ps1).Content)) -DryRun"
     # or saved first:
     powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 [-DryRun]
       [-Uninstall] [-Reinstall] [-Upgrade] [-HostVersion <version>|latest]
-      [-Spec <git-url>]
+      [-Spec <npm-name|git-url>]
 
   First run on a real Windows machine: 2026-10-19, omp 18.12.2 already on PATH
   and a2mcp already registered. DryRun printed the plan and wrote nothing; the
   real run left the host alone and ended on the host's own plugin doctor tick.
-  Same day, the in-memory usage line above was proven on that machine too: the
-  -DryRun plan came out of the raw URL with nothing saved to disk, in clean
-  ASCII -- the closing notes are this script's own bytes, not the host's.
+  Same day, in-memory execution was proven on that machine too -- in the
+  scriptblock form above: the -DryRun plan came out of the raw URL with nothing
+  saved to disk, in clean ASCII -- the closing notes are this script's own
+  bytes, not the host's. The one-line irm|iex shape has not been run there.
   That exercised the already-installed-host branch. The installer call and the
   models.yml seeding have still never run anywhere. Thirteen items in bun test
   read this file as text against bootstrap.sh; the boundary they set is
@@ -56,7 +59,7 @@ param(
 # Parity with bootstrap.sh. Keep these four in step with that file: the items in
 # test/bootstrap-ps1.test.ts read both scripts and fail when they drift.
 $Plugin = "a2mcp"
-$DefaultSpec = "https://github.com/adam-ikari/a2mcp.git"
+$DefaultSpec = "a2mcp"
 $InstallerUrl = "https://omp.sh/install.ps1"
 $PinPackage = "@oh-my-pi/pi-coding-agent"
 # bootstrap.sh: the installer's own default, so the path reported is the path
@@ -164,11 +167,24 @@ function Read-PinFromJson([string]$Text) {
     return ""
 }
 
-$RawPkg = ""
+# Parity with bootstrap.sh, including the two shapes it derives a remote manifest
+# from: a github URL reads its raw package.json, anything that is not a path or a
+# URL reads as an npm name against the registry.
+$RemotePkg = ""
 if ($Spec -match "^https://github\.com/([^/]+)/([^/]+?)(\.git)?/?$") {
     # GitHub resolves HEAD to the repository's default branch, so this does not
     # hardcode `master` or `main`.
-    $RawPkg = "https://raw.githubusercontent.com/$($Matches[1])/$($Matches[2])/HEAD/package.json"
+    $RemotePkg = "https://raw.githubusercontent.com/$($Matches[1])/$($Matches[2])/HEAD/package.json"
+}
+elseif ($Spec -match "^(@[A-Za-z0-9~-][A-Za-z0-9._-]*/)?[A-Za-z0-9~-][A-Za-z0-9._-]*(@[^@/:]+)?$") {
+    # Only a syntactic npm name reads as one (names start like the host's own
+    # validator says they do): anything else - a path, ssh://, git+, the scp-style
+    # host:path form - stays without a guess. A trailing
+    # version range is not part of the name the registry keys on, and a scoped
+    # name carries its slash percent-encoded.
+    # Cut a trailing @version/@tag, but never the leading @ of a scope.
+    $npm = ($Spec -replace "(?<!^(@[^/]+))@[^@]*$", "") -replace "/", "%2F"
+    $RemotePkg = "https://registry.npmjs.org/$npm/latest"
 }
 
 if ($HostVersion -eq "latest") {
@@ -191,25 +207,26 @@ else {
         $Pin = Read-PinFromJson (Get-Content -LiteralPath $localPkg -Raw)
     }
     elseif (-not $Omp) {
-        # Without a repo next to the script the pin has to come from the same
-        # repository the Spec points at. Only when a host has to be installed:
-        # with an omp already on PATH nothing here needs a version to compare to,
-        # and a check that fetches a file it will not use is not a cheap check.
-        if ($RawPkg) {
-            $PinSource = $RawPkg
+        # Without a repo next to the script the pin has to come from the same place
+        # the plugin itself will be fetched from. Only when a host has to be
+        # installed: with an omp already on PATH nothing here needs a version to
+        # compare to, and a check that fetches a file it will not use is not a cheap
+        # check.
+        if ($RemotePkg) {
+            $PinSource = $RemotePkg
             try {
-                $body = (Invoke-WebRequest -Uri $RawPkg -UseBasicParsing -TimeoutSec 20).Content
+                $body = (Invoke-WebRequest -Uri $RemotePkg -UseBasicParsing -TimeoutSec 20).Content
                 $Pin = Read-PinFromJson $body
             }
             catch {
                 $Pin = ""
             }
             if (-not $Pin) {
-                Warn "no pin readable from $RawPkg; the host will be installed at latest - pass -HostVersion <version> to choose the host version yourself"
+                Warn "no pin readable from $RemotePkg; the host will be installed at latest - pass -HostVersion <version> to choose the host version yourself"
             }
         }
         else {
-            $PinSource = "spec '$Spec', which is not an https://github.com URL to read a package.json from"
+            $PinSource = "spec '$Spec', which is neither an https://github.com URL nor an npm name to read a package.json from"
         }
     }
 }
@@ -375,7 +392,9 @@ elseif (Test-Registered) {
 }
 
 if (-not $SkipInstall) {
-    if (-not (Test-Command "git")) { Fail "git on PATH (needed to let omp clone $Spec)" "nothing answering for git in PATH" }
+    # git belongs to the clone the host runs for a URL spec; an npm name resolves
+    # through the registry and needs nothing of the sort.
+    if (($Spec -match "://|^git\+") -and -not (Test-Command "git")) { Fail "git on PATH (needed to let omp clone $Spec)" "nothing answering for git in PATH" }
     Write-Host "This is the README's one install path, run verbatim:"
     Run { & $OmpLabel install $Spec } "omp install $Spec"
 }
