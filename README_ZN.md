@@ -60,10 +60,10 @@ graph TB
 ### 已有 omp：装扩展
 
 ```sh
-omp install a2mcp
+omp install https://github.com/adam-ikari/a2mcp.git
 ```
 
-这个名字就是 npm 包，装的就是 registry 上那份打包好的 tarball。git URL 仍然能装——`omp install https://github.com/adam-ikari/a2mcp.git`——但它落盘的是整棵仓库的检出（实测 2.3 MB，`docs/`、`test/` 都在），tarball 只有大约 64 KB，桥真正读的只有 `extensions/` 和 `src/`。所以 URL 是兼容写法，不是推荐写法。
+这条命令落盘的是整棵仓库的检出（实测 2.3 MB，`docs/`、`test/` 都在），桥真正读的只有 `extensions/` 和 `src/`。
 
 卸载：
 
@@ -79,7 +79,7 @@ omp plugin uninstall pi-a2a-ext
 
 退掉旧名后配置文件与 token 都是新生成的，远程那份 `mcp.json` 要重抄一遍。
 
-`omp install` 认两种远程形态：包名，或完整的 `https://….git` URL。`owner/repo` 简写被当作非法包名，`.tgz` 的路径或 URL 也不被接受（宿主拿它走 link，报 `ENOTDIR`）。还停在 git URL 上的机器照常工作；要换到包名形态，先 `omp plugin uninstall a2mcp` 再按新命令装——旧检出不会被原地替换。
+URL 必须是完整的 `https://….git`：`owner/repo` 简写被当作非法包名，`.tgz` 的路径或 URL 也不被接受（宿主拿它走 link，报 `ENOTDIR`）。包名形态——`omp install a2mcp`——是预留、不是可用：这个名字没有发到 registry，命令会停在依赖解析。两份引导脚本两种形态都认、按形状取版本钉；包哪天上了 registry，包名哪天可用。
 
 ### 一键安装（全新机器）
 
@@ -109,7 +109,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/bootstrap.ps1).Content)) -DryRun
 ```
 
-脚本三步：PATH 上没有 `omp` 就按钉住的版本跑官方安装器；再执行上面那条 `omp install`——扩展的安装始终只有这一条命令，如今说的是包名；最后用宿主自己的 `omp plugin doctor` 收口。其余开关：`--upgrade` 才重装宿主，`--reinstall` 强制重登记，`--uninstall` 只收登记（token 与审计留着），`--host-version <版本>` 自定钉值且一次请求都不发。宿主默认在启动时自查更新——「按钉值装上」不等于「一直停在钉值」。它只在「自己装了宿主且 `~/.omp/agent/models.yml` 不存在」时写一份占位模型配置（create-only，PATH 上已有宿主的机器什么都不写；为什么需要它，见「故障排查」）。
+脚本三步：PATH 上没有 `omp` 就按钉住的版本跑官方安装器；再执行上面那条 `omp install`——扩展的安装始终只有这一条命令；最后用宿主自己的 `omp plugin doctor` 收口。其余开关：`--upgrade` 才重装宿主，`--reinstall` 强制重登记，`--uninstall` 只收登记（token 与审计留着），`--host-version <版本>` 自定钉值且一次请求都不发。宿主默认在启动时自查更新——「按钉值装上」不等于「一直停在钉值」。它只在「自己装了宿主且 `~/.omp/agent/models.yml` 不存在」时写一份占位模型配置（create-only，PATH 上已有宿主的机器什么都不写；为什么需要它，见「故障排查」）。
 
 两条路装完是同一个样子。启动宿主，通知栏显示：
 

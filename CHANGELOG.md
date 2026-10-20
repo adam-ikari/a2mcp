@@ -1,8 +1,18 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**现在发布到 npm，安装主路是 `omp install a2mcp`** —— 原先那句「不发布到 npm、安装方式只有 `omp install <git-url>` 一条」于 2026-10-20 翻面（见那一节），git URL 降为兼容形态，仍是一条命令装。可安装的 Release 现在是 `v0.5.0`（2026-10-20）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.5.2`（2026-10-20，装法与 v0.5.1 相同，这一版纠的是 v0.5.1 文档里的包名主路）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
+
+## 2026-10-20 — 安装主路回退到 git URL：npm 切出去一天就收回，包名转预留
+
+维护者对着「先发 GitHub、npm 等登录」的实况拍了板：「不发 npm 了」「保持 git 安装」，随后又问过两条免 git 的路并否掉——把 dufs 与 cloudflared 打进发布物（全五目标约 200 MB、单 Windows 一对约 60 MB，与「发布物是代码包」的定位不合），以及 `.tgz` 直装（实测宿主把本地路径一律走 link，报 `ENOTDIR …tgz/package.json`，死路复核成立）。于是 v0.5.1 的文档面翻回 git URL 主路：那份 Release 写着 `omp install a2mcp` 而这个名字在 registry 上是 404，命令停在依赖解析——文档里不许躺一条会静默失败的命令，这是仓库自己的判据。npm 那一轮的机制原样保留：两份脚本的 spec 形状二选一与 registry 读钉分支、探针的 npm 真装组（不发包就每天如实 info 跳过）、tarball 打包与 `files` 治理；哪天决定发包，包名哪天可用，文档不必再翻一次面。
+
+- scripts: `bootstrap.sh` / `bootstrap.ps1` 的默认 spec 回到 `https://github.com/adam-ikari/a2mcp.git`；形状推导两支都不动，git 前置条件跟着 spec 形状走回原处。
+- docs: 两份 README 主命令行翻回 git URL（探针行首读取点自动跟），加「包名是预留、不是可用」一段；站点首页卡同句翻回；`.github/workflows/ci.yml` 两处注释改口（第六组是预留形态的核验、live 项读的是 README 那行推出来的 manifest URL）。
+- test: `bootstrap-probe.ts` 前置组两条对调——默认（git 形态）缺 git 要红，显式 `--spec a2mcp` 缺 git 要过；`install-probe.ts` 第六组头注释改「预留形态的核验」。项数不变（47 / 52），`bun test` 计数不动。
+- docs: `docs/testing.md` 六处跟改（组表两处、端到端那句「对外受支持的只有包名」改口、`--dry-run` 计划行的字面量、出处行示例 URL 回到 raw 形态并写明翻面痕迹、脚本存在理由句）；上面那节「安装形态切到 npm」加同日追加，正文不重写。
+- release: v0.5.1 的 GitHub Release 不撤——隧道修复真实在里面，撤它就把能用的入口也撤了；正文开头已改成装法以 git URL 为准，CHANGELOG 的 v0.5.1 总览节同句翻面，纠偏由 v0.5.2 这份文档更正版承担。
 
 ## 2026-10-20 — 取回改进度感知：Windows 真机把 120 秒墙上时钟量穿了
 
@@ -23,6 +33,7 @@
 - test: `bootstrap-probe.ts` 的清单 URL 从 README 那行现推，两条分支与脚本同一对；假 curl 那组现在喂 registry 的 body；live 项按版本门控——registry 上那份与本分支同版本才断言钉相等，bump 之后、publish 之前的窗口只断言读数合法，CI 不为这个窗口红。`install-probe.ts` 新增第六组：临时 `HOME` 里真跑 `omp install a2mcp`，核登记落进 lock、落盘有 `package.json`/`extensions`/`src` 而没有 `docs`/`brain`/`test`/`website`/`.github`/`scripts`（「精简」这条就断言在这里），版本只断言合法 semver；registry 答不到整组 `info:` 跳过。`test:bootstrap` 46 → 47 项（git 要求拆成 URL 形态要、包名形态不要两条），`test:install` 48 → 52 项。
 - fix: `docs/testing.md` 里那句「git 抓取由 `test:install` 前三组覆盖」是错的——那三组从 manifest 到 import 图都在本地，一次网都不出；每天真出网的远程安装只有新加的 npm 那一组，改对了。
 - 边界：Windows 上的 npm 装法这一轮没有真机读数（宿主同一条 bun 解析路，ps1 只过字面核对）；registry `latest` 缓存陈旧是宿主自己的已知问题（manager 注释 #11634），`--no-cache` 在宿主侧，不是这里新加的洞；npm 发布之后不撤 git tag 与 GitHub Release，旧装法的机器照常工作。
+- **同日追加**：这一节切出去的主路在同一天被收回——维护者判据改口「保持 git 安装、不发包」。机制与测试原样保留，改口的逐条落在下面 2026-10-20 的「回退」一节；这一节按历史保留，不重写。
 
 ## 2026-10-19 — `/a2mcp tunnel`：一条命令把公网 URL 架在桥的端口上
 
@@ -190,14 +201,23 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
 
-## v0.5.1 — 安装主路切到 npm，取回改进度感知
+## v0.5.2 — 文档面回到 git URL：包名收回为预留形态
 
-**这一版对远程调用方经协议拿到的东西一个字没变——同一个 MCP Streamable HTTP、同一个 Bearer token、`tools/list` 照旧；变的是装到机器上的形状：`omp install a2mcp` 从 registry 取 `files` 治理的那份 tarball（15 文件约 64 kB），git URL 降为兼容写法（它落的是整棵仓库的检出，实测 2.3 MB）。** 版本位的判据这轮的适用要说明一句：2026-10-18 立的判据是「远程调用方拿到的东西变了进 minor」，这轮变的不是调用方经协议拿到的，而是操作者装到盘上的内容集——`extensions/` 与 `src/` 逐字节同源，所以进 patch 位。token 不换代。git 装过的机器先 `omp plugin uninstall` 旧条目（含旧名）再按新命令装——旧检出不会被原地替换。第二件事不出现在协议面上，出在装不上的机器上：`src/obtain.ts` 的下载预算从一道 120 秒总墙上时钟换成 30 秒无字节空闲窗加 10 分钟总期限，起因是维护者 Windows 真机在 `cloudflared-windows-amd64.exe`（52.7 MB 裸 exe）上把旧时钟量穿了——慢但活的连接与死连接此前报的是同一句话。
+**这一版对远程调用方经协议拿到的东西一个字没变，代码面也只动了两处不跑在协议上的东西：两份引导脚本的默认 spec 与探针的对应判据。变的是 v0.5.1 那份 Release 与 README 写着的装法——`omp install a2mcp` 指向一个没有发布的包名，命令停在依赖解析；主路翻回 `omp install https://github.com/adam-ikari/a2mcp.git`（整棵检出 2.3 MB，照实写明），v0.5.1 的隧道下载修复原样在其中生效。** token 不换代，装着 0.5.1 的机器什么都不用动——代码同源，这一版是文档与默认值的纠偏。
 
-- 内容: 见上 2026-10-20 的两节——「安装形态切到 npm」（两份引导脚本、两个探针、两份 README、testing.md、站点卡、CI 注释）与「取回改进度感知」（download 两道门、两类失败各带已收字节、失败文案点名逃生门、三条流控形状测试、protocol.md 三门描述）。
-- 边界: npm 包在 registry 上还没有，这一版按维护者改的序先发 GitHub，`npm publish` 排在登录之后补上；在那之前 `omp install a2mcp` 会停在依赖解析，装机器用 git URL 那条兼容写法。Windows 上的 npm 装法本轮没有真机读数（ps1 过的是十三项字面核对，宿主同一条 bun 解析路径）；Windows 慢网在新预算下的首跑读数待维护者回测（持续低于约 90 KB/s 的连接在 10 分钟总期限下仍取不完，那是手动放文件加 `xfer.cloudflared` 绝对路径的地盘）；registry 的 `latest` 缓存陈旧是宿主自己的已知问题（manager 注释 #11634），`--no-cache` 在宿主侧；git tag 与既有 GitHub Release 不撤，旧装法机器照常工作。
+- 内容: 见上 2026-10-20 的「安装主路回退」一节（两份脚本默认 spec、两份 README、站点卡、CI 注释、testing.md 六处、两个探针的头注释与前置组）。
+- 边界: v0.5.1 的 GitHub Release 不撤、正文已改口（它交付的下载修复是真的）；npm 机制（spec 形状二选一、registry 读钉、tarball 打包、探针预留形态组）原样留在树里，哪天发包哪天启用；Windows 慢网新预算首跑仍待维护者回测。
+- 回归（发版前重跑的一遍，2026-10-20）: `bun test` 233 项 660 断言全绿；`lint` / `tsc` 干净；`BOOTSTRAP OK` 47 项（默认 git 形态缺 git 要红、`--spec a2mcp` 缺 git 要过两条对调后）；`PACKAGE OK`，npm 组如实 info 跳过；站点 `build` + `check` 全过。
+- 发版之后核远程路：〔占位——push 后临时 HOME 从公开 git URL 装，`initialize` 回 0.5.2；结果随 follow-up 补全〕
+
+## v0.5.1 — 隧道取回改进度感知（装法一句以 v0.5.2 为准）
+
+**这一版实际交付的是取回预算：`src/obtain.ts` 的下载从一道 120 秒总墙上时钟换成 30 秒无字节空闲窗加 10 分钟总期限。装法以 v0.5.2 为准——这一节发布时文档里写着主路切到 `omp install a2mcp`，而那个包名从未发到 registry，同一天判据收回（见 2026-10-20 的「回退」一节），v0.5.2 把文档面翻回 git URL。** 发布时按判据算版本位：2026-10-18 立的是「远程调用方拿到的东西变了进 minor」，切装法那轮变的不是调用方经协议拿到的，而是操作者装到盘上的内容集，进 patch 位；隧道修复也不出现在协议面上，出在装不上的机器上：`src/obtain.ts` 的下载预算从一道 120 秒总墙上时钟换成 30 秒无字节空闲窗加 10 分钟总期限，起因是维护者 Windows 真机在 `cloudflared-windows-amd64.exe`（52.7 MB 裸 exe）上把旧时钟量穿了——慢但活的连接与死连接此前报的是同一句话。
+
+- 内容: 见上 2026-10-20 的「取回改进度感知」一节（download 两道门、两类失败各带已收字节、失败文案点名逃生门、三条流控形状测试、protocol.md 三门描述）。装法切 npm 的那一节也在同一版里发出去过，同日翻面，它交付的面由 v0.5.2 收回。
+- 边界: `omp install a2mcp` 会停在依赖解析（不发包，包名是预留形态），装机器用 git URL 那条；README 里躺这句话的窗口由 v0.5.2 关闭。Windows 上的 npm 装法本轮没有真机读数（ps1 过的是十三项字面核对，宿主同一条 bun 解析路径）；Windows 慢网在新预算下的首跑读数待维护者回测（持续低于约 90 KB/s 的连接在 10 分钟总期限下仍取不完，那是手动放文件加 `xfer.cloudflared` 绝对路径的地盘）；registry 的 `latest` 缓存陈旧是宿主自己的已知问题（manager 注释 #11634），`--no-cache` 在宿主侧；git tag 与既有 GitHub Release 不撤，旧装法机器照常工作。
 - 回归（发版前重跑的一遍，2026-10-20）: `bun test` 233 项 660 断言全绿；`lint` / `tsc` 干净；`BOOTSTRAP OK`（47 项，真 HOME 装、lock 登记、二次运行幂等、卸载回收）；`test:obtain` 真网络 PASS（钉表十行 200、Windows zip 哈希对钉值、真隧道 announce）；`PACKAGE OK`，npm 真装组 info 跳过（registry 上 404，publish 前属预期）；站点 `build` + `check` 全过。
-- 发版之后核了两条远程路：git 兼容路已核（push 后从公开 URL 装进临时 HOME，`initialize` 回 `serverInfo.version` 0.5.1，一次 `tools/call` 通）；npm 路待 publish——本机 `npm whoami` 对 npmjs.org 仍是 ENEEDAUTH，且 `~/.npmrc` 的默认 registry 指着 npmmirror，publish 时要 `--registry` 指死 npmjs.org，那条核验随 publish 后的复跑补全。
+- 发版之后核了两条远程路：git 兼容路已核（push 后从公开 URL 装进临时 HOME，`initialize` 回 `serverInfo.version` 0.5.1，一次 `tools/call` 通）；npm 路不核了——同一天决定不发包，那条命令留在预留形态里，publish 哪天发生哪天再核。
 
 ## v0.5.0 — 没有模型配置的机器也连得上，Windows 拿齐两个二进制，公网端点多了操作员的一条命令
 

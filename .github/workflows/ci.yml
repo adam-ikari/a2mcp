@@ -94,7 +94,8 @@ jobs:
       # it. Groups 1-4 drive it against a recording stub `omp`, and the last group
       # runs it against the omp installed above, in a throwaway HOME. The host-install
       # half only ever comes out as a printed plan; the one live item reads the pin
-      # from the registry URL the script derives and prints `info:` when it cannot.
+      # from the manifest URL the script derives from the README's install line
+      # and prints `info:` when it cannot.
       - name: test:bootstrap — the one-shot host + extension installer
         run: bun run test:bootstrap
       # The bridge fetches a missing dufs or cloudflared by itself, pinned by version
@@ -117,10 +118,11 @@ jobs:
       # The fifth group is the half that has to leave the network: a host whose PATH
       # answers to neither binary fetches both pinned builds and serves a file from
       # them. ~46 MB of egress per run, and it lands in that host's own throwaway
-      # HOME — see test/install-probe.ts. The sixth group runs the README's own
-      # `omp install a2mcp` against the registry in a second throwaway HOME and
-      # asserts what landed is the packed tarball; if the registry does not answer,
-      # that group prints `info:` and skips — CI does not go red on the network.
+      # HOME — see test/install-probe.ts. The sixth group drives the reserved
+      # npm-name shape — `omp install a2mcp` against the registry in a second
+      # throwaway HOME — and asserts what landed is the packed tarball; the
+      # package is not published, so that group prints `info:` and skips daily.
+      # CI does not go red on the network either way.
       - name: test:install — package self-containment and a real host over MCP
         run: bun run test:install
       - name: test:approval — approval boundary (expects VERDICT B)

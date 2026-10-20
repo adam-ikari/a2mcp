@@ -69,15 +69,12 @@ same command.
 ### With omp (the machine already has omp)
 
 ```sh
-omp install a2mcp
+omp install https://github.com/adam-ikari/a2mcp.git
 ```
 
-That name is the npm package, and it is the whole install: the host pulls the
-published tarball from the registry. The git URL still works — `omp install
-https://github.com/adam-ikari/a2mcp.git` — but it installs a checkout of the
-whole repository (measured 2.3 MB on disk, `docs/` and `test/` included), while
-the tarball is about 64 KB and the bridge only ever reads `extensions/` and
-`src/`. So the URL is the compatibility form, not the recommended one.
+This lands a checkout of the whole repository (measured 2.3 MB on disk, `docs/`
+and `test/` included); the bridge itself only ever reads `extensions/` and
+`src/`.
 
 To remove it:
 
@@ -95,12 +92,13 @@ omp plugin uninstall pi-a2a-ext
 After retiring the old name the config file and token are generated fresh, so
 every remote `mcp.json` has to be re-copied.
 
-What `omp install` accepts: the package name, or a full `https://….git` URL. A
-GitHub `owner/repo` shorthand is rejected as an invalid package name, and a
-`.tgz` path or URL is not accepted either (the host tries to link it and fails
-with `ENOTDIR`). Machines still on the git URL keep working — but to move to the
-npm form, `omp plugin uninstall a2mcp` first, then install the name; the old
-checkout under `~/.omp/plugins/node_modules/` is not replaced in place.
+The URL has to be the full `https://….git`: a GitHub `owner/repo` shorthand is
+rejected as an invalid package name, and a `.tgz` path or URL is not accepted
+either (the host tries to link it and fails with `ENOTDIR`). The package-name
+spec — `omp install a2mcp` — is a reserved shape, not an available one: the
+name is not on the registry, so that command fails in dependency resolution.
+The bootstrap scripts already accept both shapes and derive version pins
+accordingly; the name works the day the package is published, and not before.
 
 ### One-shot install (fresh machine)
 
@@ -133,8 +131,7 @@ the arguments out of the string that gets executed:
 
 The script runs three steps: with no `omp` on PATH it calls the official
 installer at the pinned version; then the one `omp install` above — the
-extension has always had that single install command, and today it names the
-package; then the host's own
+extension has always had that single install command; then the host's own
 `omp plugin doctor` closes it out. Remaining flags: `--upgrade` re-runs the
 installer, `--reinstall` forces re-registration, `--uninstall` takes the
 registration back (token and audit stay), `--host-version <version>` picks the

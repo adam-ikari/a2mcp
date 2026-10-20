@@ -13,7 +13,7 @@
 | `cd website && bun run check` | 站点渲染与 SEO 核验，56 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:takeover` | 宿主推理 deny/restore 核验，34 项，约 65 秒 | 是 | `takeover probe: all assertions met` |
-| `bun run test:install` | 发布包自包含 + 端到端，52 项（npm 真装那组 4 项在包发上 registry 之前按 `info:` 跳过） | 是 | `PACKAGE OK` |
+| `bun run test:install` | 发布包自包含 + 端到端，52 项（npm 真装那组 4 项在包发到 registry 之前按 `info:` 跳过——包名形态是预留，这一组就是不发不跑） | 是 | `PACKAGE OK` |
 | `bun run test:bootstrap` | 一键脚本的判断核验，47 项，约 9 秒 | 第五组要 | `BOOTSTRAP OK` |
 | `bun run test:scenario` | 端到端场景，8 个叙事 / 41 步，约 45 秒 | 是 | `SCENARIOS: 41 steps, 0 failed` |
 
@@ -32,13 +32,13 @@
 | 内容 | 15 | 入口 `extensions/a2mcp.ts` 与 `src/` 下每一个 `*.ts` 都在 tarball 里（清单由 `readdirSync(src)` 现读，新增模块不需要改探针，`src/obtain.ts`、`src/tunnel.ts`、`src/xfer.ts` 就是这样自己进的名）；从入口出发走**相对 import 图**，每个模块都能在包内解析到；确实走起来了（≥6 模块，当前 10）；整包除 `@oh-my-pi/pi-coding-agent` 之外不引任何宿主包，而这一项确实读到了 import（不是空过） |
 | 端到端 | 11 | 每次先卸载再 `omp install .`——装的是链接，所以宿主加载的就是工作区；断言该路径不是实体拷贝；桥被发现并广播监听地址；首次启动只写 `host`/`host_llm`/`port`/`token` 加一个 `xfer`（里面是两个二进制名，没有路径也没有沙箱字段）；`initialize` 返回协议版本；`tools/list` 非空，且桥自己那三个传输工具确实出现在目录里（名字从 `src/xfer.ts` 的 `XFER_TOOL_NAMES` 现读，不在探针里抄第二份；不断言具体数量——宿主装几个扩展就变几个，写死会静默过期。这一条原先断言的是「目录里没有桥自带的工具」，桥自带工具之后标签已经不成立而断言也永远不会红，改成正面断言的来龙去脉写在 `test/install-probe.ts` 的注释里）；设备名不作为工具名暴露；远程 `tools/call` 在本机执行并回结果；`tools/call` 设备名被拒；无 token 得 401 |
 | 两个二进制都由一次 `xfer_share` 拉下来 | 13 | 给这个宿主削过的 `PATH`（`omp` 所在目录 + bun + `/usr/bin` + `/bin`）上 `dufs` 与 `cloudflared` 都不应答——这两条不成立就整组跳过并说明原因，这台机器证不了不等于桥错了；宿主照样起；`xfer_share` 的答复里没有一句是关于获取的；两个文件都在桥自己的 `HOME` 里且是 `0755`（6.4 MB 与 38.4 MB）；登记两个版本各一行、`target` 是本机平台；审计两条 `install` 且不是 `isError`；回包 `installed` 同时点名两个版本；loopback GET 字节一致、错密码 401、`xfer_stop` 后端口释放；操作者真正的 `~/.local/bin` 前后一样 |
-| README 那一条命令落在盘上的形状 | 4 | 临时 `HOME` 里真跑 `omp install a2mcp`（真 registry）：登记进 `omp-plugins.lock.json`；落盘目录里有 `package.json`、`extensions/`、`src/`；**没有** `docs`、`brain`、`test`、`website`、`.github`、`scripts`——精简这条就断言在这里，落的是打包的 tarball 不是整棵仓库的检出；装好的版本号是合法 semver（不与工作树比相等，bump 之后、publish 之前的窗口不该让 CI 红）。registry 答不到（网络断了，或包还没发上去）整组按 `info:` 跳过，不计入项数 |
+| 包名形态落在盘上的形状（预留形态） | 4 | 临时 `HOME` 里真跑 `omp install a2mcp`（真 registry）：登记进 `omp-plugins.lock.json`；落盘目录里有 `package.json`、`extensions/`、`src/`；**没有** `docs`、`brain`、`test`、`website`、`.github`、`scripts`——精简这条就断言在这里，落的是打包的 tarball 不是整棵仓库的检出；装好的版本号是合法 semver（不与工作树比相等，bump 之后、publish 之前的窗口不该让 CI 红）。registry 答不到（网络断了，或包还没发上去）整组按 `info:` 跳过，不计入项数。今天的答案是后者：包不发，这一组每天如实跳过 |
 
 第三组是关键：入口 import 的是 `../src/*.ts`，`files[]` 漏掉任何一个都会**装得上、加载时才炸**。逐个断言文件名会被新增的模块绕过，走 import 图才抓得到。
 
 端到端这组**每次都先卸载再装**。原先是「已装就跳过」，那是个洞：git URL 装出来的是**实体拷贝**，冻结在装的那一刻，于是改坏工作区的 `src/bridge.ts` 之后端到端那 11 项全绿——它验的是那份旧拷贝。实测过：破坏工作区、旧版核验报 `PACKAGE OK`。现在每次重装，且断言插件目录**解析到工作区，不是拷贝**，破坏工作区会如实变红并点名那个文件。
 
-端到端这组装法用 `omp install .`（本地路径，链接）而不是 README 那条包名命令：链接指向工作区，宿主加载的就是当前代码，改坏了工作区才会如实红在这组上；包名装的是 registry 上那份拷贝，验不到工作区。**本地安装在这里是测试夹具，不是受支持的安装方式**——对外受支持的只有包名那一条，git URL 是兼容形态，见 README。
+端到端这组装法用 `omp install .`（本地路径，链接）而不是 README 那条 git URL 命令：链接指向工作区，宿主加载的就是当前代码，改坏了工作区才会如实红在这组上；远程装的是那份拷贝，验不到工作区。**本地安装在这里是测试夹具，不是受支持的安装方式**——对外受支持的是 git URL 那一条；包名形态是预留（名字没发到 registry，那条命令今天会停在依赖解析），见 README。
 
 第五组是那天那遍端到端的提交版。它盯的形状此前谁都没覆盖：`test:obtain` 里 cloudflared 是写明路径那一侧，`bun test` 把获取整个 stub 掉，于是「一次 `xfer_share`、`PATH` 上什么都没有、两个二进制都自己拉」只被一个用完即删的脚本证明过。代价是每轮 CI 多出约 46 MB 出网（6.4 与 38.4），跑顺时整个探针 23 秒。
 
@@ -80,8 +80,8 @@
 | --- | --- | --- |
 | 钉值从哪来 | 6 | PATH 上没有宿主时，计划里的安装器调用带着从 `package.json` 读出的钉值，并说明读自哪个文件；把 `package.json` 换成另一份、钉值写 9.9.9，`--ref` 跟着变；钉值写成 range（`^18.0.0`）不当钉值用，如实告警后装 latest；`--host-version 7.7.7` 压过文件；`--host-version latest` 计划里没有 `--ref` |
 | 脚本单独一份时（无克隆那一支） | 9 | 见下节 |
-| `--dry-run` 的计划 | 5 | 退出 0；PATH 上已有宿主就不装（计划里一行 `curl` 都没有）；扩展那一步是 README 那条 `omp install` 原文（今天读出来是 `plan: omp install a2mcp`）；自检交给宿主自己的 `omp plugin doctor`；跑完那个临时 `HOME` 里一个条目也没有 |
-| 前置 | 8 | 没有 `curl` 且必须装宿主 → 红，且 `wanted` 那行写的就是 curl；spec 是 git URL 形态而没有 `git` → 红并点名 git；默认的包名形态不要 git，缺 git 照样绿；没有 `tar` → 只告警（那是桥自己解包用的），照样绿；`HOME` 不可用 → 红并说 HOME；不认识的参数 → 红而不是被忽略；脚本单独一份且 PATH 上没有 curl → 读钉值那条先如实告警，停仍停在安装器对 curl 的要求上；`sh -s -- --help` 从管道进去 → 打出选项表并退 0（`$0` 这时是 shell，不是脚本文件） |
+| `--dry-run` 的计划 | 5 | 退出 0；PATH 上已有宿主就不装（计划里一行 `curl` 都没有）；扩展那一步是 README 那条 `omp install` 原文（今天读出来是 `plan: omp install https://github.com/adam-ikari/a2mcp.git`）；自检交给宿主自己的 `omp plugin doctor`；跑完那个临时 `HOME` 里一个条目也没有 |
+| 前置 | 8 | 没有 `curl` 且必须装宿主 → 红，且 `wanted` 那行写的就是 curl；spec 是 git URL 形态而没有 `git` → 红并点名 git；显式给的包名形态不要 git，缺 git 照样绿；没有 `tar` → 只告警（那是桥自己解包用的），照样绿；`HOME` 不可用 → 红并说 HOME；不认识的参数 → 红而不是被忽略；脚本单独一份且 PATH 上没有 curl → 读钉值那条先如实告警，停仍停在安装器对 curl 的要求上；`sh -s -- --help` 从管道进去 → 打出选项表并退 0（`$0` 这时是 shell，不是脚本文件） |
 | 登记的取舍 | 7 | 已登记就不再装（stub 的 argv 里没有一个 `install`）；真装时跑的是 spec 不是本地路径；`--reinstall` 的卸载排在安装之前；`--uninstall` 只调卸载、一个安装都没有；doctor 那行是 ✔ 就过并回声出来；改成 ✗ 就红（这道门不是摆设）；宿主版本与钉值不一致只告警、不中止 |
 | 占位 `models.yml` | 7 | 见下节「自装宿主那一条分支的播种」 |
 | 真宿主 | 5 | 用 PATH 上那份真 omp 在临时 `HOME` 里跑真一遍：脚本退出 0、登记落进 `omp-plugins.lock.json`、`node_modules/<插件>` 目录在、第二次跑如实说 already registered、`--uninstall` 把登记从 lock 里拿掉 |
@@ -111,7 +111,7 @@
 | 断言 | 判据 |
 | --- | --- |
 | 钉值取自 spec 指向的那份清单 | 假 curl 回 9.9.9，计划里是 `--binary --ref v9.9.9` |
-| 出处那行写的是 URL 本身 | `pinned to v9.9.9 (read from https://registry.npmjs.org/a2mcp/latest)`——URL 从 README 那行 `omp install` 现推，探针不抄第二份 |
+| 出处那行写的是 URL 本身 | `pinned to v9.9.9 (read from https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/package.json)`——URL 从 README 那行 `omp install` 现推，探针不抄第二份；README 翻回 git URL 之前，这里读出来的是 registry 那份 URL |
 | 这个钉值真走了网络 | 假 curl 的 argv 日志里有那条 URL 的 `-fsSL --max-time 20` 调用 |
 | 取不到就装 latest，不停下来 | 假 curl 退 22：退出码 0、计划里是不带 `--ref` 的安装器命令、stderr 点名试过的那个 URL |
 | 失败时说的是试过哪儿 | 回声那行 `no pin available from <URL> — installing latest` |
@@ -124,7 +124,7 @@
 
 为什么第八条值得占一项：无克隆那条路是给人装第一台机器用的，而「机器上已经有宿主」是最常见的形态；这个脚本在这种形态下应当一次请求都不发。读钉值的分支挂在「确实要装宿主」这个条件上，条件写丢的失败模式是一次无害的 GET，看不见、也不报错，只有 argv 日志能证明它没发生。
 
-它为什么存在：README 教的安装方式是 `omp install a2mcp` 那一条，而那句话假设机器上已经有 `omp`。脚本补的是宿主那一层，扩展那一半执行的还是原句——**它不是第二条安装路径**。2026-10-02 删掉 `scripts/install.sh` 那条决定也没被翻面：那次错在自己维护一份模块图校验，这次连插件登记好不好都问宿主的 `omp plugin doctor`，脚本不重新发明判据。
+它为什么存在：README 教的安装方式是 `omp install <那条命令>` 那一条，而那句话假设机器上已经有 `omp`。脚本补的是宿主那一层，扩展那一半执行的还是原句——**它不是第二条安装路径**。2026-10-02 删掉 `scripts/install.sh` 那条决定也没被翻面：那次错在自己维护一份模块图校验，这次连插件登记好不好都问宿主的 `omp plugin doctor`，脚本不重新发明判据。
 
 `PATH` 是探针自己造的目录，只软链点名的那几个真二进制，所以「没有 curl」是真没有，不是脚本自己说的。`omp` 换成一个只往文件里追加 argv 的 stub，于是安装、卸载、`plugin list`、`plugin doctor` 全都看得见，而机器上什么都没被改动。
 
