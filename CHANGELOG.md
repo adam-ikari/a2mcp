@@ -208,7 +208,7 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - 内容: 见上 2026-10-20 的「安装主路回退」一节（两份脚本默认 spec、两份 README、站点卡、CI 注释、testing.md 六处、两个探针的头注释与前置组）。
 - 边界: v0.5.1 的 GitHub Release 不撤、正文已改口（它交付的下载修复是真的）；npm 机制（spec 形状二选一、registry 读钉、tarball 打包、探针预留形态组）原样留在树里，哪天发包哪天启用；Windows 慢网新预算首跑仍待维护者回测。
 - 回归（发版前重跑的一遍，2026-10-20）: `bun test` 233 项 660 断言全绿；`lint` / `tsc` 干净；`BOOTSTRAP OK` 47 项（默认 git 形态缺 git 要红、`--spec a2mcp` 缺 git 要过两条对调后）；`PACKAGE OK`，npm 组如实 info 跳过；站点 `build` + `check` 全过。
-- 发版之后核远程路：〔占位——push 后临时 HOME 从公开 git URL 装，`initialize` 回 0.5.2；结果随 follow-up 补全〕
+- 发版之后核远程路：push 后从公开 git URL 装进临时 HOME（`test:install` 端到端组），`initialize` 回 `serverInfo.version` 0.5.2，一次 `tools/call` 通；npm 预留形态的组如实 info 跳过。
 
 ## v0.5.1 — 隧道取回改进度感知（装法一句以 v0.5.2 为准）
 
