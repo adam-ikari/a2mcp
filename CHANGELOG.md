@@ -231,6 +231,7 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - 内容: 见上 2026-10-20 的「一个端口两张面」一节（`XFER_ROUTE` + `proxyXfer`、`dufs --path-prefix`、回包字段与 `usage` 改形、`bun test` 233→253 与新探针文件、obtain/install 两组项数、两份 README 与三份 docs、AGENTS.md 例外清单两条、站点卡）。
 - 边界: 「一条隧道同时带工具与文件」在公网那半程仍然只有人工证据——本机网络对 `*.trycloudflare.com` 重签 TLS，回环那侧的验证算不了公网半程（`docs/testing.md` 那条判样沿用）。共享不再自带隧道，也就把 52.7 MB 那个 `cloudflared` 从一次 `xfer_share` 的取回清单里拿掉了，慢网机器上那趟只剩 6.4 MB 的 `dufs`；这是形状变了，不是新读数。`win32-arm64` 那半行仍然空着，缺的东西从「一次共享」挪到「操作员的隧道」。反证两遍（下载上限、stub `dufs`）留在旧形状上，路由形状下没重跑。
 - 回归（发版前这一遍，2026-10-20）: `bun test` 253 项 741 断言全绿；`lint` / `tsc` 干净；`tree` 3 项、`registry` 5497 行、`BOOTSTRAP OK` 47 项、`MCP-CALL OK` 6 项、`SMOKE OK`（22 个工具）、`HARDEN OK` 34 项、`SCENARIOS: 41 steps, 0 failed`、`takeover` 34 项 65.0 秒（deny 在位时 inference POST=1 且是计数 sink 自己那一条）、审批 `VERDICT: B`（94.0 秒挂起、start=1 done=0）；`test:obtain` PASS（41 项，钉表十行 200、Windows 那两行按字节读）与 `test:install` `PACKAGE OK`（55 项，第五组真下真跑、npm 组如实 info 跳过）在这一轮代码定稿后即跑过；站点 `build` + `check` 全过。
+- 发版之后核远程路：push 后从公开 git URL `omp install https://github.com/adam-ikari/a2mcp.git` 装进临时 HOME，落盘 `a2mcp@0.6.0`；起宿主后 `initialize` 回 `serverInfo.version` 0.6.0，`tools/list` 22 项，一次 `tools/call read` 读到宿主文件；再 `xfer_share` 回 `http://127.0.0.1:<port>/xfer/`，带着同一个 Bearer token `GET .../xfer/file.txt` 得 200 与原文，不带 token 得 401，回包里没有 token——装法、协议、单 token 管两面的路由在同一次真机跑里一起验通。
 
 ## v0.5.3 — 接入面收成两条路，附一个零依赖参考客户端
 
