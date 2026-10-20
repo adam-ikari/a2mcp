@@ -182,7 +182,8 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - test: `bun test` 194 → 231（17 文件；占位模型 8 项、bootstrap ps1 九项扩到十三项、tunnel 五项）。探针侧 `test:bootstrap` 28 → 46 项（自装分支用假 `curl` 驱动到落文件为止），`test:obtain` 31 → 37 项（win32 那两行真下、只验到字节）。
 - docs: 安装一节重排成「omp 安装一条命令 + 一键安装分三个系统」；指南原位瘦身（README 各机制段收到「是什么、怎么用」，细节交还 `docs/`，被删事实逐一核对落点）；`docs/protocol.md` 新增「占位模型」与「操作员的隧道」两节；AGENTS.md 例外清单 three paths 改 four paths。
 - 边界: **Windows 那一支验到字节，没验到执行**——`dufs.exe` 与 `cloudflared.exe` 的真 spawn 发生在没有 Windows 的机器之外才算，`/a2mcp tunnel` 在 win32 上的那条路同样如此。tunnel 的公网半程 2026-10-19 真宿主手工回过一次 `initialize` 200（stop 后 530），同日 `test:obtain` 的真隧道又撞上本机网络对代理域名重签 TLS——两个读数都按实测记，哪个都不是每日证据。
-- 回归（发版前在 18.12.1 上重跑的一遍，2026-10-20）：`lint` / `tsc` 干净，`bun test` 231/231（657 个 expect）；`SMOKE OK`（`tools/list` 22 个）、`tree` 形状 OK、`registry` 对着真注册表 5497 行装配 23.0ms、`HARDEN OK`、`SCENARIOS: 41 steps, 0 failed`、`takeover` 全断言 66.5s（推理 POST 1、元数据非 POST 1）、审批 `VERDICT: B`（挂起 ≥90001ms，审计 `start=1 done=0`）、`obtain` PASS（钉表十个 asset 全 HEAD）、`BOOTSTRAP OK` 46 项、`PACKAGE OK`（发布 tarball 自包含，操作者 `~/.local/bin` 前后一样）；站点 `build` + `check` 全过。版本号自证一条见下面发版后补的那行。
+- 回归（发版前在 18.12.1 上重跑的一遍，2026-10-20）：`lint` / `tsc` 干净，`bun test` 231/231（657 个 expect）；`SMOKE OK`（`tools/list` 22 个）、`tree` 形状 OK、`registry` 对着真注册表 5497 行装配 23.0ms、`HARDEN OK`、`SCENARIOS: 41 steps, 0 failed`、`takeover` 全断言 66.5s（推理 POST 1、元数据非 POST 1）、审批 `VERDICT: B`（挂起 ≥90001ms，审计 `start=1 done=0`）、`obtain` PASS（钉表十个 asset 全 HEAD）、`BOOTSTRAP OK` 46 项、`PACKAGE OK`（发布 tarball 自包含，操作者 `~/.local/bin` 前后一样）；站点 `build` + `check` 全过。
+- 发版之后核了一遍远程那条路：临时 `HOME` 里 `omp install https://github.com/adam-ikari/a2mcp.git` 装到 `a2mcp@0.5.0`，起的那份是装好的而不是工作树。`initialize` 回 `{"name":"a2mcp","version":"0.5.0"}`——版本号自证那条落在这行回包上；一次 `tools/call read /etc/hostname` 回 200 拿到内容，审计落下 `start` 与 `done` 两条，`sid` 是 `initialize` 给的那个会话号。
 
 ## v0.4.0 — 名字改到机制上：a2mcp
 
