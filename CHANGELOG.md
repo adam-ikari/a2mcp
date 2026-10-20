@@ -1,8 +1,20 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.5.3`（2026-10-20，协议面与装法都与 v0.5.2 相同，这一版给不会说 MCP 的调用方补了一个官方参考客户端）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.6.0`（2026-10-20，传文件不再自带一条隧道：文件挂在桥自己端口的 `/xfer/` 路由下，公网那一面统一由操作员的 `/a2mcp tunnel` 提供，`xfer_share` 的回包字段因此变了）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
+
+## 2026-10-20 — 一个端口两张面：文件挂到 `/xfer` 路由，公网那一面归操作员的隧道
+
+维护者把方向定成一句：「方向统一宿主是 server，宿主除了提供 mcp 端点，还要提供文件传输端点，走 http 协议通过 tunnel 转发」，随后在两个方案里选了 B，并补一条边界：「只交操作员开关」。落到代码上的理由是 cloudflared 的 quick tunnel 只接受一个 `--url`，一条隧道顶一个 origin——从前一次共享自己起一条隧道、`/a2mcp tunnel` 另起一条，一台机器上两个公网主机名、两套说法；现在 `dufs` 仍然在 `127.0.0.1` 上占一个随机端口，桥把这个端口反代成自己端口的 `/xfer/` 路由，于是同一个主机名、同一个 Bearer token 既走工具调用也走文件，出公网与否只剩操作员那条命令。
+
+- feat: `src/server.ts` 加 `XFER_ROUTE`（这条路由唯一写处，`src/xfer.ts` 与两个探针 import 它，子进程参数与匹配条件不可能漂）与 `proxyXfer`：路径逐字转发、query 保留、调用方的 `Authorization` 被这次共享生成的 basic-auth 覆盖（赋值排在 header 拷贝之后，所以没有一条调用方凭据进得了 `dufs`）、`accept-encoding: identity`、`host` 删掉、hop-by-hop 双向剥掉、回程删 `www-authenticate`、`redirect: "manual"`、没共享时 404 点名 `xfer_share`、上游不回话时 502 而原因只进宿主 stderr。鉴权排在路由之前；`DELETE` 那一支不再把删文件当成结束 MCP 会话。`maxRequestBodySize` 回到 128 MB——这个数字在注释里写明它的第三次含义：一次 `PUT` 就是这个端口上的一个请求体。
+- feat: `dufs` 带 `--path-prefix /xfer` 起进程，值就是同一个常量。带前缀它才把目录页自己的 CSS/JS、`?json` 的 `uri_prefix`、PROPFIND 的 href 都写成带前缀的绝对引用，跟着一个链接不会掉出路由；不带时那些引用是根绝对路径（实测 `/__dufs_v0.46.0__/index.css`、`/up.txt`），代理剥掉前缀就全指错地方，剩下唯一办法是改写字节。这一条在 0.46.0 上真机量出来，`test:obtain` 与 `test:install` 每轮各验一次。**它同时推翻了那份方案里写着的「不用 dufs 的 `--prefix`」**——那条禁令的算盘是「代理自己剥前缀就行」，量过之后不成立。
+- feat: `src/xfer.ts` 不再开隧道。`xfer_share` 回包 `url` 是路由（`http://127.0.0.1:<port>/xfer/`）、多一个 `route`、`user`/`secret`/`host` 三个字段是撤掉而不是留空（留空会让人去找已经不存在的凭据）、`usage` 三条都改成 `Bearer <TOKEN>` 形态并多一条 `public` 说明公网那一面取决于隧道开没开、`installed` 只剩 `dufs` 一项。那对凭据照旧每次共享生成一份，只是永远不出这个进程。审计的 `args` 多一个 `route`。
+- 边界: 一次共享只需要一个二进制，`src/obtain.ts` 的 `win32-arm64` 那半行现在只欠 `cloudflared`——`dufs` 发 aarch64 的 Windows 构建，本可以单独钉一行，没有动。留空的条件从「一次共享要两个二进制，补一半就是造一台装到一半的机器」变成「那台机器的操作员开不了隧道，而共享本身能用」，注释按此改口。
+- test: `bun test` 233 → 253（741 断言，18 文件）。新文件 `test/xfer-route.test.ts` 17 项钉代理那一跳，文件服务器是测试现场跑的一只 `Bun.serve`（对着真 `dufs` 测不出这一层，真服务器只做寻常事）；`test/xfer.test.ts` 14 → 16（回包字段、凭据不出进程、`stop` 与 TTL 真关）；`test/entry.test.ts` 23 → 24（端口一开 `/xfer/` 就在那儿：没共享 404 并点名工具，不带 token 401）。`test:obtain` 37 → 41 项，`test:install` 48 → 55 项（第五组 13 → 15），第五组每轮出网从两个二进制约 46 MB 降到 `dufs` 一个 6.4 MB。反证两遍留在旧形状上（下载上限 64 MB→1024 B 红五项、塞 stub `dufs` 整组跳过），换成路由形状后没重跑，`docs/testing.md` 那句按当时的形状写明。
+- docs: 两份 README 的传文件、跨机转发与安全边界三条改成一张端口两张面的写法；`docs/protocol.md` 的传输表把 `/xfer` 从端点行里分出来、处理顺序重排为 10 步（路由与鉴权谁在前写清，代理那一跳不写审计——审计记的是共享的开与停，不是每一次 GET/PUT）、`桥自己的工具（xfer_*）` 整节重写并换上真回包 JSON、`操作员的隧道` 改口为顶整个端口；`docs/testing.md` 新增「共享的两半」一节，隧道读循环那句「那条循环开着多久等于共享开着多久」改掉（隧道现在与共享无关），四处计数同步；AGENTS.md 例外清单第二条与第四条按新形状改写；站点首页那张卡与两页描述跟上，`build` + `check` 全过。
+- 版本位: 协议面变了——回包字段少了三个、一次共享需要的二进制少一个、公网可达的前提从「工具自己给你一条 URL」变成「操作员先开隧道」。按 2026-10-18 那条判据进 minor（v0.6.0）。远程 `mcp.json` 不用动，token 不换代；真正要改代码的是按回包 `user`/`secret` 拼 curl 的调用方，在这一版读到的是 undefined。
 
 ## 2026-10-20 — 接入面收成两条路，给不会说 MCP 的调用方一个官方参考客户端
 
@@ -211,6 +223,14 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.6.0 — 一个端口两张面：文件走 `/xfer` 路由，公网只归操作员那条隧道
+
+**这一版对远程调用方变的是传文件那一面：`xfer_share` 不再自带一条 cloudflared 隧道，也不再交出一张内嵌凭据的公网 URL——它把 `dufs` 留在回环上，桥把这个端口反代成自己端口的 `/xfer/` 路由，调用方用的还是那个 Bearer token，公网那一面统一由操作员的 `/a2mcp tunnel` 决定（quick tunnel 只顶一个 origin，所以同一个主机名同时带工具调用和文件）。** 传输、鉴权、会话、`tools/list` 的面貌一个字没动：MCP Streamable HTTP `2025-11-25`、单 Bearer token、宿主注册表逐字加那三个 `xfer_*`。远程 `mcp.json` 不用改，token 不换代；按 2026-10-18 判据（调用方经协议拿到的东西变了进 minor）进 v0.6.0。
+
+- 内容: 见上 2026-10-20 的「一个端口两张面」一节（`XFER_ROUTE` + `proxyXfer`、`dufs --path-prefix`、回包字段与 `usage` 改形、`bun test` 233→253 与新探针文件、obtain/install 两组项数、两份 README 与三份 docs、AGENTS.md 例外清单两条、站点卡）。
+- 边界: 「一条隧道同时带工具与文件」在公网那半程仍然只有人工证据——本机网络对 `*.trycloudflare.com` 重签 TLS，回环那侧的验证算不了公网半程（`docs/testing.md` 那条判样沿用）。共享不再自带隧道，也就把 52.7 MB 那个 `cloudflared` 从一次 `xfer_share` 的取回清单里拿掉了，慢网机器上那趟只剩 6.4 MB 的 `dufs`；这是形状变了，不是新读数。`win32-arm64` 那半行仍然空着，缺的东西从「一次共享」挪到「操作员的隧道」。反证两遍（下载上限、stub `dufs`）留在旧形状上，路由形状下没重跑。
+- 回归（发版前这一遍，2026-10-20）: `bun test` 253 项 741 断言全绿；`lint` / `tsc` 干净；`tree` 3 项、`registry` 5497 行、`BOOTSTRAP OK` 47 项、`MCP-CALL OK` 6 项、`SMOKE OK`（22 个工具）、`HARDEN OK` 34 项、`SCENARIOS: 41 steps, 0 failed`、`takeover` 34 项 65.0 秒（deny 在位时 inference POST=1 且是计数 sink 自己那一条）、审批 `VERDICT: B`（94.0 秒挂起、start=1 done=0）；`test:obtain` PASS（41 项，钉表十行 200、Windows 那两行按字节读）与 `test:install` `PACKAGE OK`（55 项，第五组真下真跑、npm 组如实 info 跳过）在这一轮代码定稿后即跑过；站点 `build` + `check` 全过。
 
 ## v0.5.3 — 接入面收成两条路，附一个零依赖参考客户端
 
