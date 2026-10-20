@@ -15,10 +15,13 @@
  * is downloaded.
  *
  * Group 1b runs the script from a copy with no `package.json` above it, which is
- * the layout `curl … | sh` actually lands in: the pin then comes from the raw
- * `package.json` of whatever the spec points at, through a fake curl that records
- * every call — including the runs where the correct answer is that it recorded
- * nothing. One item in that group asks GitHub itself what the derived URL serves.
+ * the layout `curl … | sh` actually lands in: the pin then comes from the
+ * manifest of whatever the spec points at — raw `package.json` for a github URL
+ * shape, the registry's latest document for an npm name — through a fake curl
+ * that records every call, including the runs where the correct answer is that
+ * it recorded nothing. One item in that group asks the derived URL itself what
+ * it serves; unreachable is a skip, and on the registry shape the pin-equality
+ * half only runs while the published latest is this same version.
  *
  * Group 4b hands the script a fake installer that leaves a stub `omp` in
  * `PI_INSTALL_DIR`, so the fresh-host branch runs end to end for the first time:
@@ -29,9 +32,10 @@
  * Group 5 is the one pass with the real host: temp HOME, the script run for
  * real, the registration checked in `omp-plugins.lock.json`, then `--uninstall`
  * to clean up. Its default spec is this checkout as `.` (run with the repo as
- * cwd), because what that group tests is the script's plumbing; omp's own git
- * fetch is what test:install groups 1-3 cover, and `A2MCP_BOOTSTRAP_SPEC` with a
- * git URL is how you point this group at it instead.
+ * cwd), because what that group tests is the script's plumbing. The remote
+ * fetches belong to test:install: it installs the published npm package for
+ * real, and `A2MCP_BOOTSTRAP_SPEC` is how you point this group at a spec of
+ * your choosing instead.
  *
  * ## The boundary of this coverage
  *
@@ -72,9 +76,11 @@ const SCRIPT = join(REPO, "scripts", "bootstrap.sh");
 // seeding a name nobody publishes.
 const manifest = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as {
 	name?: string;
+	version?: string;
 	devDependencies?: Record<string, string>;
 };
 const PLUGIN = manifest.name ?? "";
+const VERSION = manifest.version ?? "";
 const README_URL = readFileSync(join(REPO, "README.md"), "utf8").match(/^omp install (\S+)$/m)?.[1] ?? "";
 // Preconditions, not assertions: an empty derivation means this probe has no
 // name to test with, so it must not run and report a clean sheet.
@@ -246,9 +252,15 @@ function fakeCurl(body: string | null): { dir: string; log: string; calls: () =>
 const fixturePackage = (pin: string): string =>
 	`{\n  "name": "${PLUGIN}",\n  "devDependencies": {\n    "@oh-my-pi/pi-coding-agent": "${pin}"\n  }\n}\n`;
 
-/** The raw URL the script should derive from this repo's own install URL. */
-const RAW_PKG =
-	README_URL.replace(/\.git$/, "").replace("github.com", "raw.githubusercontent.com") + "/HEAD/package.json";
+/**
+ * The manifest URL the script should derive from this repo's own install spec:
+ * the raw package.json for a github URL shape, the registry's latest document
+ * for an npm name. Same two branches as the script, one derivation here — the
+ * probe never carries a second copy of either URL.
+ */
+const REMOTE_PKG = README_URL.startsWith("https://github.com/")
+	? `${README_URL.replace(/\.git$/, "").replace("github.com", "raw.githubusercontent.com")}/HEAD/package.json`
+	: `https://registry.npmjs.org/${README_URL.replace(/(^@[^/]+)@[^@/:]*$/, "$1").replace(/\//g, "%2F")}/latest`;
 
 console.log(`script under test: ${SCRIPT}`);
 console.log(`pin in package.json: ${PIN}`);
@@ -328,16 +340,16 @@ console.log("\n--- the pin when the script arrives through a pipe ---");
 	const rRemote = runBootstrap([remote.dir, farm(core(["omp"]))], home, ["--dry-run"], home, bare.script);
 	check(
 		rRemote.out.includes("--binary --ref v9.9.9"),
-		"with no package.json beside it the script reads the pin from the spec's repo",
+		"with no package.json beside it the script reads the pin from the spec's own manifest",
 		rRemote.lines.find((l) => l.includes("--ref")) ?? "no --ref line",
 	);
 	check(
-		rRemote.out.includes(`pinned to v9.9.9 (read from ${RAW_PKG})`),
-		"the provenance line names the raw URL it fetched from",
+		rRemote.out.includes(`pinned to v9.9.9 (read from ${REMOTE_PKG})`),
+		"the provenance line names the manifest URL it fetched from",
 		rRemote.lines.find((l) => l.includes("read from")) ?? "no provenance line",
 	);
 	check(
-		remote.calls().some((c) => c.includes(RAW_PKG)),
+		remote.calls().some((c) => c.includes(REMOTE_PKG)),
 		"that pin came over the wire, not from this checkout",
 		remote.calls().join(" | ") || "the fake curl recorded nothing",
 	);
@@ -350,9 +362,9 @@ console.log("\n--- the pin when the script arrives through a pipe ---");
 		`exit ${rDown.code}: ${rDown.lines.find((l) => l.startsWith("warn:")) ?? "no warn line"}`,
 	);
 	check(
-		down.calls().some((c) => c.includes(RAW_PKG)),
+		down.calls().some((c) => c.includes(REMOTE_PKG)),
 		"and it says which URL it tried to read",
-		rDown.lines.find((l) => l.includes(RAW_PKG)) ?? (down.calls().join(" | ") || "no request recorded"),
+		rDown.lines.find((l) => l.includes(REMOTE_PKG)) ?? (down.calls().join(" | ") || "no request recorded"),
 	);
 
 	const other = fakeCurl(fixturePackage("9.9.9"));
@@ -364,8 +376,10 @@ console.log("\n--- the pin when the script arrives through a pipe ---");
 		bare.script,
 	);
 	check(
-		other.calls().length === 0 && /not an https:\/\/github\.com URL/.test(rOther.out) && !rOther.out.includes("--ref"),
-		"a spec that is not a github.com URL gets no guess and no request",
+		other.calls().length === 0 &&
+			/neither an https:\/\/github\.com URL nor an npm name/.test(rOther.out) &&
+			!rOther.out.includes("--ref"),
+		"a spec that is neither a github URL nor an npm name gets no guess and no request",
 		other.calls().join(" | ") || (rOther.lines.find((l) => l.includes("no pin available")) ?? "no fallback line"),
 	);
 
@@ -391,18 +405,33 @@ console.log("\n--- the pin when the script arrives through a pipe ---");
 		hosted.calls().join(" | ") || (rHosted.lines.find((l) => l.includes("already on PATH")) ?? "no host line"),
 	);
 
-	// The one item that leaves the machine: does the derivation match what GitHub
-	// actually serves for this repo? Unreachable host is a skip, never a pass.
-	const live = spawnSync("curl", ["-fsSL", "--max-time", "10", RAW_PKG], { encoding: "utf8" });
+	// The one item that leaves the machine: does the derivation match what the
+	// manifest URL actually serves? Unreachable host is a skip, never a pass. On
+	// the registry shape the pin-equality half only holds while the published
+	// latest is this same version — a bump lands in the tree before it lands on
+	// the registry, and the days between are not a red CI.
+	const live = spawnSync("curl", ["-fsSL", "--max-time", "10", REMOTE_PKG], { encoding: "utf8" });
 	if (live.status !== 0) {
-		console.log(`info: skipped the live derivation check — ${RAW_PKG} not reachable (exit ${live.status})`);
+		console.log(`info: skipped the live derivation check — ${REMOTE_PKG} not reachable (exit ${live.status})`);
 	} else {
 		const served = live.stdout.match(/"@oh-my-pi\/pi-coding-agent"\s*:\s*"([^"]+)"/)?.[1] ?? "nothing";
-		check(
-			served === PIN,
-			"the URL the script derives serves the same pin this repo carries",
-			`raw serves ${served}, package.json pins ${PIN}`,
-		);
+		const servedVersion = live.stdout.match(/"version"\s*:\s*"([^"]+)"/)?.[1] ?? "";
+		if (!README_URL.startsWith("https://github.com/") && servedVersion !== VERSION) {
+			console.log(
+				`info: registry serves ${servedVersion}, this tree is ${VERSION} — checking readability only, not pin equality`,
+			);
+			check(
+				/^\d+\.\d+\.\d+$/.test(served),
+				"the manifest URL the script derives carries a readable host pin",
+				`served: ${served}`,
+			);
+		} else {
+			check(
+				served === PIN,
+				"the URL the script derives serves the same pin this repo carries",
+				`the URL serves ${served}, package.json pins ${PIN}`,
+			);
+		}
 	}
 }
 
@@ -456,11 +485,25 @@ console.log("\n--- prerequisites ---");
 	);
 
 	stubHost();
-	const noGit = runBootstrap([farm(core(["git"]))], home, ["--dry-run"]);
+	// The default spec is an npm name now, so git belongs to the script only when
+	// the spec is a git URL again — the compatibility form asked for on purpose.
+	const noGit = runBootstrap([farm(core(["git"]))], home, [
+		"--dry-run",
+		"--spec",
+		"https://github.com/adam-ikari/a2mcp.git",
+	]);
 	check(
 		noGit.code !== 0 && /wanted: git on PATH/.test(noGit.out),
-		"the extension step without git stops and says git",
+		"a git-shaped spec without git on PATH stops and says git",
 		noGit.lines.find((l) => l.includes("git")) ?? `exit ${noGit.code}`,
+	);
+
+	stubHost();
+	const npmNoGit = runBootstrap([farm(core(["git"]))], home, ["--dry-run"]);
+	check(
+		npmNoGit.code === 0,
+		"the npm-shaped default spec asks for no git",
+		npmNoGit.lines.find((l) => l.includes("wanted")) ?? `exit ${npmNoGit.code}`,
 	);
 
 	stubHost();
@@ -493,7 +536,7 @@ console.log("\n--- prerequisites ---");
 	const bareNoCurl = bareScript();
 	const noCurlBare = runBootstrap([farm(core(["curl", "omp"]))], tempHome(), ["--dry-run"], home, bareNoCurl.script);
 	check(
-		/no curl to read the pin from https:\/\/raw\.githubusercontent\.com/.test(noCurlBare.out) &&
+		noCurlBare.out.includes(`no curl to read the pin from ${REMOTE_PKG}`) &&
 			/wanted: curl on PATH/.test(noCurlBare.out),
 		"with no curl the pin read is a warning and the stop stays at the installer that needs curl",
 		noCurlBare.lines.filter((l) => l.includes("curl")).join(" / ") || `exit ${noCurlBare.code}`,

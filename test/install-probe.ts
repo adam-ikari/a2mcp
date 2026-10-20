@@ -13,11 +13,13 @@
  * is not declared. Then that `omp install` links the bridge where the host looks
  * for it, and that the bridge comes up and serves MCP from a real host.
  *
- * The last group is the other machine-shaped failure: a host whose PATH answers
- * to neither `dufs` nor `cloudflared`, asked to share a file. It is the only
- * group that leaves the network (~46 MB of pinned release assets), and it
- * installs into its own throwaway HOME — the operator's `~/.local/bin` is read
- * before and after, never written.
+ * The two groups that leave the network are the last two. The npm-install group
+ * fetches what the README's one command fetches — the registry manifest and the
+ * published tarball — and asserts what reaches disk is the package, not a
+ * checkout of this repo; an unreachable registry or an unpublished version skips
+ * the whole group as an info line, never a red. The binary group (~46 MB of
+ * pinned release assets) installs into its own throwaway HOME — the operator's
+ * `~/.local/bin` is read before and after, never written.
  *
  * ## On plugin discovery and HOME
  *
@@ -50,7 +52,7 @@
  *
  * Env:
  *   A2MCP_INSTALL_SPEC  the spec under test, reported in the output so a failure
- *                     names what was actually checked (default: origin git URL)
+ *                     names what was actually checked (default: the npm name)
  */
 import { execFileSync, spawn } from "node:child_process";
 import {
@@ -71,7 +73,7 @@ import { XFER_TOOL_NAMES } from "../src/xfer.ts";
 import { linkExtension, seedModels } from "./harness";
 
 const REPO = resolve(import.meta.dir, "..");
-const SPEC = process.env.A2MCP_INSTALL_SPEC ?? "https://github.com/adam-ikari/a2mcp.git";
+const SPEC = process.env.A2MCP_INSTALL_SPEC ?? "a2mcp";
 
 let failures = 0;
 /**
@@ -274,10 +276,11 @@ console.log(`  ${e2eNote}`);
 // by breaking src/bridge.ts in the tree — the probe stayed green, because it never
 // looked at the tree.
 //
-// `omp install .` is the spec, not the git URL, and the difference is the point:
-// it links the working tree, so the host loads whatever is there right now. The
-// README's git URL installs a copy of master, which cannot test uncommitted work.
-// A local install is a test fixture here, not a supported install method.
+// `omp install .` is the spec, not the remote one, and the difference is the
+// point: it links the working tree, so the host loads whatever is there right
+// now. The README's command installs whatever was published, which cannot test
+// uncommitted work. A local install is a test fixture here, not a supported
+// install method.
 //
 // Install under `e2eHome`, the HOME the host below boots with: since host
 // 18.11.0, and still on 18.12.1, the plugin registry is HOME-scoped, so an
@@ -727,6 +730,71 @@ try {
 }
 
 rmSync(stage, { recursive: true, force: true });
+
+// --- 6. what the README's one command puts on disk ----------------------------
+// The reason the README teaches the npm name and not the git URL is size and
+// shape on disk: a git spec installs a whole checkout of this repo (measured
+// 2.3 MB, docs/ and test/ and website/ included — bun's git path ignores the
+// `files` field), the registry installs the packed tarball. This group runs the
+// real `omp install a2mcp` in a throwaway HOME and asserts the shape that
+// landed. Network is this group's business, not CI's: a registry that does not
+// answer (or does not carry the package yet) skips the whole group as info.
+{
+	const npmHome = mkdtempSync(join(tmpdir(), "install-npm-"));
+	const npmEnv = { ...process.env, HOME: npmHome };
+	try {
+		execFileSync("omp", ["plugin", "uninstall", PKG_NAME], { env: npmEnv, stdio: "ignore" });
+	} catch {
+		// A fresh HOME has nothing installed; the uninstall is just a guard.
+	}
+	let npmNote = "";
+	let npmError = "";
+	try {
+		const out = execFileSync("omp", ["install", SPEC], {
+			env: npmEnv,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		npmNote = out.trim().split("\n").pop() ?? "installed";
+	} catch (e) {
+		npmError =
+			String((e as { stderr?: string }).stderr ?? e)
+				.trim()
+				.split("\n")[0] ?? "install failed";
+	}
+	if (npmError !== "") {
+		console.log(`info: skipped the npm-install group — \`${SPEC}\` did not install (${npmError})`);
+	} else {
+		const pkgDir = join(npmHome, ".omp", "plugins", "node_modules", PKG_NAME);
+		const npmLock = join(npmHome, ".omp", "plugins", "omp-plugins.lock.json");
+		check(
+			existsSync(npmLock) && readFileSync(npmLock, "utf8").includes(`"${PKG_NAME}"`),
+			"the npm install registers in the lock under the HOME it ran in",
+			existsSync(npmLock) ? "lock present" : "no lock file",
+		);
+		const entries = existsSync(pkgDir) ? readdirSync(pkgDir).sort() : [];
+		check(
+			entries.includes("package.json") && entries.includes("extensions") && entries.includes("src"),
+			"the installed package carries what the host loads",
+			entries.join(", ") || "directory missing",
+		);
+		check(
+			!entries.some((e) => ["docs", "brain", "test", "website", ".github", "scripts"].includes(e)),
+			"what landed is the packed tarball, not a checkout of the repo",
+			entries.join(", "),
+		);
+		const servedVersion = entries.includes("package.json")
+			? ((JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")) as { version?: string }).version ?? "")
+			: "";
+		check(
+			/^[0-9]+\.[0-9]+\.[0-9]+$/.test(servedVersion),
+			"the installed version reads as an exact semver (it is what serverInfo prints)",
+			`version: ${servedVersion || "unreadable"}`,
+		);
+		console.log(`  npm install said: ${npmNote}`);
+	}
+	rmSync(npmHome, { recursive: true, force: true });
+}
 
 if (failures > 0) {
 	console.error(`\nPACKAGE: ${failures} check(s) failed`);

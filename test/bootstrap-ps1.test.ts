@@ -41,7 +41,7 @@ describe("the two bootstrap scripts say the same thing", () => {
 		expect(psVar("Plugin")).toBe(PKG.name);
 	});
 
-	test("the extension repository is the README's git URL in both", () => {
+	test("the install spec is the README's own line in both", () => {
 		expect(shellVar("DEFAULT_SPEC")).toBe(README_URL);
 		expect(psVar("DefaultSpec")).toBe(README_URL);
 	});
