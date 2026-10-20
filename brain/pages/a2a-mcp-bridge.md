@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-20T06:33:59"
+updated: "2026-10-20T08:48:19"
 ---
 
 <!-- compiled_truth -->
@@ -971,4 +971,19 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
 - time: 2026-10-20T06:33:59
   kind: decision
   summary: "接入面在文档里收成两条路：会说 MCP 的客户端直接填 mcp.json 接桥、不要自写客户端；不会说 MCP 但能跑代码的调用方取一个官方参考实现 scripts/mcp-call.py，零依赖 Python 3 单文件，替它处理会话头、404 重握手、每次调用超时与退出码——正是手搓 mcp_call.py 最容易写错的两处。起因是接到桥上的 agent 反复各自手搓一个握手脚本：桥答 plain JSON 谁都能打，但握手有状态，被贴进提示词而非注册成 MCP 客户端的 agent 就每次从零重推。语言定 Python 标准库（与 agent 已自发产出的形状同源，CI 镜像近乎标配），Go 跨平台二进制讨论后否掉——那会翻成第二套二进制分发系统加 CI 编译链，而调用方要能读能抄的代码。脚本不进 package.json 的 files（仍 extensions/ 加 src/），与 bootstrap.sh 同路走 raw URL 交付，不进安装 tarball。新增独立探针 test:mcp-call：真宿主驱动 list/call/错 token/不存在工具，加一只第一次 tools/call 回 404 的假 Bun.serve 验重握手自愈；缺 python3 整段 info 跳过退 0。协议面与装法不变（git URL 主路），进 patch v0.5.3。"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-20T08:47:58
+  kind: decision
+  summary: "传文件面第二次重做（2026-10-20，v0.6.0）：宿主/桥是一个 server，同一个端口出两张面。维护者定方向「宿主除了提供 mcp 端点，还要提供文件传输端点，走 http 协议通过 tunnel 转发」，在两个方案里选 B，并加一条边界「只交操作员开关」。落点：dufs 仍在 127.0.0.1 的随机端口上，桥把它反代成自己端口的 /xfer/ 路由（src/server.ts 的 XFER_ROUTE + proxyXfer），公网那一面统一由操作员的 /a2mcp tunnel 决定——quick tunnel 只接受一个 --url，一条隧道顶一个 origin，所以从前「一次共享一条隧道 + 操作员一条隧道」那两个公网主机名合成一个，同一个主机名同一个 Bearer token 同时带工具调用与文件。代理那一跳的形状：路径逐字转发（不剥前缀）、query 保留、调用方的 Authorization 被这次共享生成的 basic-auth 覆盖而不是合并（赋值排在 header 拷贝之后）、accept-encoding identity、host 删除、hop-by-hop 双向剥掉、回程删 www-authenticate、redirect manual、没共享 404 点名 xfer_share、上游不回话 502 而原因只进宿主 stderr；鉴权排在路由之前，DELETE 那支不再把删文件当成结束会话。xfer_share 不再开隧道也不交出凭据：回包 url 是路由、多一个 route 字段、user/secret/host 三个字段撤掉而不是留空、usage 三条改成 Bearer <TOKEN> 形态并多一条 public、installed 只剩 dufs。那对凭据照旧每次生成一份，只是永远不出进程。maxRequestBodySize 回到 128 MB（第三次含义：一次 PUT 就是这个端口上的一个请求体，注释写明）。代价：桥多了一段有主张的代码（代理），换来的是公网入口只剩操作员那一处，而操作员开关公网这条既有原则没被工具绕过。"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-20T08:48:06
+  kind: reversal
+  summary: "推翻一条本轮方案里写死的禁令：「不用 dufs 的 --prefix，代理自己剥前缀就行」。真机读数把它否了——不带 --path-prefix 时 dufs 的目录页 CSS/JS、?json 的 uri_prefix、PROPFIND 的 href 全是根绝对路径（实测 /__dufs_v0.46.0__/index.css、/up.txt），跟着一个链接就掉出 /xfer/ 路由，而路由之外那一侧是 MCP 处理器的 405；代理要么改写字节，要么把前缀告诉服务器。现在的做法是同一个常量喂两头：src/server.ts 的 XFER_ROUTE 既做匹配条件也作为 --path-prefix /xfer 传给子进程，所以两者不可能漂，路径逐字转发就是全部的改写量。0.46.0 上验过（test:obtain 与 test:install 每轮各一次：列表每个绝对引用带前缀、uri_prefix 是 /xfer/、不带前缀的路径 dufs 自己回 400）。教训与既有那条同源：一条「不做 X」的禁令如果是按省事推出来的、没有在目标版本上量过，它就成了下一轮的实现约束——写禁令时要把它的判据一起写清。"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-20T08:48:19
+  kind: decision
+  summary: "两条随之改口的边界（2026-10-20）。其一，AGENTS.md 例外清单从三条变四条之后再改措辞：第二条 xfer_* 现在写的是「把路径交给绑回环的 dufs，再作为桥自己端口上的 /xfer/ 路由端出去，门就是同一个 Bearer token」，并且明写工具不再交出凭据或公网主机名；第四条 /a2mcp tunnel 写的是「顶的是整个端口，所以那张主机名和那个 token 同时是 MCP 端点与 /xfer/ 路由的公网面目」。例外清单的理由句没变：给桥加主张的路径都要用审计与文档付账。其二，win32-arm64 那半行留空的条件换了主人：从前是「一次 xfer_share 要两个二进制，补一半就是造一台装到一半的机器」，现在共享只需要 dufs 而 dufs 发 aarch64 的 Windows 构建，缺的只是操作员的隧道——单独钉一行技术上可做，本轮没做，src/obtain.ts 的注释按此改口，避免下一个人以为那半行是必需的。配套一条发布判据：这版进 minor（v0.6.0），因为调用方经协议拿到的东西变了——回包少三个字段、一次共享少一个二进制、公网可达的前提从工具自己给 URL 变成操作员先开隧道；真正要改代码的是按回包 user/secret 拼 curl 的调用方，在这一版读到 undefined。"
   affects: [a2a-mcp-bridge]
