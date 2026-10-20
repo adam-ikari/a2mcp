@@ -155,6 +155,20 @@ const stream = (p: Required<Omit<Plan, "status" | "bytes">>) =>
 		}),
 	);
 
+/** Real bytes, delivered in chunks — the shape a slow-but-honest connection makes. */
+const streamBytes = (bytes: Buffer, chunkDelayMs: number, chunkBytes: number) =>
+	new Response(
+		new ReadableStream({
+			async start(ctrl) {
+				for (let off = 0; off < bytes.length; off += chunkBytes) {
+					await Bun.sleep(chunkDelayMs);
+					ctrl.enqueue(new Uint8Array(bytes.subarray(off, off + chunkBytes)));
+				}
+				ctrl.close();
+			},
+		}),
+	);
+
 let base = "";
 let server: ReturnType<typeof Bun.serve>;
 beforeAll(() => {
@@ -165,7 +179,12 @@ beforeAll(() => {
 			const path = new URL(req.url).pathname;
 			hits.push(path);
 			if (plan.status) return new Response("not found", { status: plan.status });
-			if (plan.bytes) return new Response(new Uint8Array(plan.bytes));
+			if (plan.bytes) {
+				if (plan.chunkDelayMs !== undefined) {
+					return streamBytes(plan.bytes, plan.chunkDelayMs, plan.chunkBytes ?? 16);
+				}
+				return new Response(new Uint8Array(plan.bytes));
+			}
 			return stream({
 				chunkDelayMs: plan.chunkDelayMs ?? 5,
 				chunkBytes: plan.chunkBytes ?? 64 * 1024,
@@ -312,10 +331,35 @@ describe("fetching a pinned build", () => {
 		await expect(dufs(d)).rejects.toThrow(/larger than the 200000 byte cap/);
 	});
 
-	test("a body that stops moving hits the deadline instead of the caller", async () => {
-		plan = { chunkDelayMs: 60, chunkBytes: 16, totalBytes: 8 * 1024 * 1024 };
-		const d = deps({ pin: pin("slow.tar.gz", good), timeoutMs: 300 });
-		await expect(dufs(d)).rejects.toThrow(/timed out|timeout|aborted/i);
+	test("a body that stops moving stalls inside the idle window, not the deadline", async () => {
+		// The Windows reading of 2026-10-20 was a stall the old single wall clock
+		// could not name. Here the gap between chunks is longer than the idle window
+		// and nowhere near the deadline, so the only thing that can fire is the idle
+		// timer — and the message has to carry the operator's way out, because a
+		// stalled network will stall the same way on the next try.
+		plan = { chunkDelayMs: 2000, chunkBytes: 16, totalBytes: 8 * 1024 * 1024 };
+		const d = deps({ pin: pin("stall.tar.gz", good), idleMs: 150, totalMs: 600_000 });
+		await expect(dufs(d)).rejects.toThrow(/stalled downloading stall\.tar\.gz: no bytes for 150 ms/);
+		await expect(dufs(deps({ pin: pin("stall.tar.gz", good), idleMs: 150, totalMs: 600_000 }))).rejects.toThrow(
+			/put a dufs on this machine's PATH, or set xfer\.dufs/,
+		);
+	});
+
+	test("a slow steady drip that keeps moving installs, however long it takes", async () => {
+		// The shape the old 120 s wall clock denied a slow host: the pinned bytes
+		// arrive 8 at a time every 30 ms, each gap well under the idle window, the
+		// whole body longer than that window several times over. The idle timer
+		// resets on every chunk, so this must land.
+		plan = { bytes: good, chunkDelayMs: 30, chunkBytes: 8 };
+		const d = deps({ pin: pin("drip.tar.gz", good), idleMs: 120, totalMs: 30_000 });
+		const r = await dufs(d);
+		expect(r.installed?.version).toBe("9.9.9");
+	});
+
+	test("the overall deadline still stops a stream that never stops", async () => {
+		plan = { chunkDelayMs: 5, chunkBytes: 4, totalBytes: 8 * 1024 * 1024 };
+		const d = deps({ pin: pin("dribble.tar.gz", good), idleMs: 10_000, totalMs: 120 });
+		await expect(dufs(d)).rejects.toThrow(/gave up on dribble\.tar\.gz after 120 ms with only \d+ bytes received/);
 	});
 
 	test("two concurrent shares fetch once", async () => {
