@@ -1,6 +1,6 @@
 {
   "name": "a2mcp",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Expose a running omp session's tools over MCP (Streamable HTTP), plus file transfer over HTTP through a quick tunnel",
   "license": "MIT",
   "type": "module",
@@ -41,6 +41,7 @@
     "test:tree": "bun test/tree-probe.ts",
     "test:approval": "bun test/approval-probe.ts",
     "test:install": "bun test/install-probe.ts",
+    "test:mcp-call": "bun test/mcp-call-probe.ts",
     "test:bootstrap": "bun test/bootstrap-probe.ts",
     "test:obtain": "bun test/obtain-probe.ts",
     "test:scenario": "bun test/scenario.ts",
