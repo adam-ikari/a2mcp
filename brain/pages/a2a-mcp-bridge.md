@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-20T08:48:19"
+updated: "2026-10-20T11:32:51"
 ---
 
 <!-- compiled_truth -->
@@ -166,6 +166,13 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.1:1`：deny 绊线的键集来自快照里各 provider 的 `baseUrl`，loopback 进键等于把桥自己监听地址也放进去。inline `apiKey: not-a-real-key` 算 concrete auth，过了 `getApiKey` 那道第二闸门——pty 真发 prompt 证的（18.12.1）：报错是 `Couldn't connect to a2mcp.invalid (connection refused)`，不是 `No API key found`，transcript 里 `provider=a2mcp model=offline stopReason=error`。与 deny 的同场也测了：`host_llm: "deny"` 且占位行在位时 `test:takeover` 照样全绿——占位行不带 `transport`，不触发那条「拒绝装配」判据。
 
 它翻的是报错的硬度，不是能力：占位模型不产生推理，操作者的 prompt 从提示时刻的硬报错变成连接被拒的软失败，文档按这个措辞写。救不了的那条道是无头启动——扩展代码根本没跑，桥做什么都晚，那一半归 `bootstrap.sh` / `bootstrap.ps1` 的 create-only 占位 `models.yml`（只在脚本自装宿主的分支写）。这推翻了「bootstrap 除调用安装器与宿主自己的命令外不写文件」的定位，timeline 记了 reversal。Windows 一侧的播种未执行：占位模型的运行时形状在本机 Linux 宿主 18.12.1 实测，ps1 真机首跑（2026-10-19）过的只有「已有宿主」那一支，播种那半仍只有十三项字面核对。
+## 隧道开着时的公网地址：工具只读，不开（2026-10-20 决定）
+
+0.6.0（a3417df）把隧道收归 `/a2mcp tunnel` 之后，共享回包里就没有公网地址了：`url` 是宿主自己的回环 origin（`http://127.0.0.1:<桥端口>/xfer/`），在远端机器上指向远端自己；公网入口只有操作员那条隧道，而 `xfer_share` / `xfer_status` 都不带它，工具描述只写「公开主机名出现时走同一路径」，不给具体主机名。远端 agent 拼不出文件地址，自己起一条隧道是它能想到的最短路径——那不是桥的漏洞，是回包没给它能用的地址。回包里若还出现 `user` / `secret` / `host`，那是宿主还跑着 0.6.0 之前的版本（那版每次共享自带一条 cloudflared），判据是 `initialize` 回的 `serverInfo.version`。
+
+判据与落点：**工具不自己开隧道**这条不变（持 token 的调用方不能绕过操作员把宿主文件发布出去），但**读一个已经存在的状态**不新增暴露面——隧道是操作员开的，主机名本来就不是秘密（`docs/protocol.md` 的隧道审计里就写着它）。所以 `src/xfer.ts` 的 `XferDeps` 多一个 `publicUrl` getter，`extensions/a2mcp.ts` 把它接到 `mcpTunnel?.url ?? null`；`xfer_share` 与 `xfer_status` 的回包多一个 `publicUrl`（`https://<随机>.trycloudflare.com/xfer/`，隧道没开是 `null`），读的是调用那一刻的状态——隧道在共享期间开或关，`xfer_status` 立刻跟着变。隧道没开时 `usage.public` 不给地址，改成点名两条路：SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。工具描述也按这个改口：隧道开着时 `publicUrl` 就是同一路由在那条主机名下的地址。
+
+**教训与既有那条同源**：一条「不自己开隧道」的边界容易被读成「工具不提隧道」。前者是**不制造新的暴露面**，后者是**不告诉调用方已经存在的暴露面**——后者恰恰让远端 agent 自己去造了一条。回包里少了什么，比多写了什么更容易被当成漏洞。
 
 
 ## Timeline
@@ -986,4 +993,16 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
 - time: 2026-10-20T08:48:19
   kind: decision
   summary: "两条随之改口的边界（2026-10-20）。其一，AGENTS.md 例外清单从三条变四条之后再改措辞：第二条 xfer_* 现在写的是「把路径交给绑回环的 dufs，再作为桥自己端口上的 /xfer/ 路由端出去，门就是同一个 Bearer token」，并且明写工具不再交出凭据或公网主机名；第四条 /a2mcp tunnel 写的是「顶的是整个端口，所以那张主机名和那个 token 同时是 MCP 端点与 /xfer/ 路由的公网面目」。例外清单的理由句没变：给桥加主张的路径都要用审计与文档付账。其二，win32-arm64 那半行留空的条件换了主人：从前是「一次 xfer_share 要两个二进制，补一半就是造一台装到一半的机器」，现在共享只需要 dufs 而 dufs 发 aarch64 的 Windows 构建，缺的只是操作员的隧道——单独钉一行技术上可做，本轮没做，src/obtain.ts 的注释按此改口，避免下一个人以为那半行是必需的。配套一条发布判据：这版进 minor（v0.6.0），因为调用方经协议拿到的东西变了——回包少三个字段、一次共享少一个二进制、公网可达的前提从工具自己给 URL 变成操作员先开隧道；真正要改代码的是按回包 user/secret 拼 curl 的调用方，在这一版读到 undefined。"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-20T11:32:15
+  kind: decision
+  summary: "共享回包带上操作员那条隧道的公网地址（publicUrl）：工具只读现成状态、不开隧道；隧道没开就点名 SSH 转发与请操作员开隧道两条路。远端 agent 拼不出文件地址、自己起隧道那条路就此断掉。"
+  source: "2026-10-20：远端 agent 拿到回包却拼不出文件地址"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-20T11:32:51
+  kind: reversal
+  summary: "翻的是 0.6.0 那条「工具不交出公网主机名」的一半：工具仍然不开隧道、也不把一条自己的隧道交给调用方（持 token 的调用方不能绕过操作员把宿主文件发布出去），但隧道开着时它会把那条已经存在的主机名作为 publicUrl 报出来——读一个现成状态，不新增暴露面。翻掉的另一半是它的推论「回包不提隧道」：远端 agent 拿回包拼不出文件地址，于是自己起了第二条隧道。AGENTS.md 例外清单第二条与 docs/protocol.md 的「工具不再交出公网主机名」按此改口。"
+  source: "2026-10-20：远端 agent 拿到回包却拼不出文件地址"
   affects: [a2a-mcp-bridge]
