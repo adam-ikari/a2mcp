@@ -14,12 +14,13 @@
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:takeover` | 宿主推理 deny/restore 核验，34 项，约 65 秒 | 是 | `takeover probe: all assertions met` |
 | `bun run test:install` | 发布包自包含 + 端到端，52 项（npm 真装那组 4 项在包发到 registry 之前按 `info:` 跳过——包名形态是预留，这一组就是不发不跑） | 是 | `PACKAGE OK` |
+| `bun run test:mcp-call` | 参考客户端 `scripts/mcp-call.py` 核验，6 项（真宿主走一遍 + 一只强制 404 的假服务器验重握手；没有 python3 整段 `info:` 跳过、退 0） | 是 | `MCP-CALL OK` |
 | `bun run test:bootstrap` | 一键脚本的判断核验，47 项，约 9 秒 | 第五组要 | `BOOTSTRAP OK` |
 | `bun run test:scenario` | 端到端场景，8 个叙事 / 41 步，约 45 秒 | 是 | `SCENARIOS: 41 steps, 0 failed` |
 
-统一前置（六个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 不认——它要跑的 `omp install` 与被它装的东西必须是同一个，所以固定用 PATH 上那份。`test:bootstrap` 前五组连真宿主都不起：它用脚本自己造在临时目录里的记账 `omp` stub 和一只记录 argv 的假 `curl`，PATH 上没有真宿主也照样跑，只有最后一组（真宿主）用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2MCP_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主自 18.11.0（18.12.1 上重测仍如此）按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的出网有两支：第五组让桥自己从 GitHub 拉两个二进制，约 46 MB，落点仍是它自己那个临时 `HOME`；第六组真跑一次 `omp install a2mcp`，那是这趟唯一碰 registry 的地方——registry 答不到它整组按 `info:` 跳过，CI 不因网络红。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2mcp-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
+统一前置（七个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 与 `test:mcp-call` 不认——前者要跑的 `omp install` 与被它装的东西必须是同一个，后者起的宿主就是它驱动的那座桥，都固定用 PATH 上那份。`test:mcp-call` 还多一样前置：它跑的是 `python3 scripts/mcp-call.py`，本机没有 `python3` 时整段按 `info:` 跳过、退 0（与 install 的 npm 组、bootstrap 的缺依赖跳过同一条纪律，CI 不因缺可选依赖红）。`test:bootstrap` 前五组连真宿主都不起：它用脚本自己造在临时目录里的记账 `omp` stub 和一只记录 argv 的假 `curl`，PATH 上没有真宿主也照样跑，只有最后一组（真宿主）用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2MCP_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主自 18.11.0（18.12.1 上重测仍如此）按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的出网有两支：第五组让桥自己从 GitHub 拉两个二进制，约 46 MB，落点仍是它自己那个临时 `HOME`；第六组真跑一次 `omp install a2mcp`，那是这趟唯一碰 registry 的地方——registry 答不到它整组按 `info:` 跳过，CI 不因网络红。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2mcp-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
-六个宿主核验、`test:obtain`、`test:bootstrap` 与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。
+七个宿主核验、`test:obtain`、`test:bootstrap` 与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。`test:mcp-call` 那一段依赖 `python3`，`ubuntu-latest` 镜像自带，所以它在 CI 里真跑；换到没有 python3 的机器就按 `info:` 跳过。
 
 ## `test:install` — 发布包自包含核验 + 端到端（52 项）
 
@@ -71,6 +72,14 @@
 安装由 omp 保证，不在这个核验的范围内。
 
 全过 → `PACKAGE OK`；任何一项不过 → `FAIL: <label>` + exit 1。
+
+## `test:mcp-call` — 参考客户端核验（6 项）
+
+**核验 `scripts/mcp-call.py` 真能把桥说的那套握手走下来。** 桥给「能跑代码但不是 MCP 客户端」的调用方发了一个零依赖 Python 3 参考客户端，它替调用方处理会话头、404 重握手、超时与退出码——正是手搓 `mcp_call.py` 最容易写错的两处：会话生命周期和退出码。这个探针就盯这两处。
+
+分两组。A 组起一座真宿主（同 `test:install` 第四组的启动形状，只是用软链装扩展、不跑 `omp install`），拿 `python3` 驱动脚本：`list` 退 0 且打印出桥自己的三个 `xfer_*`（名字从 `src/xfer.ts` 的 `XFER_TOOL_NAMES` 读，不抄第二份）；`call bash` 在本机真跑、把输出打到 stdout、退 0；调一个不存在的工具拿到 `isError` 并退非零；token 写错时退非零且 stderr 点名 401。B 组对一只 `Bun.serve` 假服务器跑——它只在第一次 `tools/call` 上回 404，验客户端会重新握手再重试一次那一条。真会话 24 小时才过期，探针等不起，所以这条自愈路用假服务器单独钉。
+
+前置 `omp` 与 `python3`：本机没有 `python3` 时整段 `info:` 跳过、退 0（与 install 的 npm 组同一条纪律，CI 不因缺可选依赖红）。全过 → `MCP-CALL OK`；任何一项不过 → `FAIL: <label>` + exit 1。
 
 ## `test:bootstrap` — 一键装宿主与扩展的脚本核验（47 项，约 9 秒）
 

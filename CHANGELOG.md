@@ -1,8 +1,19 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.5.2`（2026-10-20，装法与 v0.5.1 相同，这一版纠的是 v0.5.1 文档里的包名主路）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.5.3`（2026-10-20，协议面与装法都与 v0.5.2 相同，这一版给不会说 MCP 的调用方补了一个官方参考客户端）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
+
+## 2026-10-20 — 接入面收成两条路，给不会说 MCP 的调用方一个官方参考客户端
+
+接到桥上的 agent 反复各自手搓一个 `mcp_call.py`。桥没有错——它答 plain JSON、无 SSE，任何会发 HTTP 的程序都打得到。错在握手有状态：`initialize`（不带会话头，`mcp-session-id` 从响应头回）→ `notifications/initialized`（带头、202）→ `tools/list`/`tools/call`（两带头），漏头即 400、会话过期统一 404，每次调用还得自设超时（无 UI 宿主上等审批的工具挂着不返回）。一个被贴进提示词、而不是注册成 MCP 客户端的通用 coding agent，运行时里没有原生 `tools/call`，能跑代码就自己补一段，于是这套握手每次从零重推。
+
+维护者定调两句：有 MCP 能力的客户端不要重复造轮子，直接 `mcp.json` 接；没有的，发一个最小客户端。于是这轮把「两条接入路」在文档里分开写清，给第二条一条官方参考实现。语言定 Python 3 标准库单文件（`urllib`+`json`+`argparse`，零第三方依赖），与 agent 已自发产出的形状同源，mac/linux/CI 镜像里 python3 近乎标配。Go 跨平台二进制讨论过并否掉：那要把交付形态翻成二进制资产矩阵（第二个 obtain 式分发系统）、CI 添一套编译链，而调用方要的是一段能读、能抄、能改的代码，不是一个不透明的可执行文件。
+
+- scripts: 新增 `scripts/mcp-call.py`——`--url`/`--token`（也读 `A2MCP_URL`/`A2MCP_TOKEN`）、`list`、`call <名字> [json]`、`--timeout` 默认 30、`--keep-session`；一个 `Client` 走 initialize→抓响应头 sid→notifications/initialized，遇 404 重握手再重试一次，401 点名 token 不匹配，`isError` 或非零 JSON-RPC error 打到 stderr 并非零退出。它不读本地 `a2mcp.json`（那是宿主侧的，会误导远程用法）。不进 `package.json` 的 `files`（仍 `extensions/`+`src/`），与 bootstrap.sh 同路走 raw URL 交付。
+- test: 新增 `test/mcp-call-probe.ts`（`bun run test:mcp-call`，6 项）——A 组起真宿主驱动脚本验 `list`（三个 `xfer_*` 在列，名字读 `src/xfer.ts` 不抄第二份）、`call bash`、不存在的工具、错 token；B 组对一只第一次 `tools/call` 回 404 的假 `Bun.serve` 验重握手自愈（真会话 24 小时才过期，探针等不起）。缺 `python3` 整段 `info:` 跳过退 0——仓库对 python 零假设、CI 不装 python。
+- docs: 两份 README 加「两条接入路」/「Two ways in」，提示词段补一句「没注册成 MCP 客户端就用这脚本、别自己重推握手」；`docs/protocol.md` 客户端接入时序末尾点明该脚本是这段时序的可执行参考；`docs/testing.md` 加一行、起宿主前置从六个改七个并写明多一条 python3 前置与 info-skip；站点首页卡补两条路与脚本名、链到 `#两条接入路`；开发命令列表两份各加 `bun run test:mcp-call`。
+- 版本位: 协议面没动（同一 Streamable HTTP、同一 token、`tools/list` 照旧），新增的是操作员侧一个官方脚本加一条被文档化的接入路，按 2026-10-18 判据进 patch 位（v0.5.3）。
 
 ## 2026-10-20 — 安装主路回退到 git URL：npm 切出去一天就收回，包名转预留
 
@@ -200,6 +211,15 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.5.3 — 接入面收成两条路，附一个零依赖参考客户端
+
+**这一版对远程调用方经协议拿到的东西一个字没变——同一个 MCP Streamable HTTP、同一个 Bearer token、`tools/list` 照旧；变的在桥外：给「能跑代码但不是 MCP 客户端」的调用方发一个官方参考实现 `scripts/mcp-call.py`（零依赖 Python 3 单文件），并在两份 README、`docs/protocol.md`、站点上把「两条接入路」写清——会说 MCP 的直接 `mcp.json` 接、别造轮子，不会说的取这脚本、别每次重推握手。** 版本位照 2026-10-18 判据进 patch：协议面没动，新增的是操作员侧一个脚本加一条被文档化的接入路。脚本不进 `package.json` 的 `files`（仍 `extensions/`+`src/`），与 bootstrap.sh 同路走 raw URL 交付，tarball 大小不变（65536 B，实测装出来的那份里没有 `scripts/`）。token 不换代，装着 0.5.x 的机器什么都不用动。
+
+- 内容: 见上 2026-10-20 的「接入面收成两条路」一节（新脚本、新探针 `test:mcp-call`、两份 README 的新小节与提示词补句、`docs/protocol.md` 时序末尾的参考指针、`docs/testing.md` 一行与起宿主前置六改七、站点卡、开发命令列表两份各加一行）。
+- 边界: 脚本测到的是「桥答得对、握手序列对」，不是「所有 agent 会照抄」——提示词那段是引导不是强制。Windows 无 `python3` 时脚本跑不起来，那是「既无 MCP 客户端能力、又无 python3」的机器的边界，文档指向 `mcp.json` 原生路，这里不内嵌解释器。探针是起宿主的独立探针（与 `test:install`/`test:bootstrap` 同级），不进 `bun test`，单测计数不动。Go 跨平台二进制方案讨论后否掉（会翻成第二套二进制分发系统 + CI 加编译链）。
+- 回归（发版前重跑的一遍，2026-10-20）: `bun test` 233 项 660 断言全绿；`lint` / `tsc` 干净；`MCP-CALL OK` 6 项（真宿主 + 假 404 服务器两条都过）；`BOOTSTRAP OK` 47 项；`PACKAGE OK`、npm 组如实 info 跳过、tarball 里没有 `scripts/`；站点 `build` + `check` 全过（首页卡新链 `/intro#两条接入路` 锚点在 dist 里核到）。
+- 发版之后核远程路：push 后从公开 git URL 装进临时 HOME（`test:install` 端到端组），`initialize` 回 `serverInfo.version` 0.5.3，一次 `tools/call` 通。〔占位——发布时按当场输出补全〕
 
 ## v0.5.2 — 文档面回到 git URL：包名收回为预留形态
 

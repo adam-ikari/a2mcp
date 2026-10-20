@@ -205,9 +205,25 @@ The remote omp's `mcp.json`:
 
 Once connected, the remote side sees tools like `mcp__omp-host__read` and `mcp__omp-host__bash` and can call them directly.
 
+## Two ways in
+
+What separates them is whether your client already speaks MCP.
+
+**Your client speaks MCP.** Point it at the bridge with the `mcp.json` above and stop there; do not write a client. The host's tools land in your tool list natively, and the handshake, the session header, and the reconnect are the MCP library's job, not yours.
+
+**Your client can run code but is not an MCP client.** A coding agent handed the endpoint as text, a CI job, a script that has to drive `tools/call` itself: take `scripts/mcp-call.py`, a zero-dependency Python 3 reference client, and call the bridge through it instead of re-deriving the handshake each time.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/mcp-call.py -o mcp-call.py
+python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> list
+python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> call bash '{"command":"adb devices"}'
+```
+
+`list` prints each tool with the first line of its description; `call <name> <json>` runs one tool and prints its text output. The exit code is the signal — non-zero on a bad token, a transport error, or a result flagged `isError`. Every call carries a timeout (default 30s, `--timeout` to change), because a tool awaiting approval on a host with no UI hangs instead of erroring. `--url`/`--token` also read `A2MCP_URL`/`A2MCP_TOKEN`. The script is not in the install tarball, only at that raw URL, and it is a reference implementation — adapt it freely rather than treating it as a supported surface.
+
 ## Prompt for the remote agent
 
-A remote agent will call the host's tools as if they were the same-named tools it already knows, and `tools/list` returns the host's registry verbatim — on this machine `edit` is a patch syntax (`[PATH#TAG]` plus `PUT N.=M:`), not `oldString`/`newString`, and a guess gets back `File not found`. Put the block below in its session or system prompt, replacing `<port>`, `<token>` and the tool prefix with the names from your `mcp.json`.
+A remote agent will call the host's tools as if they were the same-named tools it already knows, and `tools/list` returns the host's registry verbatim — on this machine `edit` is a patch syntax (`[PATH#TAG]` plus `PUT N.=M:`), not `oldString`/`newString`, and a guess gets back `File not found`. Put the block below in its session or system prompt, replacing `<port>`, `<token>` and the tool prefix with the names from your `mcp.json`. If that agent is not registered as an MCP client and so has to run the calls itself, have it use `scripts/mcp-call.py` from [Two ways in](#two-ways-in) rather than write the handshake from scratch.
 
 ```text
 You have been given the tools of another machine (the host) through the MCP server omp-host.
@@ -344,6 +360,7 @@ bun run test:approval  # approval-boundary discriminating check, ~95s (needs a l
 bun run test:takeover  # host inference deny/restore against a counting sink, ~60s (needs a local omp)
 bun run test:scenario  # end-to-end scenarios, 8 narratives / 41 steps, ~45s (needs a local omp)
 bun run test:install   # published-package self-containment + a real host over MCP, 52 items (needs a local omp; fetches ~46 MB from GitHub and once installs the package from the registry — that group info-skips while the package is unpublished)
+bun run test:mcp-call  # the reference client scripts/mcp-call.py against a real host + a fake 404 server, 6 checks (needs a local omp and python3; no python3 → the whole probe info-skips, exit 0)
 bun run test:bootstrap # the one-shot installer's decisions, 47 items, ~9s (everything but the last group runs against a recording stub omp and a fake curl; the last group needs a local omp)
 bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`
 ```

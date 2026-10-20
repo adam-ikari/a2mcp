@@ -292,6 +292,8 @@ sequenceDiagram
 
 与宿主 omp 自带 MCP 客户端实测兼容（协议 `2025-11-25`、纯 JSON 响应、initialize 后自动附带会话头）。远端跨机场景用 SSH 转发，见 README「跨机转发」。
 
+这段时序有一份可执行参考：`scripts/mcp-call.py`（零依赖 Python 3，走 raw URL 交付、不在安装 tarball 里）。会走 MCP 的客户端不必用它，直接 `mcp.json` 接入；它给的是「能跑代码、但不是 MCP 客户端」那一侧，把会话头、404 重握手、超时和退出码都落成了代码，细节见 README「两条接入路」。
+
 ## v1 未实现面
 
 resources、prompts、SSE 推送、调用取消、并发/速率限制、OAuth/TLS——完整边界见 README「v1 边界」。

@@ -163,8 +163,8 @@ features:
     details: 机器上已经有 omp，就那一条 omp install 加仓库的 git URL，落的是整棵仓库的检出；包名形态是预留，名字没发到 registry，那条命令今天会停在依赖解析。新机器一条脚本管宿主那一层，扩展仍然按同一条命令装。bootstrap.sh 可以不克隆、从管道进去跑；bootstrap.ps1 也照样不落盘直接跑，2026-10-19 在真 Windows 上跑通第一次（宿主已在的分支），自装宿主并写占位 models.yml 那半还没有真机执行。
     link: /intro#安装
   - title: 接上远程 agent
-    details: 本机 omp 首次启动时广播接口地址并生成 token，抄进远程客户端的 mcp.json 就连上。默认只监听 127.0.0.1，跨机器走 SSH 端口转发。
-    link: /intro
+    details: 本机 omp 首次启动时广播接口地址并生成 token，抄进远程客户端的 mcp.json 就连上。默认只监听 127.0.0.1，跨机器走 SSH 端口转发。接入分两条路：客户端会说 MCP 就直接填 mcp.json，别自己造客户端；不会说 MCP 但能跑代码的（贴进提示词的 agent、CI 任务、自写脚本），取 scripts/mcp-call.py，一个零依赖 Python 3 参考客户端，握手、会话头、404 重连和退出码都写好了，从 raw URL 拿，不在安装 tarball 里。
+    link: /intro#两条接入路
   - title: 与 computer use 的区别
     details: computer use 让模型看屏幕猜坐标去点按；本桥的请求直接带着工具名和参数，执行走本机工具自己的实现。推理也在调用方的模型里做。
     link: /computer-use

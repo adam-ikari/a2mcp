@@ -172,9 +172,25 @@ a2mcp listening on http://127.0.0.1:<port> (token <前6字符>…)
 
 连上后远程侧会看到 `mcp__omp-host__read`、`mcp__omp-host__bash` 之类的工具，直接调用即可。
 
+## 两条接入路
+
+分开两条路的，是你的客户端会不会说 MCP。
+
+**客户端会说 MCP。** 用上面那份 `mcp.json` 接上桥就够了，不要再写一个客户端。宿主的工具原生进你的工具列表，握手、会话头、重连都归 MCP 库管，不归你。
+
+**客户端不会说 MCP，但能跑代码。** 一段被贴进提示词的通用 coding agent、一个 CI 任务、一段非要自己走 `tools/call` 的脚本，取 `scripts/mcp-call.py`，零依赖的 Python 3 参考客户端，经它调桥，不必每次重新推一遍握手。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/mcp-call.py -o mcp-call.py
+python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> list
+python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> call bash '{"command":"adb devices"}'
+```
+
+`list` 逐个打印工具名和它描述的第一行；`call <名字> <json>` 调一个工具、把文本结果打到 stdout。退出码就是判据，token 不对、传输出错、结果被标了 `isError`，都是非零。每次调用自带超时（默认 30 秒，`--timeout` 改），因为无 UI 的宿主上等审批的工具是挂着不报错。`--url`/`--token` 也读 `A2MCP_URL`/`A2MCP_TOKEN`。脚本不在安装 tarball 里，只有这个 raw URL；它是参考实现，随便改，不当受支持的接口看待。
+
 ## 给远程 agent 的提示词
 
-远程 agent 会拿宿主的工具当自己熟悉的同名工具来调，而 `tools/list` 回的是宿主注册表逐字——这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），不是 `oldString`/`newString`，猜错换来的是 `File not found`。把下面这段放进它的会话或系统提示，`<port>`、`<token>` 与工具前缀按 `mcp.json` 里的名字替换。
+远程 agent 会拿宿主的工具当自己熟悉的同名工具来调，而 `tools/list` 回的是宿主注册表逐字——这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），不是 `oldString`/`newString`，猜错换来的是 `File not found`。把下面这段放进它的会话或系统提示，`<port>`、`<token>` 与工具前缀按 `mcp.json` 里的名字替换。若那个 agent 没被注册成 MCP 客户端、得自己发调用，让它用「两条接入路」里的 `scripts/mcp-call.py`，别从零写握手。
 
 ```text
 你通过 MCP 服务 omp-host 拿到了另一台机器（下称宿主）的工具。
@@ -310,6 +326,7 @@ bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp�
 bun run test:takeover  # 宿主推理 deny/restore 对一个计数 sink 实测，约 60 秒（需本机 omp）
 bun run test:scenario  # 端到端场景，8 个叙事 / 41 步，约 45 秒（需本机 omp）
 bun run test:install   # 发布包自包含 + 真实宿主走 MCP，52 项（需本机 omp；会向 GitHub 拉约 46 MB，还从 registry 真装一次包——包没发上 registry 之前那一组按 info 跳过）
+bun run test:mcp-call  # 参考客户端 scripts/mcp-call.py 打真实宿主 + 一只强制 404 的假服务器，6 项（需本机 omp 和 python3；没有 python3 整段按 info 跳过、退 0）
 bun run test:bootstrap # 一键脚本的判断核验，47 项，约 9 秒（除最后一组都用自制的记账 stub omp 加一只记录 argv 的假 curl；最后一组需本机 omp）
 bun run website        # 文档站（VitePress）本地预览，端口见输出（5173 起，被占则顺延）；首次先 cd website && bun install
 ```
