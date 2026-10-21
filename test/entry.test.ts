@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry, type ExtensionAPI, type ExtensionContext, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent";
 import a2mcpExtension from "../extensions/a2mcp.ts";
+import { auditLogPath } from "../src/audit.ts";
 import { configPath } from "../src/config.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "a2mcp-entry-"));
@@ -122,7 +123,7 @@ const texts = (r: Runner) => r.notes.map((n) => n.text).join("\n");
 
 /** Every audit record on disk, parsed. The log spans the whole file, tests included. */
 function auditRecords(): Array<Record<string, unknown>> {
-	const file = join(dir, "audit.log");
+	const file = auditLogPath();
 	return (existsSync(file) ? readFileSync(file, "utf8") : "")
 		.trim()
 		.split("\n")

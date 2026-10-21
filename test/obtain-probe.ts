@@ -61,7 +61,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { auditStart } from "../src/audit.ts";
+import { auditLogPath, auditStart } from "../src/audit.ts";
 import { pinnedUrl, pinsFor, readZipEntry, resolveBinary, targetKey } from "../src/obtain.ts";
 import { XFER_ROUTE } from "../src/server.ts";
 import { createXfer } from "../src/xfer.ts";
@@ -84,8 +84,9 @@ const sha256Of = (b: Buffer): string => createHash("sha256").update(b).digest("h
 const work = await mkdtemp(join(tmpdir(), "a2mcp-obtain-probe-"));
 const binDir = process.env.A2MCP_OBTAIN_TARGET ?? join(work, "bin");
 const ledger = join(work, "installs.json");
-const auditFile = join(work, "audit.log");
-process.env.A2MCP_AUDIT = auditFile;
+const auditBase = join(work, "audit.log");
+const auditFile = auditLogPath({ A2MCP_AUDIT: auditBase });
+process.env.A2MCP_AUDIT = auditBase;
 
 // An empty PATH is the point: nothing on this machine may satisfy the lookup, or the
 // probe reports the pinned download works while it never ran.

@@ -43,13 +43,17 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { auditLogPath } from "../src/audit.ts";
 import { linkExtension } from "./harness.ts";
 
 const TOKEN = "takeover-probe-token-0123456789abcdef";
 const tmp = mkdtempSync("/tmp/a2mcp-takeover-XXXXXX");
 const agentDir = join(tmp, ".omp", "agent");
 const cfgPath = join(agentDir, "a2mcp.json");
-const auditPath = join(agentDir, "a2mcp.log");
+// The base name goes into the env; the bridge dates it, and the probe reads the
+// dated file.
+const auditBase = join(agentDir, "a2mcp.log");
+const auditPath = auditLogPath({ A2MCP_AUDIT: auditBase });
 
 const t0 = Date.now();
 const stage = (msg: string) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);
@@ -173,7 +177,7 @@ function startHost(): Host {
 	const h: Host = { child: null as unknown as ChildProcess, out: "", err: "" };
 	h.child = spawn(process.env.OMP_BIN ?? "omp", ["--mode", "rpc"], {
 		cwd: tmp,
-		env: { ...process.env, HOME: tmp, A2MCP_CONFIG: cfgPath, A2MCP_AUDIT: auditPath },
+		env: { ...process.env, HOME: tmp, A2MCP_CONFIG: cfgPath, A2MCP_AUDIT: auditBase },
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 	h.child.stdout?.on("data", (d) => (h.out += d));
@@ -530,7 +534,7 @@ try {
 	await kill(host, "-main");
 	host = null;
 	writeHome(NATIVE_ROW);
-	rmSync(auditPath, { force: true });
+	rmSync(auditBase, { force: true });
 	const h2 = startHost();
 	const noticed = await waitFor(
 		() => h2.err.includes("pi-native") || h2.out.includes("pi-native") || h2.err.includes("failed to start"),

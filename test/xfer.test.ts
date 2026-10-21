@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { auditStart } from "../src/audit.ts";
+import { auditLogPath, auditStart } from "../src/audit.ts";
 import type { resolveBinary } from "../src/obtain.ts";
 import { XFER_ROUTE } from "../src/server.ts";
 import {
@@ -31,8 +31,9 @@ import {
 
 const dir = mkdtempSync(join(tmpdir(), "a2mcp-xfer-"));
 const stubDir = mkdtempSync(join(tmpdir(), "a2mcp-stub-"));
-const auditFile = join(dir, "audit.log");
-process.env.A2MCP_AUDIT = auditFile;
+const auditBase = join(dir, "audit.log");
+const auditFile = auditLogPath({ A2MCP_AUDIT: auditBase });
+process.env.A2MCP_AUDIT = auditBase;
 
 /** The origin the bridge tells this module it is on — the getter's answer in a test. */
 const BRIDGE_ORIGIN = "http://127.0.0.1:3456";

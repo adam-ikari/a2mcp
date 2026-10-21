@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { auditLogPath } from "../src/audit.ts";
 import { linkExtension, seedModels } from "./harness.ts";
 
 const _REPO = resolve(process.env.REPO ?? join(import.meta.dir, ".."));
@@ -17,7 +18,10 @@ const tmp = mkdtempSync(join(tmpdir(), "a2mcp-harden-"));
 const agentDir = join(tmp, ".omp", "agent");
 const _extDir = join(agentDir, "extensions");
 const cfgPath = join(agentDir, "a2mcp.json");
-const auditPath = join(agentDir, "a2mcp.log");
+// The base name goes into the env; the bridge dates it, and the probe reads the
+// dated file.
+const auditBase = join(agentDir, "a2mcp.log");
+const auditPath = auditLogPath({ A2MCP_AUDIT: auditBase });
 const outLog = join(tmp, "omp.out.log");
 const errLog = join(tmp, "omp.err.log");
 const dataFile = join(tmp, "payload.txt");
@@ -249,24 +253,22 @@ try {
 	check(!redacted.includes(secret.slice(0, 60)), "the nested payload itself never reaches the audit log");
 
 	/**
-	 * 9b. Audit rotation. `MAX_LOG_BYTES` (512 KB) renames the log to `<path>.1`,
-	 * and nothing in this repo had ever crossed that line. Two properties, and they
-	 * are different ones:
+	 * 9b. Audit day files. The log is one file per day, and the bridge sets no
+	 * bounds on it: no size cap, no file count, nothing deleted. Three properties,
+	 * and they are different ones:
 	 *
-	 * - **A rotation moves the ledger, it does not shrink it.** Every record written
-	 *   must still be reachable in one of the two files. Records that vanish are the
-	 *   failure, because the audit is the only trace this bridge keeps of itself.
-	 *   Only true of ONE crossing: the second rotation overwrites `<path>.1`, so
-	 *   older records do disappear eventually. That half is measured in
-	 *   test/audit.test.ts, where it takes a second to drive instead of thousands of
-	 *   host calls.
-	 * - **The live file is not a complete ledger on its own.** Pairing and hang
-	 *   detection both need `<path>.1` too, so a caller that reads only
-	 *   `a2mcp.log` sees `done` records whose `start` sits in the other file. The
-	 *   approval probe reads an unpaired `start` as a hang, so pairing and hang
-	 *   detection both have to look at both files. That is reported here and
-	 *   documented in docs/protocol.md rather than asserted, because the bridge writes
-	 *   the two files and never reads them.
+	 * - **A day is a file that grows.** Every record written today is in today's
+	 *   file, and that file grows past whatever the old size cap used to be. The
+	 *   audit is the only trace this bridge keeps of itself, so a record that
+	 *   vanishes is the failure.
+	 * - **The bridge deletes nothing.** A file for another day is still there
+	 *   afterwards: how long evidence is kept is the administrator's call, not
+	 *   the bridge's.
+	 * - **The live file is not a complete ledger on its own.** A call that spans
+	 *   midnight has its `start` in yesterday's file and its `done` in today's,
+	 *   so pairing and hang detection both have to look at more than one file.
+	 *   That is reported here and documented in docs/protocol.md rather than
+	 *   asserted, because the bridge writes the files and never reads them.
 	 */
 	const parse = (l: string): { id?: number; phase?: string } | null => {
 		try {
@@ -279,11 +281,12 @@ try {
 	// than 120 chars into `<len:N,sha256:...>`, about 30 bytes, which is why an
 	// earlier version of this burst needed ~1.2k calls to cross 512 KB. Ten values
 	// under that leaf cap pass through, serializeArgs truncates the whole args at
-	// 1024 chars, and each record lands at ~1.1 KB — the cap then takes ~240 calls.
+	// 1024 chars, and each record lands at ~1.1 KB — so ~300 calls pass the size
+	// the old cap rotated at.
 	const fat = Object.fromEntries(Array.from({ length: 10 }, (_, k) => [`f${k}`, "y".repeat(110)]));
 	// Records already in the log before the burst, so the burst can be checked as a
 	// volume: `tools/call` appends a start and a done, so N calls must add 2N records
-	// somewhere across the two files.
+	// to today's file.
 	//
 	// Not by id. The audit `id` is a per-call UUID (src/bridge.ts) and the JSON-RPC id
 	// is never written, so matching the burst's JSON-RPC ids against the log would be
@@ -297,10 +300,16 @@ try {
 		}
 		return recs;
 	};
+	// A file for another day, put there by hand: the bridge must leave it alone.
+	// Deleting other days' files is exactly the "retention is the administrator's
+	// call" promise, and it is the one promise a bridge can break without anyone
+	// noticing until the evidence is needed.
+	const otherDay = auditPath.replace(/\d{4}-\d{2}-\d{2}\.log$/, "2020-01-01.log");
+	writeFileSync(otherDay, '{"id":"another-day"}\n');
 	const before = countRecords(auditPath).length;
 	let calls = 0;
-	let rotated = false;
-	for (let i = 0; i < 1500 && !rotated; i++) {
+	const BURST = 300;
+	for (let i = 0; i < BURST; i++) {
 		await post(
 			{
 				jsonrpc: "2.0",
@@ -311,37 +320,32 @@ try {
 			{ ...AUTH, "mcp-session-id": sid1 },
 		);
 		calls++;
-		rotated = existsSync(`${auditPath}.1`);
 	}
 	await Bun.sleep(500); // appends are async
-	const rolled = rotated ? countRecords(`${auditPath}.1`) : [];
-	// Re-read: after a rotation the live path is a new file holding only the records
-	// appended since the rename, so the snapshot taken in section 9 is stale.
 	const live = countRecords(auditPath);
-	check(rotated, "the audit log rotated once it passed 512 KB");
 	check(
-		rolled.length + live.length >= before + 2 * calls,
-		`no record vanished across the rotation (${before} before + ${2 * calls} from ${calls} calls, ${rolled.length} rolled + ${live.length} live)`,
+		live.length >= before + 2 * calls,
+		`every record is in today's file (${before} before + ${2 * calls} from ${calls} calls, ${live.length} there)`,
 	);
+	// The size the old code rotated at: a day is a file that grows, and the bridge
+	// does not decide what to keep.
+	check(statSync(auditPath).size > 512 * 1024, "the day file grew past the size the old cap rotated at");
+	check(existsSync(otherDay), "the bridge deleted nothing");
+	check(readFileSync(otherDay, "utf8").includes("another-day"), "another day's file is untouched");
 	const liveStartIds = new Set(live.filter((rec) => rec.phase === "start").map((rec) => String(rec.id)));
 	const orphansInLive = live.filter((rec) => rec.phase === "done" && !liveStartIds.has(String(rec.id))).length;
-	const rolledStartIds = new Set(rolled.filter((rec) => rec.phase === "start").map((rec) => String(rec.id)));
 	check(
-		live
-			.filter((rec) => rec.phase === "done")
-			.every((rec) => liveStartIds.has(String(rec.id)) || rolledStartIds.has(String(rec.id))),
-		`every done pairs with a start across the two files (${orphansInLive} of them pair only through the rotated file)`,
+		live.filter((rec) => rec.phase === "done").every((rec) => liveStartIds.has(String(rec.id))),
+		`every done pairs with a start inside the day (${orphansInLive} of them would pair across midnight)`,
 	);
 	check(
 		// Three phases, not two: a call has `start` and `done`, and the bridge's
 		// own doings are `event` — one record each, with no start to pair them
 		// with. The list is the shape, and the shape is what "intact" means here.
-		rolled.every((rec) => rec.phase === "start" || rec.phase === "done" || rec.phase === "event"),
-		"the rotated file is intact JSONL",
+		live.every((rec) => rec.phase === "start" || rec.phase === "done" || rec.phase === "event"),
+		"the day file is intact JSONL",
 	);
-	if (orphansInLive > 0) {
-		console.log(`      note: ${orphansInLive} done record(s) in the live log have their start only in .1`);
-	}
+	rmSync(otherDay, { force: true });
 
 	// 10. Authenticated DELETE terminates the session (destructive; uses sid2).
 	r = await fetch(base, { method: "DELETE", headers: { ...AUTH, "mcp-session-id": sid2 } });

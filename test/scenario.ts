@@ -37,6 +37,7 @@ import { existsSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync 
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { auditLogPath } from "../src/audit.ts";
 import { linkExtension, seedModels } from "./harness.ts";
 
 const OMP = process.env.OMP_BIN ?? "omp";
@@ -116,7 +117,8 @@ async function boot(label: string, opts: BootOpts = {}): Promise<Host> {
 	const home = join(tmp, label);
 	const agentDir = join(home, ".omp", "agent");
 	const cfgPath = join(agentDir, "a2mcp.json");
-	const auditPath = join(agentDir, "a2mcp.log");
+	const auditBase = join(agentDir, "a2mcp.log");
+	const auditPath = auditLogPath({ A2MCP_AUDIT: auditBase });
 	const outLog = join(home, "omp.out.log");
 	const errLog = join(home, "omp.err.log");
 
@@ -127,7 +129,7 @@ async function boot(label: string, opts: BootOpts = {}): Promise<Host> {
 	writeFileSync(cfgPath, JSON.stringify(opts.config ?? { port, host: "127.0.0.1" }, null, 2));
 
 	const child = spawn(OMP, ["--mode", "rpc", ...(opts.argv ?? [])], {
-		env: { ...process.env, HOME: home, A2MCP_CONFIG: cfgPath, A2MCP_AUDIT: auditPath },
+		env: { ...process.env, HOME: home, A2MCP_CONFIG: cfgPath, A2MCP_AUDIT: auditBase },
 		stdio: ["pipe", openSync(outLog, "w"), openSync(errLog, "w")],
 	});
 	const read = (f: string) => {

@@ -68,6 +68,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { auditLogPath } from "../src/audit.ts";
 import { pinsFor, targetKey } from "../src/obtain.ts";
 import { XFER_ROUTE } from "../src/server.ts";
 import { XFER_TOOL_NAMES } from "../src/xfer.ts";
@@ -491,7 +492,8 @@ try {
 // reddens this group even when the network is the thing that stopped the share.
 const xferHome = mkdtempSync(join(tmpdir(), "install-xfer-"));
 const xferAgent = join(xferHome, ".omp", "agent");
-const xferAudit = join(xferHome, "xfer-audit.log");
+const xferAuditBase = join(xferHome, "xfer-audit.log");
+const xferAudit = auditLogPath({ A2MCP_AUDIT: xferAuditBase });
 const xferBinDir = join(xferHome, ".local", "bin");
 const xferShareDir = join(xferHome, "shared");
 console.log(`\n--- a host with nothing to answer for the file server ---`);
@@ -528,7 +530,7 @@ const realDufsBefore = existsSync(join(process.env.HOME ?? "", ".local", "bin", 
 const xferHost = answeredFor
 	? null
 	: spawn(ompReal, ["--mode", "rpc"], {
-			env: { ...process.env, HOME: xferHome, PATH: tightPath, A2MCP_AUDIT: xferAudit },
+			env: { ...process.env, HOME: xferHome, PATH: tightPath, A2MCP_AUDIT: xferAuditBase },
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 let xferOut = "";

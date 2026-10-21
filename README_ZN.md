@@ -281,7 +281,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 - **`POST /host-llm` 是桥有自己意见的那条路**：直接伸手进宿主会话（换注册表行、override 设置、替换进程 `fetch`），代价是审计（`tool: "host_llm"`）与文档；它限制宿主自己的推理，只听持 token 的人。
 - 默认仅回环监听；真要对外，防火墙自己负责。
 - **会话强制**：除 `initialize` 外所有消息必须带 `Mcp-Session-Id`（缺失 400，未知或空闲超 24h 404）；上限 64 个，淘汰最久未用，每次命中刷新计时。
-- **审计日志**：每次远程 `tools/call` 写发起、完成两条 JSONL，按桥内生成的 UUID `id` 配对，`sid` 把调用归因到客户端会话；这个 `id` 同时是宿主 transcript 里那次调用的 `toolCallId`——一次调用的记录分两半：参数正文在宿主那份 transcript（`~/.omp/agent/sessions/`）里、那边从没有结果，审计日志这边有结果与归因、却把长参数折成哈希，两边靠这个 id 对上；失败的那条 `done` 另带一个 `error` 字段（工具自己的消息前 200 字符，只在 `isError: true` 时有，回显出来的 token 已抹成 `<token>`）——结果这一半全世界只有这份日志有；一次调用写 `start` 与 `done` 两条，桥自己做的事（共享、隧道、开关、实例）各写一条 `event`，于是 `phase == "done"` 过滤出来的就是完成的那次调用；`/a2mcp incognito` 开着的时候整份日志静默（开关是操作员的，远程够不到，开关自己那两行写在静默窗口外面，所以空白说得清）；桥自己的一段也在里面（`tool: "bridge"`，绑定一条、退出一条），于是隧道或共享记录里那个 port 能对着一个还活着的实例读，`start` 没有配对的 `stop` 就是那个端点跟着宿主一起没了；落 `~/.omp/agent/a2mcp.log`，`0600`，超 512KB 轮转保留一代。**那一代是桥保证的下限**；多留多少是管理员的事，不是桥的事——在轮转前把文件拷走，或让 logrotate 接管这条路径（桥每次追加都重开文件，copytruncate 是安全的）。参数里的长字符串只记 `<len, sha256 前 8 位>`，不分嵌套层数——文件正文落在第三层，只走两层的脱敏盖不住。写入在进程内串行：并发轮转会互相覆盖 `.1`，这是重跑六轮量出来的代价。`start` 排在执行前、`done` 排在响应前：拿到 200 就意味着那行已在盘上。未鉴权的尝试一条都不进这份日志——写审计会驱动轮转，这个杠杆不该交给还在猜 token 的人，它们走宿主 stderr。只有 `start` 没有 `done` 等于调用挂起（典型：无 UI 的审批），读它注意两处：轮转可能把一对拆进两个文件，且只留一代，要趁还在的时候读。完整形状与数字在 `docs/protocol.md` 与 `docs/testing.md`。
+- **审计日志**：每次远程 `tools/call` 写发起、完成两条 JSONL，按桥内生成的 UUID `id` 配对，`sid` 把调用归因到客户端会话；这个 `id` 同时是宿主 transcript 里那次调用的 `toolCallId`——一次调用的记录分两半：参数正文在宿主那份 transcript（`~/.omp/agent/sessions/`）里、那边从没有结果，审计日志这边有结果与归因、却把长参数折成哈希，两边靠这个 id 对上；失败的那条 `done` 另带一个 `error` 字段（工具自己的消息前 200 字符，只在 `isError: true` 时有，回显出来的 token 已抹成 `<token>`）——结果这一半全世界只有这份日志有；一次调用写 `start` 与 `done` 两条，桥自己做的事（共享、隧道、开关、实例）各写一条 `event`，于是 `phase == "done"` 过滤出来的就是完成的那次调用；`/a2mcp incognito` 开着的时候整份日志静默（开关是操作员的，远程够不到，开关自己那两行写在静默窗口外面，所以空白说得清）；桥自己的一段也在里面（`tool: "bridge"`，绑定一条、退出一条），于是隧道或共享记录里那个 port 能对着一个还活着的实例读，`start` 没有配对的 `stop` 就是那个端点跟着宿主一起没了；落 `~/.omp/agent/a2mcp.<UTC 日期>.log`，一天一个文件，`0600`。**桥不设任何上下限**：没有大小上限、没有文件数上限、什么都不删——留多久是管理员的事，桥只负责把每天的记录写在该找得到的地方（logrotate 与「要的时候先拷走」都认这个形状）。跨午夜的那次调用，一对记录分在两个文件里，配对时按 `id` 跨文件找。参数里的长字符串只记 `<len, sha256 前 8 位>`，不分嵌套层数——文件正文落在第三层，只走两层的脱敏盖不住。写入在进程内串行：一次一行，两条记录不会在行内交错。`start` 排在执行前、`done` 排在响应前：拿到 200 就意味着那行已在盘上。未鉴权的尝试一条都不进这份日志，它们走宿主 stderr。只有 `start` 没有 `done` 等于调用挂起（典型：无 UI 的审批）；跨午夜的那次调用，一对记录分在两个文件里，按 `id` 跨文件读。完整形状与数字在 `docs/protocol.md` 与 `docs/testing.md`。
 - 端口被占用时回退到随机端口并告警，远程 `mcp.json` 要同步改。
 
 与 computer use（看屏幕猜坐标点按）的差别见 [docs/computer-use.md](docs/computer-use.md)。
@@ -321,11 +321,11 @@ bun install
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
-bun test              # 单测：test/*.test.ts（261 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
+bun test              # 单测：test/*.test.ts（276 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
 bun run test:obtain   # 钉死的两个二进制：本机这一行真下载、钉表十个 asset 全 HEAD、Windows 那两行按字节读，41 项（不需要本机 omp；只往它自己那个 /tmp 目录里写）
 bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
-bun run test:hardening # 真实宿主加固核验，34 项（需本机 omp）
+bun run test:hardening # 真实宿主加固核验，36 项（需本机 omp）
 bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp）
 bun run test:takeover  # 宿主推理 deny/restore 对一个计数 sink 实测，约 60 秒（需本机 omp）
 bun run test:scenario  # 端到端场景，8 个叙事 / 41 步，约 45 秒（需本机 omp）

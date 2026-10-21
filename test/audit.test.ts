@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	auditDone,
@@ -13,72 +13,44 @@ import {
 } from "../src/audit.ts";
 
 /**
- * Rotation retention.
+ * Day files.
  *
- * docs/protocol.md tells callers to read the audit log for a `start` with no
- * `done` as the hang signal, and warns that the evidence ages out. Both halves
- * come from `rename(file, `${file}.1`)` overwriting the previous `.1`: one
- * generation is kept, so a record survives at most two rotations.
- *
- * Proving that against a live host is expensive (test/hardening.ts has to push a
- * couple of hundred deliberately fattened calls through a real host to cross 512 KB
- * once, and the pair-splitting it checks there is a different fact from retention).
- * Here the log is the only thing under test.
+ * The log is one file per day and the bridge sets no bounds on it: no size cap, no
+ * file count, nothing deleted. How long evidence is kept is the administrator's
+ * call — the bridge's part is to put each day's records where they can be found
+ * and kept, in a shape logrotate and "copy it out before you need it" both expect.
  */
-describe("audit rotation retention", () => {
-	const dir = `/tmp/a2mcp-audit-retention-${process.pid}`;
-	const file = join(dir, "audit.log");
-	const rolled = `${file}.1`;
-	const env = { A2MCP_AUDIT: file } as NodeJS.ProcessEnv;
+describe("audit day files", () => {
+	const dir = `/tmp/a2mcp-audit-days-${process.pid}`;
+	const base = join(dir, "audit.log");
+	const env = { A2MCP_AUDIT: base } as NodeJS.ProcessEnv;
+	const fileFor = (at: Date) => auditLogPath(env, at);
+	const today = new Date();
+	const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
 
-	// Values under the 120-char leaf cap survive redaction, and serializeArgs then
-	// truncates the whole args string at 1024 chars, so each record is ~1.1 KB and
-	// one generation holds roughly 475 of them.
-	const fatter: Record<string, string> = {};
-	for (let k = 0; k < 10; k++) fatter[`f${k}`] = "y".repeat(110);
-
-	const has = (needle: string) => [file, rolled].some((p) => existsSync(p) && readFileSync(p, "utf8").includes(needle));
-
-	/**
-	 * Enough pairs to cross the 512 KB cap at least once. The pairs go out back to
-	 * back: `appendLine` hands each line to one process-wide chain, so there is no
-	 * interleaving left to blur the size, and how fast they arrive does not change
-	 * which records survive.
-	 */
-	const phase = async (tag: string, pairs = 300) => {
-		// The last append in the burst is the tail of the chain, so awaiting it says
-		// every record before it has been attempted. This used to poll the two files
-		// until their sizes stopped changing and then sleep another 200 ms "to let
-		// the last few in-flight appends land" — a wait that existed only because the
-		// audit functions returned nothing to await.
-		let last: Promise<void> | undefined;
-		for (let i = 0; i < pairs; i++) {
-			void auditStart(`${tag}-${i}`, "sid", "read", fatter, env);
-			last = auditDone(`${tag}-${i}`, "sid", "read", fatter, false, null, env);
-		}
-		await last;
-	};
-
-	test("a record survives at most one further rotation", async () => {
+	test("a record lands in the file for the day it is stamped with", async () => {
 		rmSync(dir, { recursive: true, force: true });
 		mkdirSync(dir, { recursive: true });
-
-		// 200 records is ~220 KB, well under the cap: the log is a single file and
-		// every record is readable. This is the state a caller greps in.
-		await phase("gen-a", 100);
-		expect(has('"id":"gen-a-0"')).toBe(true);
-
-		await phase("gen-b");
-		await phase("gen-c");
-		await phase("gen-d");
-
-		// 1800 records more, ~2 MB, through a log that keeps one `.1`. The evidence of
-		// a call that never completed therefore has an expiry date: enough later
-		// traffic and it is in neither file.
-		expect(has('"id":"gen-a-0"')).toBe(false);
-		expect(has('"id":"gen-b-0"')).toBe(false);
+		await auditStart("day-yesterday", "sid", "read", { path: "/etc/hostname" }, env, yesterday);
+		await auditDone("day-yesterday", "sid", "read", { path: "/etc/hostname" }, false, null, env, yesterday);
+		await auditStart("day-today", "sid", "read", { path: "/etc/hostname" }, env, today);
+		// The name and the contents cannot disagree: the file is picked from the same
+		// moment the timestamp is stamped.
+		expect(readFileSync(fileFor(yesterday), "utf8")).toContain('"id":"day-yesterday"');
+		expect(readFileSync(fileFor(yesterday), "utf8")).not.toContain('"id":"day-today"');
+		expect(readFileSync(fileFor(today), "utf8")).toContain('"id":"day-today"');
 		rmSync(dir, { recursive: true, force: true });
-	}, 120_000);
+	});
+
+	test("the bridge deletes nothing: an earlier day's file is still there", async () => {
+		rmSync(dir, { recursive: true, force: true });
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(fileFor(yesterday), '{"id":"kept-by-the-administrator"}\n');
+		await auditStart("only-today", "sid", "read", {}, env, today);
+		expect(existsSync(fileFor(yesterday))).toBe(true);
+		expect(readFileSync(fileFor(yesterday), "utf8")).toContain("kept-by-the-administrator");
+		rmSync(dir, { recursive: true, force: true });
+	});
 });
 
 /**
@@ -91,7 +63,8 @@ describe("audit never loses a call", () => {
 	const env = { A2MCP_AUDIT: join(dir, "audit.log") } as NodeJS.ProcessEnv;
 
 	const readRecords = () => {
-		const file = env.A2MCP_AUDIT as string;
+		// The dated file, not the base name: the bridge writes one file per day.
+		const file = auditLogPath(env);
 		if (!existsSync(file)) return [];
 		return readFileSync(file, "utf8")
 			.trim()
@@ -139,7 +112,7 @@ describe("audit never loses a call", () => {
 			expect(returned, `${name} returns the queue tail`).toBeInstanceOf(Promise);
 			await returned;
 		}
-		const logFile = env.A2MCP_AUDIT as string;
+		const logFile = auditLogPath(env);
 		const raw = existsSync(logFile) ? readFileSync(logFile, "utf8") : "";
 		const onDisk = readRecords().map((r) => String(r.id));
 		expect(onDisk).toContain("shape-start");
@@ -262,110 +235,93 @@ describe("audit never loses a call", () => {
 		}
 		expect(unhandled).toEqual([]);
 		expect(auditWriteFailures()).toBeGreaterThanOrEqual(before + 2);
-		expect(printed.some((l) => l.includes("audit record not written") && l.includes(dead.A2MCP_AUDIT as string))).toBe(
-			true,
-		);
+		expect(printed.some((l) => l.includes("audit record not written") && l.includes(auditLogPath(dead)))).toBe(true);
 	});
 });
 
 /**
- * Concurrent writes across the rotation boundary.
+ * Concurrent writes into one day's file.
  *
- * `appendLine` does `stat` then `rename` then `appendFile`, and those three are not
- * one step. Two calls that are in flight together can both read a size over the cap
- * and both rotate, and the second `rename` writes over the `.1` the first one just
- * put the previous generation into. The loss lands on whichever records happened to
- * sit in the current file when the extra rotation fired, written milliseconds
- * earlier, plus the whole generation that was rotated out of the way. The docs
- * promise one retained generation and the pair readable across both files; under
- * this race a call's `start` can be in neither, and a call whose audit line is its
- * only trace — one that does not go through the host's approval gate — can leave
- * no trace at all.
+ * The old rotation was `stat` → `rename` → `appendFile`, three steps that two calls
+ * in flight together could interleave: the second rotation wrote over the `.1` the
+ * first one had just parked the previous generation in, and what vanished was the
+ * record another call wrote milliseconds earlier — the whole trace of the call it
+ * belonged to. That race is gone with the rotation: a day is a file, the file only
+ * grows, and the bridge deletes nothing.
  *
- * The log is primed to just under 512 KB and hit with a burst, so exactly one
- * rotation is needed to hold everything. That is the line the test draws: one
- * rotation keeps every record visible across the two files, any extra rotation has
- * eaten data. Measured on the unsynchronized version over six runs, two outcomes:
- * the worst left one record in each file, 570 of the 572 written being in neither;
- * the mildest left 1 of the 60 burst records. Each extra rotation carries away
- * whatever file it fired on, records written milliseconds earlier included.
+ * The test draws that line: a burst that would have crossed the old 512 KB cap,
+ * written all at once, and every record is still readable afterwards, in one file.
  */
-describe("concurrent writes across the rotation boundary", () => {
+describe("concurrent writes into one day's file", () => {
 	const dir = `/tmp/a2mcp-audit-race-${process.pid}`;
-	const file = join(dir, "audit.log");
-	const rolled = `${file}.1`;
-	const env = { A2MCP_AUDIT: file } as NodeJS.ProcessEnv;
+	const base = join(dir, "audit.log");
+	const env = { A2MCP_AUDIT: base } as NodeJS.ProcessEnv;
+	const file = auditLogPath(env);
 
-	// The cap in src/audit.ts, and the padding to sit just under it.
-	const MAX_LOG_BYTES = 512 * 1024;
-	const BURST = 60;
+	// The cap the old code rotated at. The file is expected to pass it now.
+	const OLD_CAP = 512 * 1024;
+	const BURST = 500;
 
 	// ~1.15 KB per record: below the 120-char leaf cap so redaction leaves it alone,
 	// below the 1024-char args cut so nothing is truncated.
 	const fatter: Record<string, string> = {};
 	for (let k = 0; k < 10; k++) fatter[`f${k}`] = "y".repeat(110);
 
-	const primeLine = (id: string) =>
-		`${JSON.stringify({ ts: "0", id, sid: "prime", phase: "start", tool: "read", args: "p".repeat(940) })}\n`;
-
 	const idsOnDisk = () => {
 		const out = new Set<string>();
-		for (const p of [file, rolled]) {
-			if (!existsSync(p)) continue;
-			for (const line of readFileSync(p, "utf8").split("\n").filter(Boolean)) {
-				try {
-					out.add(JSON.parse(line).id as string);
-				} catch {
-					/* a torn line is its own failure; the count below catches it */
-				}
+		if (!existsSync(file)) return out;
+		for (const line of readFileSync(file, "utf8").split("\n").filter(Boolean)) {
+			try {
+				out.add(JSON.parse(line).id as string);
+			} catch {
+				/* a torn line is its own failure; the count below catches it */
 			}
 		}
 		return out;
 	};
 
-	test("one rotation, and every record written is still readable", async () => {
+	test("a burst past the old cap keeps every record, in one file", async () => {
 		rmSync(dir, { recursive: true, force: true });
 		mkdirSync(dir, { recursive: true });
 
-		let prime = "";
-		let primeCount = 0;
-		while (prime.length + primeLine(`prime-${primeCount}`).length < MAX_LOG_BYTES - 200) {
-			prime += primeLine(`prime-${primeCount++}`);
-		}
-		writeFileSync(file, prime);
-		const headroom = MAX_LOG_BYTES - statSync(file).size;
-		// The burst has to overflow the headroom, otherwise nothing rotates and the
-		// test proves only that an untouched log is fine.
-		expect(BURST * 1150).toBeGreaterThan(headroom);
-
 		// The last append of the burst is the tail of the chain. Awaiting it — rather
-		// than watching both files stop changing and then sleeping 300 ms for "the
+		// than watching the file stop changing and then sleeping 300 ms for "the
 		// stragglers" — is what the burst was actually waiting for.
-		let last: Promise<void> | undefined;
-		for (let i = 0; i < BURST; i++) last = auditStart(`race-${i}`, "sid", "read", fatter, env);
-		await last;
+		const written: Promise<void>[] = [];
+		for (let i = 0; i < BURST; i++) {
+			written.push(auditStart(`race-${i}`, "sid", "read", fatter, env));
+		}
+		await Promise.all(written);
 
 		const seen = idsOnDisk();
-		const missing = [
-			...Array.from({ length: primeCount }, (_, i) => `prime-${i}`),
-			...Array.from({ length: BURST }, (_, i) => `race-${i}`),
-		].filter((id) => !seen.has(id));
+		const missing = Array.from({ length: BURST }, (_, i) => `race-${i}`).filter((id) => !seen.has(id));
 
-		// Every record survives: the burst crosses the cap once, the previous
-		// generation lands in `.1`, and nothing overwrites it.
+		// Every record survives, and the day is one file that grew past the size the
+		// old cap rotated at: no generation was parked, none was overwritten, and
+		// nothing was deleted.
 		expect(missing.slice(0, 5)).toEqual([]);
 		expect(missing.length).toBe(0);
+		expect(statSync(file).size).toBeGreaterThan(OLD_CAP);
+		expect(readdirSync(dir)).toEqual([file.slice(dir.length + 1)]);
 
 		rmSync(dir, { recursive: true, force: true });
 	}, 120_000);
 });
 
 describe("auditLogPath", () => {
-	test("the default is the filename the docs promise", () => {
+	test("the file is named for its day, in front of the extension", () => {
 		// Every test above passes $A2MCP_AUDIT, so the default name is asserted nowhere
 		// but here — and a probe seeding the wrong file would still be green, because the
 		// env var is what it reads. Same reason test/obtain.test.ts pins the ledger name.
-		expect(auditLogPath({})).toMatch(/(^|\/)a2mcp\.log$/);
-		expect(auditLogPath({ A2MCP_AUDIT: "/elsewhere/a.log" })).toBe("/elsewhere/a.log");
+		expect(auditLogPath({})).toMatch(/(^|\/)a2mcp\.\d{4}-\d{2}-\d{2}\.log$/);
+		expect(auditLogPath({ A2MCP_AUDIT: "/elsewhere/a.log" })).toMatch(/^\/elsewhere\/a\.\d{4}-\d{2}-\d{2}\.log$/);
+	});
+
+	test("the day is the one the record is stamped with", () => {
+		// The name and the contents cannot disagree: the file is picked from the same
+		// moment the timestamp is stamped. A record at 23:59:59.999Z and one at
+		// 00:00:00.001Z are a second apart and a day apart.
+		expect(auditLogPath({}, new Date("2026-10-21T23:59:59.999Z"))).toMatch(/2026-10-21.log$/);
+		expect(auditLogPath({}, new Date("2026-10-22T00:00:00.001Z"))).toMatch(/2026-10-22.log$/);
 	});
 });

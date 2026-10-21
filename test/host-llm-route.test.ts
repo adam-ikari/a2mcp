@@ -10,7 +10,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { auditStart } from "../src/audit.ts";
+import { auditLogPath, auditStart } from "../src/audit.ts";
 import type { BridgeDeps, TakeoverDeps } from "../src/server.ts";
 import { startServer } from "../src/server.ts";
 
@@ -18,11 +18,12 @@ const TOKEN = "hostllm-test-token";
 const AUTH = { authorization: `Bearer ${TOKEN}` };
 
 const dir = `/tmp/a2mcp-hostllm-route-${process.pid}`;
-const auditFile = join(dir, "audit.log");
+const auditBase = join(dir, "audit.log");
+const auditFile = auditLogPath({ A2MCP_AUDIT: auditBase });
 
 rmSync(dir, { recursive: true, force: true });
 mkdirSync(dir, { recursive: true });
-process.env.A2MCP_AUDIT = auditFile;
+process.env.A2MCP_AUDIT = auditBase;
 
 type Call = { enabled: boolean };
 

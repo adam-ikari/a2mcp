@@ -232,7 +232,7 @@ describe("audit log", () => {
 	test("one call cannot own the log: args are bounded at 1 KB", async () => {
 		// Redaction folds long *values*, but a call with many ordinary-length values is
 		// still a wall of text. The cap is what keeps a record near-fixed size, which in
-		// turn is what makes the 512 KB rotation window mean something.
+		// turn is what makes the day's file predictable.
 		const args = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`f${i}`, "y".repeat(110)]));
 		const call = newCall();
 		await call("read", args, "sess-cap");

@@ -24,7 +24,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateRawSync } from "node:zlib";
 
-import { auditStart } from "../src/audit.ts";
+import { auditLogPath, auditStart } from "../src/audit.ts";
 import {
 	defaultBinDir,
 	type ObtainDeps,
@@ -37,8 +37,9 @@ import {
 } from "../src/obtain.ts";
 
 const work = mkdtempSync(join(tmpdir(), "a2mcp-obtain-"));
-const auditFile = join(work, "audit.log");
-process.env.A2MCP_AUDIT = auditFile;
+const auditBase = join(work, "audit.log");
+const auditFile = auditLogPath({ A2MCP_AUDIT: auditBase });
+process.env.A2MCP_AUDIT = auditBase;
 
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 const textOf = async (p: Promise<{ path: string }>) => (await p).path;

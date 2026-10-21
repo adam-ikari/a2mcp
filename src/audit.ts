@@ -1,16 +1,35 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, chmod, rename, stat } from "node:fs/promises";
+import { appendFile, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 
-const MAX_LOG_BYTES = 512 * 1024;
 const MAX_ARGS_CHARS = 1024;
 /** Args values longer than this are payloads (base64 file bytes), not intent. */
 const MAX_VALUE_CHARS = 120;
 
-/** Audit log path: `$A2MCP_AUDIT` or `<agentDir>/a2mcp.log`. */
-export function auditLogPath(env: NodeJS.ProcessEnv = process.env): string {
-	return env.A2MCP_AUDIT || join(getAgentDir(), "a2mcp.log");
+/**
+ * Audit log path for the day a record belongs to.
+ *
+ * One file per day, and the bridge sets no bounds: no size cap, no count of files,
+ * nothing deleted. How long evidence is kept is the administrator's call; the
+ * bridge's part is to write each day's records where they can be found and kept —
+ * a daily file is the shape both logrotate and "copy it out before you need it"
+ * expect.
+ *
+ * The date goes in front of the extension, the way the host names its own logs
+ * (`omp.2026-10-21.5168.log`): `a2mcp.log` becomes `a2mcp.2026-10-21.log`, and an
+ * override keeps its own stem (`/elsewhere/a.log` → `/elsewhere/a.2026-10-21.log`).
+ *
+ * The day is UTC, because the timestamps inside the records are UTC too, and a file
+ * whose name disagrees with its contents is worse than a file that rolls over at
+ * 08:00 for a UTC+8 operator.
+ */
+export function auditLogPath(env: NodeJS.ProcessEnv = process.env, at: Date = new Date()): string {
+	const base = env.A2MCP_AUDIT || join(getAgentDir(), "a2mcp.log");
+	const day = at.toISOString().slice(0, 10);
+	const dot = base.lastIndexOf(".");
+	const slash = base.lastIndexOf("/");
+	return dot > slash ? `${base.slice(0, dot)}.${day}${base.slice(dot)}` : `${base}.${day}`;
 }
 
 function digest(value: string): string {
@@ -57,12 +76,6 @@ function serializeArgs(args: unknown): string {
 /**
  * Appends run one at a time, per process.
  *
- * `stat` → `rename` → `appendFile` is three steps and two calls in flight together
- * both read a size over the cap. Without this chain the second rotation writes over
- * the `.1` the first one just parked the previous generation in, and what vanishes is
- * the record another call wrote milliseconds earlier, and that record is the whole
- * trace of the call it belongs to.
- *
  * The returned promise is the tail of that chain, and callers await it before they
  * answer the request. It used to be handed the line and return, fire-and-forget, and
  * that bought nothing: the chain never rejects, so there was no failure to insulate
@@ -81,8 +94,16 @@ function serializeArgs(args: unknown): string {
  *   - a record that lands after its own response is a weaker control than the
  *     documentation claims: the caller is told the call is on disk before it is.
  *
+ * What the chain buys now that the rotation is gone: one write at a time, so two
+ * records cannot interleave inside a line, and the day file a record belongs to is
+ * picked from the same moment its timestamp is stamped. (It used to buy more: the
+ * rotation's `stat` → `rename` → `appendFile` was three steps that two calls in
+ * flight together could interleave, and the second rotation wrote over the `.1` the
+ * first one had just parked the previous generation in. That is gone with the
+ * rotation — the bridge no longer decides what to keep.)
+ *
  * What it costs is one queued append per record: measured at ~99 µs for
- * `stat` + `appendFile` + `chmod` on this filesystem, serialized, so a request waits
+ * `appendFile` + `chmod` on this filesystem, serialized, so a request waits
  * for its own line and anything queued ahead of it. Against a call that runs a bash
  * command or reads a file, that is noise — and a slower disk delays the answer
  * rather than losing the record, which is the trade this file wants.
@@ -135,16 +156,14 @@ export function auditQuiet(): boolean {
 	return quiet;
 }
 
-function appendLine(line: string, env?: NodeJS.ProcessEnv): Promise<void> {
+function appendLine(line: string, env?: NodeJS.ProcessEnv, at?: Date): Promise<void> {
 	// Quiet: nothing is written at all. The queue tail is still returned, so a
 	// caller that awaits its record is not left hanging on a promise that never
 	// settles.
 	if (quiet) return queue;
-	const file = auditLogPath(env);
+	const file = auditLogPath(env, at);
 	queue = queue
 		.then(async () => {
-			const s = await stat(file).catch(() => null);
-			if (s && s.size + line.length > MAX_LOG_BYTES) await rename(file, `${file}.1`);
 			await appendFile(file, line, { mode: 0o600 });
 			// `mode` only applies at creation, so a log that already existed keeps
 			// whatever it had — one restored from a backup or created by hand stays
@@ -198,9 +217,10 @@ function appendLine(line: string, env?: NodeJS.ProcessEnv): Promise<void> {
  * *fail* the call — the chain never rejects, so a dead log path costs a
  * `console.error` and a bumped `auditWriteFailures()`, not an error reply.
  *
- * A log past MAX_LOG_BYTES rotates to `<path>.1` instead of growing forever
- * (a rotation between the two lines of one call may split the pair across
- * `.1` and the current file — when it matters, pair by `id` across both).
+ * A day's records live in that day's file (`auditLogPath`), and the bridge sets no
+ * bounds on it: no size cap, no file count, nothing deleted — how long evidence is
+ * kept is the administrator's call. A call that spans midnight has its two records
+ * in two files, so pair by `id` across them when it matters.
  */
 export function auditStart(
 	id: string,
@@ -208,10 +228,12 @@ export function auditStart(
 	tool: string,
 	args: unknown,
 	env?: NodeJS.ProcessEnv,
+	at: Date = new Date(),
 ): Promise<void> {
 	return appendLine(
-		`${JSON.stringify({ ts: new Date().toISOString(), id, sid, phase: "start", tool, args: serializeArgs(args) })}\n`,
+		`${JSON.stringify({ ts: at.toISOString(), id, sid, phase: "start", tool, args: serializeArgs(args) })}\n`,
 		env,
+		at,
 	);
 }
 
@@ -223,10 +245,11 @@ export function auditDone(
 	isError: boolean,
 	error?: string | null,
 	env?: NodeJS.ProcessEnv,
+	at: Date = new Date(),
 ): Promise<void> {
 	return appendLine(
 		`${JSON.stringify({
-			ts: new Date().toISOString(),
+			ts: at.toISOString(),
 			id,
 			sid,
 			phase: "done",
@@ -240,6 +263,7 @@ export function auditDone(
 			...(isError && error ? { error: error.slice(0, 200) } : {}),
 		})}\n`,
 		env,
+		at,
 	);
 }
 
@@ -260,11 +284,12 @@ export function auditHostLlm(
 	enabled: boolean,
 	error: string | null,
 	env?: NodeJS.ProcessEnv,
+	at: Date = new Date(),
 ): Promise<void> {
 	const args = { enabled };
 	return appendLine(
 		`${JSON.stringify({
-			ts: new Date().toISOString(),
+			ts: at.toISOString(),
 			id: randomUUID(),
 			sid,
 			phase: "event",
@@ -274,6 +299,7 @@ export function auditHostLlm(
 			...(error ? { error: error.slice(0, 200) } : {}),
 		})}\n`,
 		env,
+		at,
 	);
 }
 
@@ -295,11 +321,12 @@ export function auditXfer(
 	detail: Record<string, unknown>,
 	error: string | null,
 	env?: NodeJS.ProcessEnv,
+	at: Date = new Date(),
 ): Promise<void> {
 	const args = { action, ...detail };
 	return appendLine(
 		`${JSON.stringify({
-			ts: new Date().toISOString(),
+			ts: at.toISOString(),
 			id: randomUUID(),
 			sid,
 			phase: "event",
@@ -309,6 +336,7 @@ export function auditXfer(
 			...(error ? { error: error.slice(0, 200) } : {}),
 		})}\n`,
 		env,
+		at,
 	);
 }
 
@@ -331,11 +359,12 @@ function auditLifecycle(
 	detail: Record<string, unknown>,
 	error: string | null,
 	env?: NodeJS.ProcessEnv,
+	at: Date = new Date(),
 ): Promise<void> {
 	const args = { action, ...detail };
 	return appendLine(
 		`${JSON.stringify({
-			ts: new Date().toISOString(),
+			ts: at.toISOString(),
 			id: randomUUID(),
 			sid: null,
 			// Not "done": a call has two phases and this is the second, but an
@@ -350,6 +379,7 @@ function auditLifecycle(
 			...(error ? { error: error.slice(0, 200) } : {}),
 		})}\n`,
 		env,
+		at,
 	);
 }
 

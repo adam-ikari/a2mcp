@@ -22,6 +22,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { auditLogPath } from "../src/audit.ts";
 import { linkExtension, seedModels } from "./harness.ts";
 
 const _REPO = resolve(process.env.REPO ?? join(import.meta.dir, ".."));
@@ -31,7 +32,10 @@ const _extDir = join(agentDir, "extensions");
 const cfgPath = join(agentDir, "a2mcp.json");
 const outLog = join(tmp, "omp.out.log");
 const errLog = join(tmp, "omp.err.log");
-const auditPath = join(agentDir, "a2mcp.log");
+// The base name goes into the env; the bridge dates it, and the probe reads the
+// dated file.
+const auditBase = join(agentDir, "a2mcp.log");
+const auditPath = auditLogPath({ A2MCP_AUDIT: auditBase });
 const sideEffect = join(tmp, "SIDE-EFFECT-HAPPENED");
 
 linkExtension(agentDir);
@@ -49,7 +53,7 @@ const t0 = Date.now();
 const stage = (msg: string) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);
 
 const child = spawn(process.env.OMP_BIN ?? "omp", ["--mode", "rpc", "--approval-mode=always-ask"], {
-	env: { ...process.env, HOME: tmp, A2MCP_CONFIG: cfgPath, A2MCP_AUDIT: auditPath },
+	env: { ...process.env, HOME: tmp, A2MCP_CONFIG: cfgPath, A2MCP_AUDIT: auditBase },
 	stdio: ["pipe", openSync(outLog, "w"), openSync(errLog, "w")],
 });
 
