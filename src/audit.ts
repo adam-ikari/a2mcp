@@ -11,18 +11,13 @@ const MAX_VALUE_CHARS = 120;
  * Audit log path for the day a record belongs to.
  *
  * One file per day, and the bridge sets no bounds: no size cap, no count of files,
- * nothing deleted. How long evidence is kept is the administrator's call; the
- * bridge's part is to write each day's records where they can be found and kept —
- * a daily file is the shape both logrotate and "copy it out before you need it"
- * expect.
+ * nothing deleted. How long evidence is kept is the administrator's call.
  *
  * The date goes in front of the extension, the way the host names its own logs
  * (`omp.2026-10-21.5168.log`): `a2mcp.log` becomes `a2mcp.2026-10-21.log`, and an
  * override keeps its own stem (`/elsewhere/a.log` → `/elsewhere/a.2026-10-21.log`).
  *
- * The day is UTC, because the timestamps inside the records are UTC too, and a file
- * whose name disagrees with its contents is worse than a file that rolls over at
- * 08:00 for a UTC+8 operator.
+ * The day is UTC, because the timestamps inside the records are UTC too.
  */
 export function auditLogPath(env: NodeJS.ProcessEnv = process.env, at: Date = new Date()): string {
 	const base = env.A2MCP_AUDIT || join(getAgentDir(), "a2mcp.log");
@@ -96,11 +91,7 @@ function serializeArgs(args: unknown): string {
  *
  * What the chain buys now that the rotation is gone: one write at a time, so two
  * records cannot interleave inside a line, and the day file a record belongs to is
- * picked from the same moment its timestamp is stamped. (It used to buy more: the
- * rotation's `stat` → `rename` → `appendFile` was three steps that two calls in
- * flight together could interleave, and the second rotation wrote over the `.1` the
- * first one had just parked the previous generation in. That is gone with the
- * rotation — the bridge no longer decides what to keep.)
+ * picked from the same moment its timestamp is stamped.
  *
  * What it costs is one queued append per record: measured at ~99 µs for
  * `appendFile` + `chmod` on this filesystem, serialized, so a request waits

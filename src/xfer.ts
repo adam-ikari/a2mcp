@@ -3,7 +3,8 @@
  *
  * ## What this is, and what it is not
  *
- * There is no transfer protocol here. The bytes never touch JSON-RPC: a tool call says
+ * The bridge defines no transfer protocol of its own. The bytes never touch
+ * JSON-RPC: a tool call says
  * *which* path to hand out, `dufs` serves that path on a loopback port, and the bridge
  * proxies it under `/xfer/` on its own port (src/server.ts). The route speaks WebDAV —
  * the standard protocol for moving files over HTTP — so a caller mounts it with any
@@ -83,7 +84,7 @@ export const XFER_TOOLS: McpTool[] = [
 			"The share closes itself at `ttlSeconds` (default 3600) or on xfer_stop. " +
 			"Reachable on the host's loopback; while the operator's `/a2mcp tunnel` is open the reply's " +
 			"`publicUrl` is the same /xfer/ route on that hostname. " +
-			"Sharing a path under this token shares it with every holder of that token.",
+			"Every holder of that token can read and write the shared path.",
 		inputSchema: {
 			type: "object",
 			properties: {
