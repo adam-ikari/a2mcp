@@ -1,5 +1,5 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-10-21T02:30:32.411Z._
+_Auto-generated. Last updated 2026-10-21T02:40:13.819Z._
 
 - [a2a-mcp-bridge](pages/a2a-mcp-bridge.md) — category: decision | tags: [omp, extension, mcp] | ## 网站构建链（2026-10-01 修订）
