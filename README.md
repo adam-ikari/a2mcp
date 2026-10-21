@@ -186,7 +186,7 @@ Inside a host session:
 - `/a2mcp token` — print the full token (the status line only shows a prefix)
 - `/a2mcp tunnel` — open a cloudflared quick tunnel in front of the bridge's port and print its public URL (`https://<random>.trycloudflare.com`). One tunnel fronts one port, so the MCP endpoint and any open `/xfer/` share both ride it. Runtime state, never in the config; see [Cross-machine forwarding](#cross-machine-forwarding)
 - `/a2mcp tunnel stop` — close the tunnel
-- `/a2mcp incognito` — toggle incognito mode: while it is on, a remote call leaves no record at all (no audit pair, and no entry in the host's session transcript, which the bridge's render events are written into). Only the operator can reach it — a caller who could silence its own record would leave the log worthless as evidence. The switch itself is recorded, so a quiet stretch in the log says why. Runtime state: it dies with the bridge
+- `/a2mcp incognito` — toggle incognito mode. Its meaning is one sentence: **the host-side omp does not record the call** — no entry in the host's session transcript and nothing in the host's stdout render stream, both written from the bridge's render events, which the mode stops emitting. The bridge's own audit pair is not written either; what remains is the tool's own side effects and the bridge's own records about the operator's machine. Only the operator can reach it — a caller who could silence its own record would leave the log worthless as evidence. The switch itself is recorded, so a quiet stretch in the log says why. Runtime state: it dies with the bridge
 
 ## Remote connection example
 
@@ -354,15 +354,15 @@ bun install
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
 bun run test:tree     # repo shape: no symlink points off this machine, 3 checks, no deps, no local omp (runs before bun test on purpose)
-bun test              # unit tests: test/*.test.ts (270: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
-bun run test:obtain   # the pinned binaries: fetches both for this platform, HEADs all ten asset URLs, reads the two Windows rows as bytes, 37 checks (needs no local omp; writes only inside its own /tmp directory)
+bun test              # unit tests: test/*.test.ts (261: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
+bun run test:obtain   # the pinned binaries: fetches both for this platform, HEADs all ten asset URLs, reads the two Windows rows as bytes, 41 checks (needs no local omp; writes only inside its own /tmp directory)
 bun run test:registry # drive the takeover against the host's real model registry, 28 checks, seconds (needs no local omp, no credentials)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 34 items (needs a local omp)
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
 bun run test:takeover  # host inference deny/restore against a counting sink, ~60s (needs a local omp)
 bun run test:scenario  # end-to-end scenarios, 8 narratives / 41 steps, ~45s (needs a local omp)
-bun run test:install   # published-package self-containment + a real host over MCP, 52 items (needs a local omp; fetches ~46 MB from GitHub and once installs the package from the registry — that group info-skips while the package is unpublished)
+bun run test:install   # published-package self-containment + a real host over MCP, 55 items (needs a local omp; fetches ~6.4 MB from GitHub and once installs the package from the registry — that group info-skips while the package is unpublished)
 bun run test:mcp-call  # the reference client scripts/mcp-call.py against a real host + a fake 404 server, 6 checks (needs a local omp and python3; no python3 → the whole probe info-skips, exit 0)
 bun run test:bootstrap # the one-shot installer's decisions, 47 items, ~9s (everything but the last group runs against a recording stub omp and a fake curl; the last group needs a local omp)
 bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`

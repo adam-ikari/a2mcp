@@ -153,7 +153,7 @@ a2mcp listening on http://127.0.0.1:<port> (token <前6字符>…)
 - `/a2mcp token` — 打印完整 token（状态行只显示前缀）
 - `/a2mcp tunnel` — 在桥的端口前面起一条 cloudflared 快速隧道，打印公网 URL（`https://<随机>.trycloudflare.com`）。一条隧道只顶一个端口，MCP 端点和开着共享的 `/xfer/` 路由都从它走。运行态，不落配置，见「跨机转发」
 - `/a2mcp tunnel stop` — 关闭隧道
-- `/a2mcp incognito` — 无痕模式开关：开着的时候，远程调用一点记录都不留（审计那一对不写，宿主 session transcript 里也没有那条——那份 transcript 正是桥发的渲染事件写出来的）。只有操作员够得到这个开关：能让调用方给自己的记录消音的桥，那份日志就不成其为证据。开关本身记一条，所以日志里一段空白说得清是谁关的。运行态：桥退出即无
+- `/a2mcp incognito` — 无痕模式开关。它的意思就是这一句：**宿主端 omp 不记录这次调用**——宿主 session transcript 里没有那条，宿主 stdout 的渲染流里也没有那条（两处都是桥发的那对渲染事件写出来的，模式把它们停掉）。桥自己的审计那两条也不写；留下来的只有工具自己的副作用，和桥自己关于操作员这台机器的账。只有操作员够得到这个开关：能让调用方给自己的记录消音的桥，那份日志就不成其为证据。开关本身记一条，所以日志里一段空白说得清是谁关的。运行态：桥退出即无
 
 ## 远程连接示例
 
@@ -320,15 +320,15 @@ bun install
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
-bun test              # 单测：test/*.test.ts（270 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
-bun run test:obtain   # 钉死的两个二进制：本机这一行真下载、钉表十个 asset 全 HEAD、Windows 那两行按字节读，37 项（不需要本机 omp；只往它自己那个 /tmp 目录里写）
+bun test              # 单测：test/*.test.ts（261 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
+bun run test:obtain   # 钉死的两个二进制：本机这一行真下载、钉表十个 asset 全 HEAD、Windows 那两行按字节读，41 项（不需要本机 omp；只往它自己那个 /tmp 目录里写）
 bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，34 项（需本机 omp）
 bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp）
 bun run test:takeover  # 宿主推理 deny/restore 对一个计数 sink 实测，约 60 秒（需本机 omp）
 bun run test:scenario  # 端到端场景，8 个叙事 / 41 步，约 45 秒（需本机 omp）
-bun run test:install   # 发布包自包含 + 真实宿主走 MCP，52 项（需本机 omp；会向 GitHub 拉约 46 MB，还从 registry 真装一次包——包没发上 registry 之前那一组按 info 跳过）
+bun run test:install   # 发布包自包含 + 真实宿主走 MCP，55 项（需本机 omp；会向 GitHub 拉约 6.4 MB，还从 registry 真装一次包——包没发上 registry 之前那一组按 info 跳过）
 bun run test:mcp-call  # 参考客户端 scripts/mcp-call.py 打真实宿主 + 一只强制 404 的假服务器，6 项（需本机 omp 和 python3；没有 python3 整段按 info 跳过、退 0）
 bun run test:bootstrap # 一键脚本的判断核验，47 项，约 9 秒（除最后一组都用自制的记账 stub omp 加一只记录 argv 的假 curl；最后一组需本机 omp）
 bun run website        # 文档站（VitePress）本地预览，端口见输出（5173 起，被占则顺延）；首次先 cd website && bun install
