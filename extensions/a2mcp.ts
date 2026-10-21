@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { auditBridge, auditHostLlm, auditTunnel } from "../src/audit.ts";
+import { auditBridge, auditHostLlm, auditIncognito, auditTunnel } from "../src/audit.ts";
 import { ensurePlaceholderOnMainSession } from "../src/auto-model.ts";
 import { buildCallTool, buildToolCatalog, hasMainSession } from "../src/bridge.ts";
 import type { BridgeConfig } from "../src/config.ts";
@@ -83,6 +83,15 @@ let xfer: Xfer | null = null;
  * cloudflared children and the module would only remember (and only be able
  * to stop) the last one.
  */
+/**
+ * Incognito: while it is on, a remote call leaves no record — neither in the
+ * audit log nor in the host's session transcript (the bridge's render events are
+ * what the transcript is written from). Operator state, not caller state: a
+ * caller who could silence its own record would leave the log worthless as
+ * evidence, which is the one thing the log is for. The switch itself is recorded,
+ * so a quiet stretch in the log says why.
+ */
+let incognito = false;
 let mcpTunnel: QuickTunnel | null = null;
 let tunnelOpening: Promise<void> | null = null;
 
@@ -139,7 +148,12 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 		}
 		// The token getter reads the config as it is now, so a rotation is covered:
 		// the audit scrubs the credential that is live, not the one that was.
-		liveCallTool = buildCallTool(pi, ctx, () => cfg?.token ?? "");
+		liveCallTool = buildCallTool(
+			pi,
+			ctx,
+			() => cfg?.token ?? "",
+			() => incognito,
+		);
 		if (server) return; // one endpoint per process
 		if (bringingUp) {
 			// Ride along with the start already in flight rather than bind a second one.
@@ -276,6 +290,9 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 		server = null;
 		cfg = null;
 		liveCallTool = null;
+		// The incognito switch is runtime state like the rest of it: the decision
+		// was about this stretch of time, and the bridge that carried it is gone.
+		incognito = false;
 		// The instance's own span, for the same reason the tunnel's death needed one:
 		// the port in a tunnel or share record names the instance that owned it, and
 		// "the bridge restarted" is a different fact from "the tunnel closed".
@@ -284,7 +301,7 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 
 	pi.registerCommand("a2mcp", {
 		description:
-			"Show a2mcp status, rotate its token with `a2mcp rotate`, show the full token with `a2mcp token`, or open (`a2mcp tunnel`) and close (`a2mcp tunnel stop`) a public quick tunnel in front of the bridge endpoint — tool calls and the /xfer file route both ride it.",
+			"Show a2mcp status, rotate its token with `a2mcp rotate`, show the full token with `a2mcp token`, toggle incognito mode with `a2mcp incognito` (remote calls leave no record while it is on), or open (`a2mcp tunnel`) and close (`a2mcp tunnel stop`) a public quick tunnel in front of the bridge endpoint — tool calls and the /xfer file route both ride it.",
 		handler: async (args, ctx) => {
 			try {
 				if (args.trim() === "rotate") {
@@ -300,6 +317,18 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 					await saveConfig({ ...cfg, token: next });
 					cfg.token = next;
 					ctx.ui.notify("a2mcp token rotated — update remote mcp.json");
+					return;
+				}
+				if (args.trim() === "incognito") {
+					// The one switch the remote side cannot reach: it is the operator's
+					// machine and the operator's call, and the record of it stays.
+					incognito = !incognito;
+					await auditIncognito(incognito ? "enable" : "disable", {}, null);
+					ctx.ui.notify(
+						incognito
+							? "a2mcp incognito: on — remote calls leave no audit record and no transcript entry"
+							: "a2mcp incognito: off — remote calls are recorded again",
+					);
 					return;
 				}
 				if (args.trim() === "token") {
@@ -375,7 +404,7 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 				// rather than left to be inferred from `denied=0`.
 				const st = hostLlmState();
 				ctx.ui.notify(
-					`a2mcp on ${url} (token ${cfg.token.slice(0, 6)}…, port ${server.port}) host_llm=${st.enabled ? "allow" : st.degraded ? "deny (tripwire only)" : "deny"} denied=${st.denied}${mcpTunnel ? ` tunnel=${mcpTunnel.url}` : ""}`,
+					`a2mcp on ${url} (token ${cfg.token.slice(0, 6)}…, port ${server.port}) host_llm=${st.enabled ? "allow" : st.degraded ? "deny (tripwire only)" : "deny"} denied=${st.denied}${mcpTunnel ? ` tunnel=${mcpTunnel.url}` : ""} incognito=${incognito ? "on" : "off"}`,
 				);
 			} catch (e) {
 				ctx.ui.notify(`a2mcp command failed: ${(e as Error)?.message ?? String(e)}`, "error");

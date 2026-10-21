@@ -94,6 +94,8 @@ function mount(opts: {
 	emitThrows?: Error;
 	/** The credential the bridge scrubs out of a failure's text before logging it. */
 	token?: string;
+	/** Incognito: the call leaves no record and no transcript entry. */
+	incognito?: boolean;
 }): Harness {
 	const name = opts.toolName ?? "read";
 	const token = opts.token ?? "test-token";
@@ -164,7 +166,12 @@ function mount(opts: {
 		seen,
 		events,
 		controls,
-		call: buildCallTool(pi as unknown as ExtensionAPI, extCtx, () => token),
+		call: buildCallTool(
+			pi as unknown as ExtensionAPI,
+			extCtx,
+			() => token,
+			() => opts.incognito ?? false,
+		),
 		catalog: async () => (await buildToolCatalog(pi as unknown as ExtensionAPI)()).map((t) => ({ name: t.name })),
 	};
 }
@@ -280,6 +287,37 @@ describe("buildCallTool host hand-off", () => {
 		const done = await untilRecord((l) => l.sid === "sess-noerr" && l.phase === "done");
 		expect(done).toMatchObject({ isError: false });
 		expect(done?.error).toBeUndefined();
+	});
+
+	test("incognito: the call leaves no record and no transcript entry", async () => {
+		// Two places, not one. The audit pair is the bridge's own record; the render
+		// event is what the host's session transcript is written from — so emitting
+		// it would leave the caller's command on the host's disk in a file the
+		// bridge does not control, and the call would still be there after the
+		// audit log was wiped.
+		const h = mount({ incognito: true });
+		const r = await h.call("read", { path: "/etc/hostname" }, "sess-quiet");
+		expect(r.isError).toBe(false);
+		// Nothing reached the host's event bus.
+		expect(h.events).toEqual([]);
+		// And nothing reached the audit log. The absence is the claim, so it is
+		// read the way a reader would: the log is empty of this call.
+		const lines = (await readFile(auditLogPath(), "utf8"))
+			.trim()
+			.split("\n")
+			.filter(Boolean)
+			.map((l) => JSON.parse(l) as Record<string, unknown>);
+		expect(lines.filter((l) => l.sid === "sess-quiet")).toEqual([]);
+	});
+
+	test("the same call is recorded when incognito is off", async () => {
+		// The other half of the claim: the mode is what makes the call quiet, not
+		// the shape of the call.
+		const h = mount({});
+		await h.call("read", { path: "/etc/hostname" }, "sess-loud");
+		expect(h.events.length).toBe(2);
+		const done = await untilRecord((l) => l.sid === "sess-loud" && l.phase === "done");
+		expect(done).toMatchObject({ tool: "read" });
 	});
 
 	test("args reach the host tool unchanged, and nothing is validated on the way", async () => {

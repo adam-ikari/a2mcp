@@ -341,6 +341,23 @@ export function auditTunnel(
 }
 
 /**
+ * One record per incognito switch, on and off.
+ *
+ * The mode itself is recorded even though it silences the records: a log that goes
+ * quiet has to say why, or the gap reads as a bridge that was never called. The
+ * caller's calls are not recorded while it is on — that is the point of it — but
+ * the operator's own decision to silence them is.
+ */
+export function auditIncognito(
+	action: string,
+	detail: Record<string, unknown>,
+	error: string | null,
+	env?: NodeJS.ProcessEnv,
+): Promise<void> {
+	return auditLifecycle("incognito", action, detail, error, env);
+}
+
+/**
  * One record per bridge instance, at bind and at teardown.
  *
  * The port in a tunnel or share record names the instance that owned it, and a

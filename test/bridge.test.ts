@@ -103,9 +103,21 @@ describe("buildToolCatalog", () => {
 	});
 });
 
+/**
+ * The bridge's executor against the stub registry: a fixed credential (there is
+ * none to scrub here) and incognito off unless a test asks for it.
+ */
+const newCall = (opts: { incognito?: boolean } = {}) =>
+	buildCallTool(
+		makePi(["read"]),
+		extCtx,
+		() => "test-token",
+		() => opts.incognito ?? false,
+	);
+
 describe("buildCallTool exposure gate", () => {
 	test("name outside the advertised registry -> not exposed (alias/hidden-name probe)", async () => {
-		const call = buildCallTool(makePi(["read"]), extCtx, () => "test-token");
+		const call = newCall();
 		for (const name of ["xd://read", "guessed_tool", "mcp__srv__tool"]) {
 			const r = await callText(call, name);
 			expect(r.isError).toBe(true);
@@ -114,7 +126,7 @@ describe("buildCallTool exposure gate", () => {
 	});
 
 	test("registered tool with no Main session -> clear error, not a throw", async () => {
-		const call = buildCallTool(makePi(["read"]), extCtx, () => "test-token");
+		const call = newCall();
 		const r = await callText(call, "read");
 		expect(r.isError).toBe(true);
 		expect(r.text).toBe("main session not available");
@@ -136,7 +148,7 @@ describe("audit log", () => {
 	}
 
 	test("phase:start at dispatch + phase:done on completion, paired by id", async () => {
-		const call = buildCallTool(makePi(["read"]), extCtx, () => "test-token");
+		const call = newCall();
 		await call("read", { path: "/etc/hostname" }, "sess-1");
 
 		// Match by content, not position: earlier tests append to this same
@@ -156,7 +168,7 @@ describe("audit log", () => {
 	});
 
 	test("rejected calls are audited with both phases", async () => {
-		const call = buildCallTool(makePi(["read"]), extCtx, () => "test-token");
+		const call = newCall();
 		await call("guessed_tool", {});
 
 		const start = await untilRecord((l) => l.phase === "start" && l.tool === "guessed_tool");
@@ -171,7 +183,7 @@ describe("audit log", () => {
 
 	test("oversized string args are redacted to length+hash in the audit line", async () => {
 		const payload = "A".repeat(5000);
-		const call = buildCallTool(makePi(["read"]), extCtx, () => "test-token");
+		const call = newCall();
 		await call("read", { bytes: payload }, "sess-redact");
 		const deadline = Date.now() + 3000;
 		let hit: Record<string, unknown> | undefined;
@@ -204,7 +216,7 @@ describe("audit log", () => {
 			["sess-deep", { meta: { inner: { body: payload } } }],
 			["sess-list", { files: [{ content: payload }] }],
 		];
-		const call = buildCallTool(makePi(["read"]), extCtx, () => "test-token");
+		const call = newCall();
 		for (const [sid, args] of shapes) await call("read", args, sid);
 
 		for (const [sid] of shapes) {
@@ -222,7 +234,7 @@ describe("audit log", () => {
 		// still a wall of text. The cap is what keeps a record near-fixed size, which in
 		// turn is what makes the 512 KB rotation window mean something.
 		const args = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`f${i}`, "y".repeat(110)]));
-		const call = buildCallTool(makePi(["read"]), extCtx, () => "test-token");
+		const call = newCall();
 		await call("read", args, "sess-cap");
 		const rec = await untilRecord((l) => l.sid === "sess-cap" && l.phase === "start");
 		expect(rec, "no audit record for the wide args").toBeDefined();
@@ -236,7 +248,7 @@ describe("audit log", () => {
 	test("a pathological nesting is omitted instead of described", async () => {
 		let args: Record<string, unknown> = { leaf: "C".repeat(4000) };
 		for (let i = 0; i < 40; i++) args = { nested: args };
-		const call = buildCallTool(makePi(["read"]), extCtx, () => "test-token");
+		const call = newCall();
 		await call("read", args, "sess-depth");
 
 		const rec = await untilRecord((l) => l.sid === "sess-depth" && l.phase === "start");

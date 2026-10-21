@@ -144,6 +144,14 @@ function failureText(r: { content: McpContent[]; isError: boolean }, token: stri
 	return secret.length > 0 ? text.split(secret).join("<token>") : text;
 }
 
+/** One call's identity and its policy, carried down to the host hand-off. */
+interface Call {
+	/** The bridge's id for this call: the audit pair's key and the host's toolCallId. */
+	id: string;
+	/** Incognito: leave no record of this call anywhere. */
+	quiet: boolean;
+}
+
 /**
  * Build the tools/call executor: resolve the name against the same registry
  * tools/list advertises, then hand it to the host's tool implementation.
@@ -156,17 +164,19 @@ function failureText(r: { content: McpContent[]; isError: boolean }, token: stri
  *
  * `token` is a getter rather than a value: the operator can rotate the token at
  * runtime, and a captured copy would keep scrubbing a credential that stopped
- * being one.
+ * being one. `incognito` is a getter for the same reason — it is a switch the
+ * operator flips while the bridge is running.
  */
 export function buildCallTool(
 	pi: ExtensionAPI,
 	extCtx: ExtensionContext,
 	token: () => string,
+	incognito: () => boolean,
 ): (name: string, args: unknown, sid?: string | null) => Promise<{ content: McpContent[]; isError: boolean }> {
 	const runHost = async (
 		name: string,
 		args: unknown,
-		toolCallId: string,
+		call: Call,
 	): Promise<{ content: McpContent[]; isError: boolean }> => {
 		const ref = AgentRegistry.global().get(MAIN_AGENT_ID);
 		if (!ref?.session) {
@@ -192,22 +202,37 @@ export function buildCallTool(
 		// Mirror the host's own tool events (see emitRenderEvent for why a failure
 		// here is dropped). The id is the one the dispatcher minted for this call, so
 		// the host's transcript records it under the same name the audit log does.
-		emitRenderEvent(session.agent, () => ({ type: "tool_execution_start", toolCallId, toolName: name, args }));
+		//
+		// Not in incognito mode — and that is the half that matters. These events
+		// are what the host's session transcript is written from, so emitting them
+		// would leave the caller's command on the host's disk in a file the bridge
+		// does not control, and the call would still be there after the audit log
+		// was wiped.
+		if (!call.quiet) {
+			emitRenderEvent(session.agent, () => ({
+				type: "tool_execution_start",
+				toolCallId: call.id,
+				toolName: name,
+				args,
+			}));
+		}
 		let r: Awaited<ReturnType<typeof tool.execute>>;
 		try {
-			r = await tool.execute(toolCallId, args, undefined, undefined, ctx);
+			r = await tool.execute(call.id, args, undefined, undefined, ctx);
 		} catch (e) {
 			// A throw out of execute() has no structured result to carry, so the
 			// host's error text becomes the content, as the host's own loop does it.
 			r = { content: [{ type: "text", text: (e as Error)?.message ?? String(e) }], isError: true };
 		}
-		emitRenderEvent(session.agent, () => ({
-			type: "tool_execution_end",
-			toolCallId,
-			toolName: name,
-			result: r,
-			isError: !!r.isError,
-		}));
+		if (!call.quiet) {
+			emitRenderEvent(session.agent, () => ({
+				type: "tool_execution_end",
+				toolCallId: call.id,
+				toolName: name,
+				result: r,
+				isError: !!r.isError,
+			}));
+		}
 		const content = (r.content ?? []).map((b) =>
 			b?.type === "text"
 				? { type: "text" as const, text: b.text }
@@ -218,11 +243,7 @@ export function buildCallTool(
 		return { content, isError: !!r.isError };
 	};
 
-	const run = async (
-		name: string,
-		args: unknown,
-		toolCallId: string,
-	): Promise<{ content: McpContent[]; isError: boolean }> => {
+	const run = async (name: string, args: unknown, call: Call): Promise<{ content: McpContent[]; isError: boolean }> => {
 		// One message for "not registered" and "not in catalog": a caller holding
 		// the token learns nothing about which names exist behind the curtain.
 		// Same registry as the catalog, so a name the caller read in `tools/list` is a
@@ -230,7 +251,7 @@ export function buildCallTool(
 		if (!servedTools(pi).some((t) => t.name === name)) {
 			return { content: [{ type: "text", text: `tool '${name}' is not exposed by this bridge` }], isError: true };
 		}
-		return runHost(name, args, toolCallId);
+		return runHost(name, args, call);
 	};
 
 	return async (name, args, sid) => {
@@ -248,21 +269,32 @@ export function buildCallTool(
 		// One id makes the join a lookup: the id in the audit line is the
 		// `toolCallId` the host wrote the call under, under `<agentDir>/sessions/`.
 		const id = randomUUID();
+		// Incognito: the call leaves no trace. Not the audit pair, and not the
+		// host's render event either — that event is what the host's session
+		// transcript is written from, so the command would sit on the host's disk in
+		// a file the bridge does not control, and the call would still be readable
+		// there after the audit log was wiped.
+		//
+		// The switch is the operator's, not the caller's: a caller who could
+		// silence its own record would leave the log worthless as evidence, which is
+		// the one thing the log is for. The operator's own transitions are recorded
+		// (src/audit.ts, `auditIncognito`), so a silent stretch in the log says why.
+		const call: Call = { id, quiet: incognito() };
 		// Dispatch-time record: if the call never settles (host approval
 		// waiting for a UI that does not exist), the start line is the trace.
 		// Awaited, so "the start is on disk" is true before the call runs rather
 		// than racing it — that ordering is what makes the line evidence of
 		// anything rather than a record of a request that once happened.
-		await auditStart(id, sid ?? null, name, args);
+		if (!call.quiet) await auditStart(id, sid ?? null, name, args);
 		let r: { content: McpContent[]; isError: boolean };
 		try {
-			r = await run(name, args, id);
+			r = await run(name, args, call);
 		} catch (e) {
 			r = { content: [{ type: "text", text: (e as Error)?.message ?? String(e) }], isError: true };
 		}
 		// Awaited before the reply: a caller that reads the audit log right after
 		// its 200 has to find its own call in it.
-		await auditDone(id, sid ?? null, name, args, r.isError, failureText(r, token()));
+		if (!call.quiet) await auditDone(id, sid ?? null, name, args, r.isError, failureText(r, token()));
 		return r;
 	};
 }

@@ -427,6 +427,52 @@ describe("the a2mcp command", () => {
  * logs its own spawns and SIGTERMs, which is how "one child, not two" and "the
  * child died with the bridge" are checked without pid roulette.
  */
+describe("the incognito switch", () => {
+	// The operator's own switch, and the operator's own machine: while it is on, a
+	// remote call leaves no record — neither in the audit log nor in the host's
+	// session transcript, which the bridge's render events are written into. The
+	// remote side cannot reach it: a caller who could silence its own record
+	// would leave the log worthless as evidence, which is the one thing the log
+	// is for.
+	const incognitoRecords = () => auditRecords().filter((rec) => rec.tool === "incognito");
+
+	test("the toggle flips it, says so, and records the switch", async () => {
+		const r = newRunner();
+		await r.start();
+		await r.command("");
+		expect(texts(r)).toContain("incognito=off");
+		await r.command("incognito");
+		expect(texts(r)).toContain("a2mcp incognito: on");
+		await r.command("");
+		expect(texts(r)).toContain("incognito=on");
+		// The switch itself is recorded, so a quiet stretch in the log says why.
+		const on = incognitoRecords().find((rec) => String(rec.args).includes("enable"));
+		expect(on).toMatchObject({ sid: null, phase: "done", tool: "incognito", isError: false });
+		await r.command("incognito");
+		expect(texts(r)).toContain("a2mcp incognito: off");
+		const off = incognitoRecords().find((rec) => String(rec.args).includes("disable"));
+		expect(off).toMatchObject({ sid: null, tool: "incognito", isError: false });
+		expect(incognitoRecords()).toHaveLength(2);
+	});
+
+	test("it is runtime state: a restart brings the bridge back unrecorded", async () => {
+		const r = newRunner();
+		await r.start();
+		await r.command("incognito");
+		await r.command("");
+		expect(texts(r)).toContain("incognito=on");
+		// The switch does not survive the process — it is a decision about this
+		// stretch of time, not a property of the installation.
+		await releaseBridge();
+		runners.length = 0;
+		mountMain();
+		const r2 = newRunner();
+		await r2.start();
+		await r2.command("");
+		expect(texts(r2)).toContain("incognito=off");
+	});
+});
+
 describe("the a2mcp tunnel command", () => {
 	let fakeCount = 0;
 	function fakeCloudflared(): { bin: string; spawns: () => number; terms: () => number } {
