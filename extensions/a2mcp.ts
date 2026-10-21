@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { auditBridge, auditHostLlm, auditIncognito, auditTunnel } from "../src/audit.ts";
+import { auditBridge, auditHostLlm, auditIncognito, auditQuiet, auditTunnel, setAuditQuiet } from "../src/audit.ts";
 import { ensurePlaceholderOnMainSession } from "../src/auto-model.ts";
 import { buildCallTool, buildToolCatalog, hasMainSession } from "../src/bridge.ts";
 import type { BridgeConfig } from "../src/config.ts";
@@ -83,15 +83,6 @@ let xfer: Xfer | null = null;
  * cloudflared children and the module would only remember (and only be able
  * to stop) the last one.
  */
-/**
- * Incognito: while it is on, a remote call leaves no record — neither in the
- * audit log nor in the host's session transcript (the bridge's render events are
- * what the transcript is written from). Operator state, not caller state: a
- * caller who could silence its own record would leave the log worthless as
- * evidence, which is the one thing the log is for. The switch itself is recorded,
- * so a quiet stretch in the log says why.
- */
-let incognito = false;
 let mcpTunnel: QuickTunnel | null = null;
 let tunnelOpening: Promise<void> | null = null;
 
@@ -148,11 +139,17 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 		}
 		// The token getter reads the config as it is now, so a rotation is covered:
 		// the audit scrubs the credential that is live, not the one that was.
+		// The incognito gate lives in src/audit.ts, where every record is written —
+		// one switch for every writer, so "the log is silent" cannot mean "silent
+		// except for whichever code path happened to be wired". The render events
+		// read the same flag: they are what the host's session transcript is written
+		// from, and a call the log does not keep must not land in the transcript
+		// either.
 		liveCallTool = buildCallTool(
 			pi,
 			ctx,
 			() => cfg?.token ?? "",
-			() => incognito,
+			() => auditQuiet(),
 		);
 		if (server) return; // one endpoint per process
 		if (bringingUp) {
@@ -292,7 +289,9 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 		liveCallTool = null;
 		// The incognito switch is runtime state like the rest of it: the decision
 		// was about this stretch of time, and the bridge that carried it is gone.
-		incognito = false;
+		// Cleared before the stop record below, so the log ends with the bridge's
+		// own closing line rather than with a gap nobody can explain.
+		setAuditQuiet(false);
 		// The instance's own span, for the same reason the tunnel's death needed one:
 		// the port in a tunnel or share record names the instance that owned it, and
 		// "the bridge restarted" is a different fact from "the tunnel closed".
@@ -321,13 +320,22 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 				}
 				if (args.trim() === "incognito") {
 					// The one switch the remote side cannot reach: it is the operator's
-					// machine and the operator's call, and the record of it stays.
-					incognito = !incognito;
-					await auditIncognito(incognito ? "enable" : "disable", {}, null);
+					// machine and the operator's call.
+					//
+					// The switch's own record is written just outside the silent window:
+					// the enable line before the silence starts, the disable line after
+					// it ends. It is the only thing the log says about the mode —
+					// without it, a quiet stretch reads as a bridge that was never
+					// called. Everything else stops while it is on: the calls, the
+					// shares, the tunnel, the instance, the arming.
+					const on = !auditQuiet();
+					if (on) await auditIncognito("enable", {}, null);
+					setAuditQuiet(on);
+					if (!on) await auditIncognito("disable", {}, null);
 					ctx.ui.notify(
-						incognito
-							? "a2mcp incognito: on — remote calls leave no audit record and no transcript entry"
-							: "a2mcp incognito: off — remote calls are recorded again",
+						on
+							? "a2mcp incognito: on — the audit log is silent and the host's omp records nothing"
+							: "a2mcp incognito: off — records are written again",
 					);
 					return;
 				}
@@ -404,7 +412,7 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 				// rather than left to be inferred from `denied=0`.
 				const st = hostLlmState();
 				ctx.ui.notify(
-					`a2mcp on ${url} (token ${cfg.token.slice(0, 6)}…, port ${server.port}) host_llm=${st.enabled ? "allow" : st.degraded ? "deny (tripwire only)" : "deny"} denied=${st.denied}${mcpTunnel ? ` tunnel=${mcpTunnel.url}` : ""} incognito=${incognito ? "on" : "off"}`,
+					`a2mcp on ${url} (token ${cfg.token.slice(0, 6)}…, port ${server.port}) host_llm=${st.enabled ? "allow" : st.degraded ? "deny (tripwire only)" : "deny"} denied=${st.denied}${mcpTunnel ? ` tunnel=${mcpTunnel.url}` : ""} incognito=${auditQuiet() ? "on" : "off"}`,
 				);
 			} catch (e) {
 				ctx.ui.notify(`a2mcp command failed: ${(e as Error)?.message ?? String(e)}`, "error");

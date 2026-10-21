@@ -113,7 +113,33 @@ export function auditWriteFailures(): number {
 	return failedWrites;
 }
 
+/**
+ * Whether the log is quiet.
+ *
+ * The operator's incognito switch. It is ONE switch for every writer — the calls,
+ * the shares, the tunnel, the instance, the arming — because a mode that turned
+ * off some of them and not the others would promise whatever the code paths
+ * happened to be wired for, and the promise would change with the next record
+ * kind. The gate lives here, where every line is written, and the extension
+ * flips it.
+ */
+let quiet = false;
+
+/** Turn the log's silence on or off. The bridge's own state, like the takeover switch. */
+export function setAuditQuiet(on: boolean): void {
+	quiet = on;
+}
+
+/** Whether records are being written right now. */
+export function auditQuiet(): boolean {
+	return quiet;
+}
+
 function appendLine(line: string, env?: NodeJS.ProcessEnv): Promise<void> {
+	// Quiet: nothing is written at all. The queue tail is still returned, so a
+	// caller that awaits its record is not left hanging on a promise that never
+	// settles.
+	if (quiet) return queue;
 	const file = auditLogPath(env);
 	queue = queue
 		.then(async () => {

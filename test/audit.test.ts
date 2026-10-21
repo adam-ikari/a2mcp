@@ -1,7 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { auditDone, auditHostLlm, auditLogPath, auditStart, auditTunnel, auditWriteFailures } from "../src/audit.ts";
+import {
+	auditDone,
+	auditHostLlm,
+	auditLogPath,
+	auditQuiet,
+	auditStart,
+	auditTunnel,
+	auditWriteFailures,
+	setAuditQuiet,
+} from "../src/audit.ts";
 
 /**
  * Rotation retention.
@@ -159,6 +168,25 @@ describe("audit never loses a call", () => {
 		const ok = recs.find((r) => r.id === "why-2");
 		expect(ok).toMatchObject({ isError: false });
 		expect(ok?.error).toBeUndefined();
+	});
+
+	test("the quiet gate stops every writer, not just the calls", async () => {
+		// One switch for every writer. A mode that silenced the calls but not the
+		// shares, the tunnel or the arming would promise whatever the code paths
+		// happened to be wired for — and the promise would change with the next
+		// record kind.
+		const before = readRecords().length;
+		setAuditQuiet(true);
+		await auditStart("quiet-start", "sid", "read", {}, env);
+		await auditDone("quiet-done", "sid", "read", {}, false, null, env);
+		await auditTunnel("start", { url: "https://quiet.example" }, null, env);
+		await auditHostLlm("sid", true, null, env);
+		setAuditQuiet(false);
+		expect(readRecords().length).toBe(before);
+		expect(readRecords().some((r) => String(r.args).includes("quiet.example"))).toBe(false);
+		// And the switch's own record is the one line that survives it: it is written
+		// just outside the silent window, so a quiet stretch says why.
+		expect(auditQuiet()).toBe(false);
 	});
 
 	test("a tunnel record carries no session and cuts its error like the others", async () => {

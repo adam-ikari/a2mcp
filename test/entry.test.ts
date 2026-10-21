@@ -527,6 +527,26 @@ setTimeout(() => process.exit(0), 60_000);
 		expect(String(started?.args)).toContain(URL);
 	});
 
+	test("incognito silences the bridge's own records too, not just the calls", async () => {
+		// The mode's promise is one sentence — the host-side omp does not record the
+		// call — and the bridge's own audit log goes quiet with it. The switch's own
+		// line is written just outside the silent window, so the stretch is
+		// explained; the tunnel's opening, which is the bridge's own doing, is not
+		// written while it is on.
+		const cf = fakeCloudflared();
+		const r = await startWithFake(cf);
+		await r.command("incognito");
+		const before = tunnelRecords().length;
+		await r.command("tunnel");
+		expect(tunnelRecords().length).toBe(before);
+		// Off again: the records come back.
+		await r.command("incognito");
+		// The close, this time: the tunnel is already open, and a second `tunnel`
+		// reuses it and writes nothing at all.
+		await r.command("tunnel stop");
+		expect(tunnelRecords().length).toBe(before + 1);
+	});
+
 	test("a second tunnel reuses the open one and spawns nothing", async () => {
 		const cf = fakeCloudflared();
 		const r = await startWithFake(cf);
