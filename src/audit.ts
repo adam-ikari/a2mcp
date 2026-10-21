@@ -241,7 +241,7 @@ export function auditHostLlm(
 			ts: new Date().toISOString(),
 			id: randomUUID(),
 			sid,
-			phase: "done",
+			phase: "event",
 			tool: "host_llm",
 			isError: error !== null,
 			args: serializeArgs(args),
@@ -276,7 +276,7 @@ export function auditXfer(
 			ts: new Date().toISOString(),
 			id: randomUUID(),
 			sid,
-			phase: "done",
+			phase: "event",
 			tool: "xfer",
 			isError: error !== null,
 			args: serializeArgs(args),
@@ -312,7 +312,12 @@ function auditLifecycle(
 			ts: new Date().toISOString(),
 			id: randomUUID(),
 			sid: null,
-			phase: "done",
+			// Not "done": a call has two phases and this is the second, but an
+			// event is one record and there is no start to pair it with. The
+			// invariant "every done record pairs with a start" is worth keeping
+			// true over the whole log, so the bridge's own doings say what they
+			// are instead of borrowing the calls' vocabulary.
+			phase: "event",
 			tool,
 			isError: error !== null,
 			args: serializeArgs(args),

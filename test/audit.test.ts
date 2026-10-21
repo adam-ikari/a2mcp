@@ -171,7 +171,7 @@ describe("audit never loses a call", () => {
 		await auditTunnel("start", { port: 41_000 }, "t".repeat(300), env);
 		const recs = readRecords().filter((r) => r.tool === "tunnel");
 		const started = recs.find((r) => !r.isError && String(r.args).includes("t.example"));
-		expect(started).toMatchObject({ sid: null, phase: "done", tool: "tunnel", isError: false });
+		expect(started).toMatchObject({ sid: null, phase: "event", tool: "tunnel", isError: false });
 		expect(String(started?.args)).toContain('"port":41000');
 		const failed = recs.find((r) => r.isError);
 		expect(String(failed?.error)).toHaveLength(200);

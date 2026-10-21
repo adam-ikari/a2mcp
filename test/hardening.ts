@@ -333,7 +333,10 @@ try {
 		`every done pairs with a start across the two files (${orphansInLive} of them pair only through the rotated file)`,
 	);
 	check(
-		rolled.every((rec) => rec.phase === "start" || rec.phase === "done"),
+		// Three phases, not two: a call has `start` and `done`, and the bridge's
+		// own doings are `event` — one record each, with no start to pair them
+		// with. The list is the shape, and the shape is what "intact" means here.
+		rolled.every((rec) => rec.phase === "start" || rec.phase === "done" || rec.phase === "event"),
 		"the rotated file is intact JSONL",
 	);
 	if (orphansInLive > 0) {

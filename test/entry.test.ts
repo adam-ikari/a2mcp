@@ -447,7 +447,7 @@ describe("the incognito switch", () => {
 		expect(texts(r)).toContain("incognito=on");
 		// The switch itself is recorded, so a quiet stretch in the log says why.
 		const on = incognitoRecords().find((rec) => String(rec.args).includes("enable"));
-		expect(on).toMatchObject({ sid: null, phase: "done", tool: "incognito", isError: false });
+		expect(on).toMatchObject({ sid: null, phase: "event", tool: "incognito", isError: false });
 		await r.command("incognito");
 		expect(texts(r)).toContain("a2mcp incognito: off");
 		const off = incognitoRecords().find((rec) => String(rec.args).includes("disable"));
@@ -523,7 +523,7 @@ setTimeout(() => process.exit(0), 60_000);
 		expect(texts(r)).not.toContain(TOKEN);
 		expect(cf.spawns()).toBe(1);
 		const started = tunnelRecords().find((rec) => !rec.isError && String(rec.args).includes("start"));
-		expect(started).toMatchObject({ sid: null, phase: "done", tool: "tunnel" });
+		expect(started).toMatchObject({ sid: null, phase: "event", tool: "tunnel" });
 		expect(String(started?.args)).toContain(URL);
 	});
 
@@ -574,7 +574,7 @@ setTimeout(() => process.exit(0), 60_000);
 		// them are still answering — the share next to it already wrote its
 		// `bridge stopped` close, so one teardown was running two rules.
 		const stopped = tunnelRecords().find((rec) => String(rec.args).includes("stop"));
-		expect(stopped).toMatchObject({ sid: null, phase: "done", tool: "tunnel", isError: false });
+		expect(stopped).toMatchObject({ sid: null, phase: "event", tool: "tunnel", isError: false });
 		expect(String(stopped?.args)).toContain("bridge stopped");
 	});
 });
@@ -594,7 +594,7 @@ describe("the bridge instance's own span", () => {
 		const port = r.advertisedPort() as number;
 		const mine = () => bridgeRecords().filter((rec) => String(rec.args).includes(`"port":${port}`));
 		const started = mine().find((rec) => String(rec.args).includes("start"));
-		expect(started).toMatchObject({ sid: null, phase: "done", tool: "bridge", isError: false });
+		expect(started).toMatchObject({ sid: null, phase: "event", tool: "bridge", isError: false });
 		AgentRegistry.resetGlobalForTests();
 		await r.shutdown();
 		const stopped = mine().find((rec) => String(rec.args).includes("stop"));

@@ -192,7 +192,7 @@ describe("POST /host-llm route dispatch", () => {
 
 			await flush();
 			const rec = await recordFor('enabled\\":false');
-			expect(rec).toMatchObject({ phase: "done", tool: "host_llm", sid, isError: false });
+			expect(rec).toMatchObject({ phase: "event", tool: "host_llm", sid, isError: false });
 			expect(recordsHolding('enabled\\":true').length).toBe(1); // one line per toggle, not a pair
 		});
 	});

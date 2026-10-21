@@ -164,7 +164,7 @@ providers:
 
 ### 桥自己的工具：`xfer_*`
 
-`tools/list` 里那三个名字不是宿主的工具，是桥自己服务的（`src/xfer.ts`）。**按「`tools/list` 里每个名字都是宿主工具」写死的客户端要改：目录是宿主注册表逐字加恰好这三个。** 三者都由桥分派，不进宿主的 `getToolByName()`，也不过宿主的审批门；每次动作写一条审计，`tool: "xfer"`（`phase: "done"`，`args.action` 为 `share` / `close` / `stop` / `install`，`args` 带路径、本地端口、TTL 与路由，不含任何内容）。**关掉共享的那一条另带 `args.usage`**（`requests` / `bytes` / `uploads`）：代理数这一路上过了多少请求与字节，字节按两个 content-length 计，所以是下限不是测量。它说的是「有多少东西流过」，不是「谁流的」——token 是共享的，字节不带身份。共享开着而没人动过时这个字段整个不在（不是一个 0）。
+`tools/list` 里那三个名字不是宿主的工具，是桥自己服务的（`src/xfer.ts`）。**按「`tools/list` 里每个名字都是宿主工具」写死的客户端要改：目录是宿主注册表逐字加恰好这三个。** 三者都由桥分派，不进宿主的 `getToolByName()`，也不过宿主的审批门；每次动作写一条审计，`tool: "xfer"`（`phase: "event"`，`args.action` 为 `share` / `close` / `stop` / `install`，`args` 带路径、本地端口、TTL 与路由，不含任何内容）。**关掉共享的那一条另带 `args.usage`**（`requests` / `bytes` / `uploads`）：代理数这一路上过了多少请求与字节，字节按两个 content-length 计，所以是下限不是测量。它说的是「有多少东西流过」，不是「谁流的」——token 是共享的，字节不带身份。共享开着而没人动过时这个字段整个不在（不是一个 0）。
 
 **`xfer_share`** — 参数 `{ path, ttlSeconds? }`。`path` 必填，是文件或目录（`~` 与 `~/x` 展开到宿主家目录，相对路径按宿主的 working directory 解析）；`ttlSeconds` 缺省 3600。成功时 `result.content[0].text` 是一段 JSON：
 
@@ -204,7 +204,7 @@ providers:
 
 - **运行态**。与 takeover 开关同款：不落盘、不进配置、重启即无。每进程一条（`server` 每进程一条），第二次 `/a2mcp tunnel` 复用已开的那条并重报 URL，不另起子进程——这与 `xfer_share` 的「第二次顶掉第一次」刻意相反，因为这里没有「该换哪条」的语义。两个命令同时在途由在途保护合并成一个 spawn（与 `bringingUp` 之于绑定同一条规则）。
 - **生命周期**。`/a2mcp tunnel stop` 关闭；`session_shutdown` 释放端口时一并拆（SIGTERM，两秒不退补 SIGKILL），公网主机名不活得比开它的桥久。
-- **审计**。开与关各一条 `tool: "tunnel"`（`phase: "done"`，`sid: null`——操作员发起，没有调用方会话可归属），`args.action` 为 `start` / `stop`，带 `url` 与本地 `port`；打开失败的记录带 `error` 原文。token 不进记录，主机名本身不是秘密。**关的那一条什么时候写**：操作员敲 `/a2mcp tunnel stop` 时写一条；桥自己退出时（`session_shutdown`）也写一条，`args.why` 为 `bridge stopped`——此前只有开有记录、关没有，于是日志列得出曾经开过哪些公网主机名，却说不出哪一个还在应答，而旁边的共享早就在同一个退出里写了 `bridge stopped`。
+- **审计**。开与关各一条 `tool: "tunnel"`（`phase: "event"`，`sid: null`——操作员发起，没有调用方会话可归属），`args.action` 为 `start` / `stop`，带 `url` 与本地 `port`；打开失败的记录带 `error` 原文。token 不进记录，主机名本身不是秘密。**关的那一条什么时候写**：操作员敲 `/a2mcp tunnel stop` 时写一条；桥自己退出时（`session_shutdown`）也写一条，`args.why` 为 `bridge stopped`——此前只有开有记录、关没有，于是日志列得出曾经开过哪些公网主机名，却说不出哪一个还在应答，而旁边的共享早就在同一个退出里写了 `bridge stopped`。
 - **cloudflared 从哪来**。与「传文件」那一节完全同一套：`xfer.cloudflared` 带 `/` 或 `\` 就按路径用（不许下载的那台机器的写法），否则 PATH、桥装登记、钉版本+sha256 拉取；安装另记一条 `install`。
 
 边界只有一处要说清：隧道一开，出公网的是整个端口，正开着的 `/xfer/` 共享跟着一起出去；隧道关着，文件路由只在回环或 SSH 转发后面。**隧道开着的时候，`xfer_share` 与 `xfer_status` 会把这条主机名作为 `publicUrl` 回给调用方**——读的是已经在跑的状态，不新增暴露面，工具自己仍然不开隧道。隧道本身的可用性取决于 Cloudflare 边缘，30 秒内等不到主机名就报错了事；本机网络对 `*.trycloudflare.com` 重签 TLS，公网半程的回环验证只能算人工证据（见 `docs/testing.md`）。
@@ -224,11 +224,12 @@ providers:
 补充：
 
 - `arguments` 原样透传给宿主工具执行（在宿主 `Main` 会话上下文中）。桥自己的日志把超过 120 字符的字符串折成 `<len:N,sha256:前8位>`，**逐层折到叶子**，宿主 `edit` 的正文落在 `args.edits[0].oldText`（第三层）也在覆盖范围内；宿主会话收到的还是原参数，宿主的记录不由本桥管。
+- **记录分两种，phase 就说它是哪一种。** 一次远程 `tools/call` 写一对记录，`phase` 为 `start` 与 `done`，按 `id` 配对；桥自己做的事（共享、隧道、宿主推理开关、桥实例、无痕开关）各写一条，`phase` 为 `event`。**不写 `done`**：调用有两个 phase、这一条是第二个，而「一件事」只有一条记录、没有 start 可配——硬套调用那套词就是说自己有个配对而其实没有。「每一条 `done` 都有配对的 `start`」这条不变式因此在整份日志上成立（`test/hardening` 第 9 组守着它）。按 `phase == "done"` 过滤拿到的就是完成的那次调用，按 `phase == "event"` 过滤拿到的是桥自己的动作。
 - 每次 `tools/call`（包括被拒绝的）都写一对审计记录，见 README「审计日志」。日志有两处读者容易踩空的地方，`test:hardening` 第 9b 组实测过：其一，记录里的 `id` 是本桥为配对生成的 UUID，**不是**调用方发来的 JSON-RPC id，所以按 JSON-RPC id 查日志查不到任何东西；其二，轮转只保留一代（过 512 KB 就把当前文件改名成 `.1`，下一代再把 `.1` 覆盖掉），因此日志是一份滚动窗口：后续调用把它推过两代，一次挂起的 `start` 证据就从两个文件里同时消失。用日志判挂起，要在轮转窗口内读，且要把 `.1` 与当前文件一起看。落盘按进程一条队列串行，因为 `stat` 查大小、`rename` 轮转、`appendFile` 写行这三步不是一个整体：两个并发写都读到越过上限的尺寸就会都轮转，第二次 `rename` 覆盖的正是第一次放好的那个 `.1`，被吃掉的是那一刻还留在当前文件里的记录。这条不是假想——同一份未串行的代码重跑六轮，最坏的一次两个文件各剩 1 条，测试摆到磁盘上的 572 条记录里有 570 条在两个文件里都找不到；最轻的一次是并发那 60 条只剩 1 条。串行之后「一代窗口」才是文档里那个意思：只由尺寸决定，不由并发决定。
 - **`id` 同时是去宿主 transcript 取参数正文的钥匙。** 一次远程调用在宿主那侧留两半：`~/.omp/agent/sessions/**.jsonl` 里的 `tool_execution_start` 记着完整参数、却从没有结果（远程调用不走消息流，那份 transcript 里既没有 `tool_execution_end` 也没有 `isError`），桥的审计日志记着结果与远端归因、却把长参数折成 `<len,sha256>`。两份各缺一半，此前各铸一个 UUID、无从对上（实测同一次调用在两边是 `30012d7d-…` 与 `138f5ab0-…`）。现在一次调用只铸一个 id：审计行里的 `id` 就是宿主 transcript 里那次调用的 `toolCallId`，`grep <id> ~/.omp/agent/sessions/` 取回参数正文。id 的其余语义不变——它仍是桥铸的、不是调用方发来的 JSON-RPC id，仍按它配对 `start` 与 `done`。被暴露门拒掉的调用没有宿主那一份（它没进宿主），它只有审计这一行。
 - **失败的那条 `done` 记着原因。** 结果这一半全世界只有审计日志有——宿主那份 transcript 记着参数、从来没有结果——所以一条只写 `isError: true` 的记录只说明「失败了」，不说明「为什么」。`done` 记录多一个 `error` 字段：工具自己那条消息的前 200 字符（与 `xfer` / `tunnel` / `host_llm` 那几处同一个上限），且只在 `isError: true` 时有——`isError: false` 旁边挂一个 `error` 是日志里的自相矛盾，而这份日志是给人判断「这次调用能不能信」用的。文本里若回显了 token（命令里带了 token、shell 又把命令行原样吐回来），按当前 token 抹成 `<token>`：token 不进记录这条不靠「工具大概不会那么说」。
 - **无痕模式：调用方的调用不留痕。** 操作员在宿主会话里敲 `/a2mcp incognito` 打开，运行态（桥退出即无）。开着的时候，一次远程 `tools/call` 不写审计的那一对，也**不发宿主的渲染事件**——那个事件正是宿主 session transcript 的来源，不发它，命令才不会换个文件名继续留在宿主盘上；代价是受控端的界面上也不再画出这次远程调用。远程调用方够不到这个开关：能让调用方给自己的记录消音的桥，那份日志就不成其为证据，而证据是这份日志存在的唯一理由。开关本身记一条（`tool: "incognito"`，`args.action` 为 `enable` / `disable`），所以日志里一段空白说得清是谁关的。桥自己的暴露记录（共享、隧道、实例）照写——那是操作员自己机器的账，不是调用方的。
-- **桥实例自己也有起止。** `tool: "bridge"`（`phase: "done"`，`sid: null`，与隧道记录同一个形状），`args.action` 为 `start` / `stop`；`start` 带 `port` 与 `version`，`stop` 带 `port` 与 `args.why`（`session shutdown` / `session ended during start`）。隧道记录与共享记录里那个 port 指的是桥实例，而 port 自己说明不了那个实例还在不在；实例自己记下自己的一段，`start` 没有配对的 `stop` 就是那个端点跟着宿主一起没了——对公网主机名来说，这是「曾经暴露过」与「还在应答」的区别。
+- **桥实例自己也有起止。** `tool: "bridge"`（`phase: "event"`，`sid: null`，与隧道记录同一个形状），`args.action` 为 `start` / `stop`；`start` 带 `port` 与 `version`，`stop` 带 `port` 与 `args.why`（`session shutdown` / `session ended during start`）。隧道记录与共享记录里那个 port 指的是桥实例，而 port 自己说明不了那个实例还在不在；实例自己记下自己的一段，`start` 没有配对的 `stop` 就是那个端点跟着宿主一起没了——对公网主机名来说，这是「曾经暴露过」与「还在应答」的区别。
 - **记录先于响应落盘。** `tools/call` 的 `start` 在工具真正执行之前落盘，`done` 在响应发出之前落盘。拿到的 200 意味着那一行已经在盘上，调用方紧接着读日志不必轮询。这一条以前是反的：落盘走进程内一条队列、调用方不等它，于是响应会跑在记录前面，而它是**偶发**的——只有磁盘慢到队列排得上时才看得见。实测代价是每条记录约 99 µs（`stat` + `appendFile` + `chmod`，串行），对着一次 bash 调用或一次文件读取可以忽略；慢的磁盘推迟的是响应，不是记录，这正是要的取舍。队列本身仍然从不 reject，所以写失败不会变成一次失败的调用（记一条 stderr，计入 `auditWriteFailures()`）。附带修好的还有那个证据设计本身：`start` 一旦不排在工具执行之前，「进程死在调用中途、只剩 `start` 没有 `done`」这条判据就是假的——工具的副作用会先落地，那个窗口里崩掉就什么痕迹都不留。
 - `params.name` 缺失按空串处理（走向出口 2）。
 
