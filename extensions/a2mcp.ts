@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { auditHostLlm, auditTunnel } from "../src/audit.ts";
+import { auditBridge, auditHostLlm, auditTunnel } from "../src/audit.ts";
 import { ensurePlaceholderOnMainSession } from "../src/auto-model.ts";
 import { buildCallTool, buildToolCatalog, hasMainSession } from "../src/bridge.ts";
 import type { BridgeConfig } from "../src/config.ts";
@@ -196,14 +196,22 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 					// (src/server.ts). Structurally it is the seam `XferRouteDeps` declares.
 					xfer,
 				});
+				// The instance's own span. The port in a tunnel or share record names
+				// the instance that owned it, and a port on its own says nothing about
+				// whether that instance is still up — so the instance records its own
+				// bind and its own teardown, and a `start` with no matching `stop` is
+				// an endpoint that died with its host.
+				await auditBridge("start", { port: server.port, version: BRIDGE_VERSION }, null);
 				if (!hasMainSession()) {
 					// The session this start was for ended while the bind was in flight, and its
 					// shutdown ran while `server` was still null, so nothing stopped this one.
 					// Give the orphan up before saying anything: a "listening" line for a port
 					// that is already closed would send the operator to a dead endpoint.
+					const port = server.port;
 					server.stop();
 					server = null;
 					cfg = null;
+					await auditBridge("stop", { port, why: "session ended during start" }, null);
 					return;
 				}
 				const url = `http://${cfg.host}:${server.port}/`;
@@ -244,19 +252,34 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 		// going away has to take both with it, or `/xfer` would outlive the share it
 		// forwards to. The MCP tunnel is the same kind of promise — a public hostname
 		// pointing at a port this process is about to close, carrying the same `/xfer`
-		// path. No audit here — a stop by teardown is the same "no record for a plain
-		// stop" rule `xfer.stop()` follows. A `/xfer` request still in flight when the
-		// file server dies gets the 502 the route already answers with; the port is
-		// released last so an MCP call in flight can still finish (src/server.ts).
-		await mcpTunnel?.stop();
+		// path.
+		//
+		// Both are audited on the way down, and neither was before: the tunnel's open
+		// had a record and its death had none, so the log listed public hostnames that
+		// had served the host's tools and never said which of them were still
+		// answering. The share already wrote its `bridge stopped` close (src/xfer.ts);
+		// the tunnel did not, which is one teardown running two rules. A `/xfer`
+		// request still in flight when the file server dies gets the 502 the route
+		// already answers with; the port is released last so an MCP call in flight can
+		// still finish (src/server.ts).
+		const closing = mcpTunnel;
+		if (closing) {
+			await closing.stop();
+			await auditTunnel("stop", { url: closing.url, why: "bridge stopped" }, null);
+		}
 		mcpTunnel = null;
 		tunnelOpening = null;
 		await xfer?.stop();
 		xfer = null;
+		const port = server?.port;
 		server?.stop();
 		server = null;
 		cfg = null;
 		liveCallTool = null;
+		// The instance's own span, for the same reason the tunnel's death needed one:
+		// the port in a tunnel or share record names the instance that owned it, and
+		// "the bridge restarted" is a different fact from "the tunnel closed".
+		await auditBridge("stop", { port, why: "session shutdown" }, null);
 	});
 
 	pi.registerCommand("a2mcp", {

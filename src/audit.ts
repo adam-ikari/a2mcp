@@ -287,6 +287,42 @@ export function auditXfer(
 }
 
 /**
+ * One record per lifecycle event of something this process owns.
+ *
+ * The xfer share, the tunnel and the bridge instance are state the bridge creates
+ * and tears down, and none of them is a host tool call: the host's transcript has
+ * no trace of them, so this log is the only place they exist. They share one
+ * shape — a tag, an action, the details, and the error when it failed — because a
+ * reader parses one shape, not four.
+ *
+ * `sid` is null for all of them: these are the operator's own actions (or the
+ * process's own teardown), not a caller's, so there is no client session to
+ * attribute them to. The same standing as the startup host_llm record.
+ */
+function auditLifecycle(
+	tool: string,
+	action: string,
+	detail: Record<string, unknown>,
+	error: string | null,
+	env?: NodeJS.ProcessEnv,
+): Promise<void> {
+	const args = { action, ...detail };
+	return appendLine(
+		`${JSON.stringify({
+			ts: new Date().toISOString(),
+			id: randomUUID(),
+			sid: null,
+			phase: "done",
+			tool,
+			isError: error !== null,
+			args: serializeArgs(args),
+			...(error ? { error: error.slice(0, 200) } : {}),
+		})}\n`,
+		env,
+	);
+}
+
+/**
  * One record per `/a2mcp tunnel` start or stop.
  *
  * The MCP tunnel hands the bridge's own endpoint a public hostname, so this is
@@ -301,18 +337,23 @@ export function auditTunnel(
 	error: string | null,
 	env?: NodeJS.ProcessEnv,
 ): Promise<void> {
-	const args = { action, ...detail };
-	return appendLine(
-		`${JSON.stringify({
-			ts: new Date().toISOString(),
-			id: randomUUID(),
-			sid: null,
-			phase: "done",
-			tool: "tunnel",
-			isError: error !== null,
-			args: serializeArgs(args),
-			...(error ? { error: error.slice(0, 200) } : {}),
-		})}\n`,
-		env,
-	);
+	return auditLifecycle("tunnel", action, detail, error, env);
+}
+
+/**
+ * One record per bridge instance, at bind and at teardown.
+ *
+ * The port in a tunnel or share record names the instance that owned it, and a
+ * port on its own says nothing about whether that instance is still up. The
+ * instance's own span says it: a `start` with no matching `stop` is an endpoint
+ * that died with its host — which for a public hostname is the difference
+ * between "this URL was exposed" and "this URL is still answering".
+ */
+export function auditBridge(
+	action: string,
+	detail: Record<string, unknown>,
+	error: string | null,
+	env?: NodeJS.ProcessEnv,
+): Promise<void> {
+	return auditLifecycle("bridge", action, detail, error, env);
 }

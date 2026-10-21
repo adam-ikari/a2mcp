@@ -120,6 +120,16 @@ function newRunner(uiThrowsOn = ""): Runner {
 
 const texts = (r: Runner) => r.notes.map((n) => n.text).join("\n");
 
+/** Every audit record on disk, parsed. The log spans the whole file, tests included. */
+function auditRecords(): Array<Record<string, unknown>> {
+	const file = join(dir, "audit.log");
+	return (existsSync(file) ? readFileSync(file, "utf8") : "")
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((l) => JSON.parse(l) as Record<string, unknown>);
+}
+
 function mountMain(): void {
 	AgentRegistry.global().register({
 		id: MAIN_AGENT_ID,
@@ -457,13 +467,7 @@ setTimeout(() => process.exit(0), 60_000);
 		return r;
 	}
 
-	const tunnelRecords = () =>
-		(existsSync(join(dir, "audit.log")) ? readFileSync(join(dir, "audit.log"), "utf8") : "")
-			.trim()
-			.split("\n")
-			.filter(Boolean)
-			.map((l) => JSON.parse(l) as Record<string, unknown>)
-			.filter((rec) => rec.tool === "tunnel");
+	const tunnelRecords = () => auditRecords().filter((rec) => rec.tool === "tunnel");
 
 	test("opens the tunnel, prints the URL and the only-gate warning, and audits the start", async () => {
 		const cf = fakeCloudflared();
@@ -493,14 +497,18 @@ setTimeout(() => process.exit(0), 60_000);
 		const cf = fakeCloudflared();
 		const r = await startWithFake(cf);
 		await r.command("tunnel");
+		// Counted, not searched: the log spans every test in this file, and a
+		// teardown now writes a stop of its own.
+		const stopsBefore = tunnelRecords().filter((rec) => String(rec.args).includes("stop")).length;
 		await r.command("tunnel stop");
 		expect(texts(r)).toContain(`a2mcp tunnel closed: ${URL}/`);
 		expect(cf.terms()).toBe(1);
-		const stopped = tunnelRecords().find((rec) => String(rec.args).includes("stop"));
-		expect(stopped).toMatchObject({ sid: null, isError: false });
+		const stopped = tunnelRecords().filter((rec) => String(rec.args).includes("stop"));
+		expect(stopped).toHaveLength(stopsBefore + 1);
+		expect(stopped[stopsBefore]).toMatchObject({ sid: null, isError: false });
 		await r.command("tunnel stop");
 		expect(texts(r)).toContain("a2mcp tunnel: none open");
-		expect(tunnelRecords().filter((rec) => String(rec.args).includes("stop"))).toHaveLength(1);
+		expect(tunnelRecords().filter((rec) => String(rec.args).includes("stop"))).toHaveLength(stopsBefore + 1);
 	});
 
 	test("the endpoint going down takes the tunnel child with it", async () => {
@@ -515,5 +523,52 @@ setTimeout(() => process.exit(0), 60_000);
 		// got its SIGTERM and the port is gone in the same breath.
 		expect(cf.terms()).toBe(1);
 		expect(await ping(port)).toBeNull();
+		// And the death is a record like the opening was. Without it the log lists
+		// public hostnames that have served the host's tools and never says which of
+		// them are still answering — the share next to it already wrote its
+		// `bridge stopped` close, so one teardown was running two rules.
+		const stopped = tunnelRecords().find((rec) => String(rec.args).includes("stop"));
+		expect(stopped).toMatchObject({ sid: null, phase: "done", tool: "tunnel", isError: false });
+		expect(String(stopped?.args)).toContain("bridge stopped");
+	});
+});
+
+describe("the bridge instance's own span", () => {
+	// The port in a tunnel or share record names the instance that owned it, and a
+	// port on its own says nothing about whether that instance is still up. The
+	// instance records its own bind and its own teardown, so a `start` with no
+	// matching `stop` is an endpoint that died with its host — which for a public
+	// hostname is the difference between "this URL was exposed" and "this URL is
+	// still answering".
+	const bridgeRecords = () => auditRecords().filter((rec) => rec.tool === "bridge");
+
+	test("a bind records the instance, and the teardown closes it", async () => {
+		const r = newRunner();
+		await r.start();
+		const port = r.advertisedPort() as number;
+		const mine = () => bridgeRecords().filter((rec) => String(rec.args).includes(`"port":${port}`));
+		const started = mine().find((rec) => String(rec.args).includes("start"));
+		expect(started).toMatchObject({ sid: null, phase: "done", tool: "bridge", isError: false });
+		AgentRegistry.resetGlobalForTests();
+		await r.shutdown();
+		const stopped = mine().find((rec) => String(rec.args).includes("stop"));
+		expect(stopped).toMatchObject({ sid: null, tool: "bridge", isError: false });
+		expect(String(stopped?.args)).toContain("session shutdown");
+	});
+
+	test("a start that loses its session mid-bind closes the span it opened", async () => {
+		// The bind outlives the session that asked for it: the instance existed for
+		// a moment and then went away. A `start` with no `stop` would read as an
+		// endpoint that is still up.
+		const r = newRunner();
+		AgentRegistry.resetGlobalForTests();
+		await r.start();
+		const mine = bridgeRecords().filter((rec) => String(rec.args).includes("start"));
+		const opened = mine[mine.length - 1];
+		expect(opened).toMatchObject({ tool: "bridge", isError: false });
+		const port = /"port":(\d+)/.exec(String(opened?.args))?.[1];
+		expect(port).toBeTruthy();
+		const closed = bridgeRecords().filter((rec) => String(rec.args).includes(`"port":${port}`));
+		expect(closed.some((rec) => String(rec.args).includes("stop"))).toBe(true);
 	});
 });

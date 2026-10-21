@@ -5,7 +5,7 @@
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
 | `bun run test:tree` | 仓库形状核验，3 项，无依赖 | 否 | `tree-probe: repo shape OK` |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 259 pass / 0 fail（18 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 261 pass / 0 fail（18 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
 | `bun run test:obtain` | 外部二进制获取核验，41 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |

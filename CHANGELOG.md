@@ -4,6 +4,17 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## 2026-10-20 — 补齐缺的那几条状态迁移：隧道关掉要记，桥实例的起止也要记
+
+那台宿主一天里隧道开了三次、关了零次——日志列得出曾经开过哪些公网主机名，却说不出哪一个还在应答。查出来的原因是同一次退出里跑着两套规则：共享在桥退出时写了 `bridge stopped` 的 close（`src/xfer.ts` 的 `close("bridge stopped")`），隧道那条路径把隧道关了却明确不写记录（`extensions/a2mcp.ts` 的 `session_shutdown`，注释写着「No audit here」）。三次 port 全不同（55850 → 51007 → 58354）而配置里 `port: 0`，说明桥至少重启过两次——而桥自己的生死在日志里没有任何痕迹。
+
+- fix: `extensions/a2mcp.ts` 的 `session_shutdown` 现在给隧道补一条 `tool: "tunnel"` 的 `action: "stop"`（带 `args.why: "bridge stopped"`）。开有记录而关没有，等于日志只记得暴露过、记不得还开着。
+- feat: 新增 `tool: "bridge"` 记录（`src/audit.ts` 的 `auditBridge`，与隧道记录同一个形状：`phase: "done"`、`sid: null`、`args.action`）：绑定一条（带 `port` 与 `version`），退出一条（带 `port` 与 `args.why`）。隧道与共享记录里那个 port 指的是桥实例，port 自己说明不了那个实例还在不在；实例自己记一段，`start` 没有配对的 `stop` 就是那个端点跟着宿主一起没了。绑定中途会话就没了的那条（`session ended during start`）也补上 `stop`，不留下一个假的「还开着」。
+- 顺手: `src/audit.ts` 的三条生命周期记录（`host_llm` / `xfer` / `tunnel`）共用一个内部实现 `auditLifecycle`——形状本来就一样（一个 tag、一个 action、若干细节、失败时的 error），复制四份只是让读的人多认一种样子。
+- test: `bun test` 259 → 261。`test/entry.test.ts` 多两项（绑定记一条、退出记一条、port 对得上；绑定中途会话没了的那次也把 span 闭上），隧道那一组的「端点掉线带走子进程」多断言一条 teardown 的 stop 记录。两处反证都验过：去掉 teardown 那条记录，那一项红；去掉桥实例的 start/stop，那一项红。
+- docs: 协议页的隧道一节写清「关的那一条什么时候写」，审计补充多一条（`bridge` 记录的形状与 `args.why` 取值），两份 README 的隧道一段与审计一条各补一句。
+- 版本位: 远程调用方经协议拿到的东西没变（新增的记录只落在宿主盘上的审计日志里），按 2026-10-18 那条判据不进 minor；这一笔不发版。
+
 ## 2026-10-20 — 失败的那条 done 记着原因
 
 那台宿主一天里 44 次失败，在审计日志里全是同一个形状：`isError: true`，没有第二样东西。结果这一半全世界只有审计日志有——宿主那份 transcript（`~/.omp/agent/sessions/**.jsonl`）记着参数、从来没有结果，远程调用不走消息流——所以那条记录只说明「失败了」，不说明「为什么」。
