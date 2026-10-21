@@ -31,9 +31,13 @@
  *   - wire-level refusals (401/400/404/405, batch, bad jsonrpc) -> test:hardening
  *   - the prompt-tier hang and its 90s client timeout -> test:approval
  *   - package self-containment -> test:install
+ *   - the file server binary's own behaviour (which flags it takes, Range,
+ *     resumable downloads, where a missing binary comes from) -> test:obtain.
+ *     This suite drives the bridge's use of it: the bytes a caller gets back
+ *     are the bytes on the host's disk.
  */
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -239,6 +243,15 @@ function auditRecords(host: Host): AuditRecord[] {
 			});
 	} catch {
 		return [];
+	}
+}
+
+/** The audited args as an object — the audit stores them as a JSON string. */
+function auditedArgs(r: AuditRecord): Record<string, unknown> {
+	try {
+		return JSON.parse(String(r.args ?? "{}")) as Record<string, unknown>;
+	} catch {
+		return {};
 	}
 }
 
@@ -556,6 +569,231 @@ await scenario("a mounted device is reachable through a tool path, not a tool na
 		"the listing mentions device paths",
 		text.slice(0, 120).replace(/\n/g, " "),
 	);
+
+	await shutdown(host);
+});
+
+// --- the file route, through the bridge -------------------------------------
+
+/**
+ * Call one of the bridge's own tools and read its reply as JSON.
+ *
+ * The `xfer_*` tools answer with a JSON object in the text content, so a
+ * scenario can assert on fields instead of on prose. A tool that failed
+ * answers with prose instead, and `data` stays empty.
+ */
+async function callTool(
+	host: Host,
+	name: string,
+	args: Record<string, unknown>,
+	tk: string,
+	sid: string,
+	ms = 180_000,
+): Promise<{ isError: boolean; data: Record<string, unknown>; text: string }> {
+	const r = await rpc(host, "tools/call", { name, arguments: args }, { token: tk, sid, ms });
+	const text = r.body?.result?.content?.[0]?.text ?? "";
+	let data: Record<string, unknown> = {};
+	try {
+		data = JSON.parse(text) as Record<string, unknown>;
+	} catch {
+		// not JSON: `text` carries the reason
+	}
+	return { isError: r.body?.result?.isError === true, data, text };
+}
+
+/** A directory with one file in it, for a share to serve. */
+function shareDir(name: string, file: string, body: string): string {
+	const dir = join(tmp, name);
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, file), body);
+	return dir;
+}
+
+await scenario("a shared file's bytes come back byte-exact, and an upload lands on the host's disk", async () => {
+	const host = await boot("s11");
+	step(!!host.announced, "bridge announced");
+	const { token: tk, sid } = await handshake(host);
+
+	const bytes = Buffer.from("a2mcp-share-probe\n");
+	const dir = shareDir("share-src", "hello.txt", bytes.toString());
+
+	const share = await callTool(host, "xfer_share", { path: dir, ttlSeconds: 3600 }, tk, sid);
+	step(!share.isError, "xfer_share succeeded", share.text.slice(0, 200));
+	const route = String(share.data.url ?? "");
+	step(route.startsWith("http://127.0.0.1:"), "the reply names a loopback route", route);
+	step(Number(share.data.port ?? 0) > 0, "the reply names the file server's port", String(share.data.port));
+
+	// The bytes a caller gets back are the bytes on the host's disk.
+	const got = await fetch(`${route}hello.txt`, { headers: { authorization: `Bearer ${tk}` } });
+	const back = Buffer.from(await got.arrayBuffer());
+	step(got.status === 200, "the shared file answers 200", `status ${got.status}`);
+	step(back.equals(bytes), "the bytes that came back are the bytes on disk");
+
+	// An upload lands on the host's disk, byte-exact.
+	const up = Buffer.from("uploaded-by-the-probe\n");
+	const put = await fetch(`${route}uploaded.txt`, {
+		method: "PUT",
+		body: up,
+		headers: { authorization: `Bearer ${tk}` },
+	});
+	step(put.status < 300, "the upload was accepted", `status ${put.status}`);
+	step(
+		existsSync(join(dir, "uploaded.txt")) && readFileSync(join(dir, "uploaded.txt")).equals(up),
+		"the uploaded file is on the host's disk, byte-exact",
+	);
+
+	// The refusals hold.
+	const del = await fetch(`${route}hello.txt`, { method: "DELETE", headers: { authorization: `Bearer ${tk}` } });
+	step(del.status === 403, "DELETE is refused", `status ${del.status}`);
+	const move = await fetch(`${route}hello.txt`, { method: "MOVE", headers: { authorization: `Bearer ${tk}` } });
+	step(move.status === 403, "MOVE is refused", `status ${move.status}`);
+	const anon = await fetch(`${route}hello.txt`);
+	step(anon.status === 401, "a request without the token is refused", `status ${anon.status}`);
+	const wrong = await fetch(`${route}hello.txt`, { headers: { authorization: "Bearer not-the-token" } });
+	step(wrong.status === 401, "a request with a wrong token is refused", `status ${wrong.status}`);
+
+	// A listing is a WebDAV listing.
+	const propfind = await fetch(route, { method: "PROPFIND", headers: { authorization: `Bearer ${tk}` } });
+	const xml = await propfind.text();
+	step(propfind.status === 207, "PROPFIND answers 207", `status ${propfind.status}`);
+	step(xml.includes("hello.txt"), "the listing names the shared file");
+
+	// The audit log records the share as an event, not as a call.
+	const recs = auditRecords(host).filter((r) => r.tool === "xfer");
+	step(recs.length > 0, "the audit log has a record for the share", `${recs.length} record(s)`);
+	step(
+		recs.some((r) => r.phase === "event"),
+		"the share is recorded as an event, not a call",
+	);
+	step(
+		recs.some((r) => auditedArgs(r).action === "share"),
+		"and the record says which action it was",
+		recs.map((r) => String(auditedArgs(r).action ?? "?")).join(","),
+	);
+
+	// The share is closed by hand: the route goes with it, and the file server
+	// does not outlive the bridge.
+	const stop = await callTool(host, "xfer_stop", {}, tk, sid);
+	step(!stop.isError && stop.data.stopped === true, "xfer_stop closes the share", stop.text.slice(0, 120));
+	const gone = await fetch(`${route}hello.txt`, { headers: { authorization: `Bearer ${tk}` } });
+	step(gone.status === 404, "and the route is gone with it", `status ${gone.status}`);
+	const stillThere = await portAccepts(Number(share.data.port ?? 0));
+	step(!stillThere, "the file server is gone too", `port ${share.data.port}`);
+
+	await shutdown(host);
+});
+
+await scenario("the route keeps serving while the host's inference is switched off", async () => {
+	const host = await boot("s12");
+	step(!!host.announced, "bridge announced");
+	const { token: tk, sid } = await handshake(host);
+
+	const dir = shareDir("share-src-2", "keep.txt", "still-here\n");
+	const share = await callTool(host, "xfer_share", { path: dir }, tk, sid);
+	step(!share.isError, "xfer_share succeeded", share.text.slice(0, 200));
+	const route = String(share.data.url ?? "");
+
+	const before = await fetch(`${route}keep.txt`, { headers: { authorization: `Bearer ${tk}` } });
+	step(before.status === 200, "the shared file answers before the switch", `status ${before.status}`);
+
+	// The host's inference off: the takeover arms a tripwire on
+	// `globalThis.fetch`, and the bridge's own traffic to its file server goes
+	// through that same function. A provider on loopback put the bare host in
+	// the key set, and the share died with "the file server did not answer".
+	const armed = await fetch(new URL("host-llm", baseOf(host)), {
+		method: "POST",
+		headers: { "content-type": "application/json", authorization: `Bearer ${tk}` },
+		body: JSON.stringify({ enabled: false }),
+	});
+	const state = (await armed.json()) as { enabled?: boolean };
+	step(armed.status === 200 && state.enabled === false, "the host's inference is switched off", JSON.stringify(state));
+
+	const after = await fetch(`${route}keep.txt`, { headers: { authorization: `Bearer ${tk}` } });
+	const afterBody = await after.text();
+	step(after.status === 200, "the shared file still answers with the switch off", `status ${after.status}`);
+	step(afterBody === "still-here\n", "and the bytes are the same");
+
+	// A share opened while the switch is off: the readiness probe is an
+	// in-process fetch too, so this is where the share used to die.
+	const again = await callTool(
+		host,
+		"xfer_share",
+		{ path: shareDir("share-src-3", "second.txt", "second\n") },
+		tk,
+		sid,
+	);
+	step(!again.isError, "a share opened with the switch off still succeeds", again.text.slice(0, 200));
+
+	const off = await fetch(new URL("host-llm", baseOf(host)), {
+		method: "POST",
+		headers: { "content-type": "application/json", authorization: `Bearer ${tk}` },
+		body: JSON.stringify({ enabled: true }),
+	});
+	step(off.status === 200, "the switch is back on", `status ${off.status}`);
+
+	// Close the share by hand so its file server does not outlive the host.
+	const stop = await callTool(host, "xfer_stop", {}, tk, sid);
+	step(!stop.isError && stop.data.stopped === true, "xfer_stop closes the share", stop.text.slice(0, 120));
+
+	await shutdown(host);
+});
+
+await scenario("a second share replaces the first, and the TTL closes a share", async () => {
+	const host = await boot("s13");
+	step(!!host.announced, "bridge announced");
+	const { token: tk, sid } = await handshake(host);
+
+	const first = await callTool(host, "xfer_share", { path: shareDir("share-a", "a.txt", "a\n") }, tk, sid);
+	step(!first.isError, "the first share succeeded", first.text.slice(0, 200));
+	const firstPort = Number(first.data.port ?? 0);
+	const firstRoute = String(first.data.url ?? "");
+	step(
+		(await fetch(`${firstRoute}a.txt`, { headers: { authorization: `Bearer ${tk}` } })).status === 200,
+		"the first share serves its file",
+	);
+
+	const second = await callTool(host, "xfer_share", { path: shareDir("share-b", "b.txt", "b\n") }, tk, sid);
+	step(!second.isError, "the second share succeeded", second.text.slice(0, 200));
+	step(
+		second.data.replaced === true,
+		"the reply says the first share was replaced",
+		JSON.stringify(second.data.replaced),
+	);
+	step(
+		firstPort > 0 && !(await portAccepts(firstPort)),
+		"the replaced share's file server is gone",
+		`port ${firstPort}`,
+	);
+
+	const secondRoute = String(second.data.url ?? "");
+	step(
+		(await fetch(`${secondRoute}b.txt`, { headers: { authorization: `Bearer ${tk}` } })).status === 200,
+		"the second share serves its file",
+	);
+
+	// The TTL closes the share by itself.
+	const ttl = await callTool(host, "xfer_share", { path: shareDir("share-c", "c.txt", "c\n"), ttlSeconds: 1 }, tk, sid);
+	step(!ttl.isError, "a share with a one-second TTL opened", ttl.text.slice(0, 200));
+	const ttlRoute = String(ttl.data.url ?? "");
+	step(
+		(await fetch(`${ttlRoute}c.txt`, { headers: { authorization: `Bearer ${tk}` } })).status === 200,
+		"the short-lived share serves its file right away",
+	);
+	await Bun.sleep(2500);
+	const closed = await fetch(`${ttlRoute}c.txt`, { headers: { authorization: `Bearer ${tk}` } });
+	const closedBody = await closed.text();
+	step(closed.status === 404, "the expired share's route is gone", `status ${closed.status}`);
+	step(closedBody.includes("nothing is shared"), "and it says nothing is shared", closedBody.slice(0, 120));
+
+	// The audit log says the share closed, why, and what went through it.
+	const closes = auditRecords(host).filter((r) => r.tool === "xfer" && auditedArgs(r).action === "close");
+	step(closes.length > 0, "the audit log records the share closing", `${closes.length} close record(s)`);
+	const whys = closes.map((r) => String(auditedArgs(r).why ?? "?"));
+	step(whys.includes("replaced"), "including the one that was replaced", whys.join(","));
+	const ttlClose = closes.find((r) => String(auditedArgs(r).why ?? "").includes("ttl"));
+	step(!!ttlClose, "and the one that expired on its own", whys.join(","));
+	const tally = (auditedArgs(ttlClose ?? {}).usage ?? {}) as { requests?: number; bytes?: number };
+	step((tally.requests ?? 0) > 0, "with the tally of what went through it", JSON.stringify(tally));
 
 	await shutdown(host);
 });

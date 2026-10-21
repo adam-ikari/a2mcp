@@ -16,7 +16,7 @@
 | `bun run test:install` | 发布包自包含 + 端到端，55 项（其中 npm 真装那组 4 项在包发到 registry 之前按 `info:` 跳过——包名形态是预留，这一组就是不发不跑） | 是 | `PACKAGE OK` |
 | `bun run test:mcp-call` | 参考客户端 `scripts/mcp-call.py` 核验，7 项（真宿主走一遍 + 一只强制 404 的假服务器验重握手；没有 python3 整段 `info:` 跳过、退 0） | 是 | `MCP-CALL OK` |
 | `bun run test:bootstrap` | 一键脚本的判断核验，47 项，约 9 秒 | 第五组要 | `BOOTSTRAP OK` |
-| `bun run test:scenario` | 端到端场景，8 个叙事 / 41 步，约 45 秒 | 是 | `SCENARIOS: 41 steps, 0 failed` |
+| `bun run test:scenario` | 端到端场景，11 个叙事 / 85 步，约 90 秒 | 是 | `SCENARIOS: 85 steps, 0 failed` |
 
 统一前置（七个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 与 `test:mcp-call` 不认——前者要跑的 `omp install` 与被它装的东西必须是同一个，后者起的宿主就是它驱动的那座桥，都固定用 PATH 上那份。`test:mcp-call` 还多一样前置：它跑的是 `python3 scripts/mcp-call.py`，本机没有 `python3` 时整段按 `info:` 跳过、退 0（与 install 的 npm 组、bootstrap 的缺依赖跳过同一条纪律，CI 不因缺可选依赖红）。`test:bootstrap` 前五组连真宿主都不起：它用脚本自己造在临时目录里的记账 `omp` stub 和一只记录 argv 的假 `curl`，PATH 上没有真宿主也照样跑，只有最后一组（真宿主）用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2MCP_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主自 18.11.0（18.12.1 上重测仍如此）按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的出网有两支：第五组让桥自己从 GitHub 拉文件服务器那一个二进制（6.4 MB，从前是两个、约 46 MB），落点仍是它自己那个临时 `HOME`；第六组真跑一次 `omp install a2mcp`，那是这趟唯一碰 registry 的地方——registry 答不到它整组按 `info:` 跳过，CI 不因网络红。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2mcp-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
@@ -401,7 +401,7 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 
 失败语义与其他探针一致：任何一项 FAIL → exit 1，临时目录保留并打印路径；全过 → `registry probe: all assertions met`。CI 的 `check` job 跑它（不需要 omp，秒级），`host-probes` 不收。
 
-## `test:scenario` — 端到端场景核验（8 个叙事 / 41 步）
+## `test:scenario` — 端到端场景核验（11 个叙事 / 85 步）
 
 其余五个探针是**平铺的断言**：每项一个观察，彼此独立。这个探针反过来——每个场景是一条有头有尾的叙事，而**结尾状态要从产生它的那条通道之外去验**：
 
@@ -416,6 +416,9 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 | 宿主结束 | 端口不再接受连接 |
 | 8 路并发上传 | 每个文件只有自己的字节，且没有两个文件同尺寸 |
 | 挂载设备 | `read {"path":"xd://"}` 不报错（实测本机 5 个设备） |
+| 共享的文件 | 取回的字节与磁盘上的一致；上传落在宿主磁盘上且字节一致；`DELETE`/`MOVE` 403，没 token 与错 token 401；PROPFIND 207 且列得出那个文件；`xfer_stop` 之后路由 404、文件服务器的端口也空了 |
+| 宿主推理关掉时 | 共享照旧答 200、字节不变；关着的时候新开的共享也成功（探针与代理都是进程内的 `fetch`，绊线罩在上面） |
+| 第二次共享与 TTL | 旧共享的文件服务器端口没了；TTL 到期后路由 404 并说「nothing is shared」；审计里留下两条关闭记录（被顶掉的与到期的）与流量 |
 
 **每个场景都反证过会红**，方法是把对应的实现改坏再跑：
 
@@ -425,11 +428,12 @@ setup 失败（token 自愈超时、服务器起不来等）→ exit 1，stderr 
 | 审计不记 `sid` | 「记录带调用方会话 id」「审计归属到两个客户端」 |
 | `DELETE` 清空整张会话表 | 「B 不受 A 终止影响」 |
 | 端口占用时直接抛错不回落 | 「在另一个端口广播」「宿主告警」「桥在新端口可连」 |
+| 绊线把裸 hostname 也算进键集（2026-10-21 远端那台机器上的真 bug） | 「宿主推理关掉时共享照旧答 200」「关着的时候新开的共享也成功」——报的是「the file server did not answer … (a2mcp takeover: host inference is disabled in this mode)」，与远端的症状同形 |
 | 暴露面校验删除 | 场景套件**不红**——归 `test:hardening` 管（实测它红两项） |
 
 第一轮反证时场景套件对「一律覆盖写」是绿的：对一个还不存在的文件，追加与截断是同一个操作。补了一段显式 offset 的追加才咬得住。同一轮反证还揪出探针自身的两个毛病——`rpc()` 没有默认超时，桥没起来时会挂在占用端口上（现在恒有 20s 上限）；以及 `test:install` 那项「设备名被拒」只断言 `isError`，暴露门一去掉就会因为**设备自己**拒了而绿——理由错了也绿。
 
-这套场景**不覆盖**什么，各由谁管，写在 `test/scenario.ts` 的文件头：暴露面与协议层拒绝归 `test:hardening`，prompt 档挂起归 `test:approval`，发布包自包含归 `test:install`。
+这套场景**不覆盖**什么，各由谁管，写在 `test/scenario.ts` 的文件头：暴露面与协议层拒绝归 `test:hardening`，prompt 档挂起归 `test:approval`，发布包自包含归 `test:install`，文件服务器二进制自己那套行为（它接哪些 flag、Range、断点续传、缺了的二进制怎么拉）归 `test:obtain`。
 
 ## 版本守卫（`test/versions.test.ts`，`bun test` 的一部分）
 

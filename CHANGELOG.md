@@ -12,6 +12,8 @@
 
 - fix: `src/takeover.ts` 的 `tripwireKeys` 只记 `host`，`makeTripwire` 只按 `host` 匹配。provider 自己的端点照样被拒，别的主机端口不再陪着一起死。
 - test: `bun test` 277 → 278。`test/takeover.test.ts` 的 `tripwireKeys` 那组：键集里有 `127.0.0.1:61866`，没有 `127.0.0.1`，也没有那台机器上别的 loopback 端口。
+- test: `test:scenario` 多三个叙事（11 个叙事 / 85 步）：共享文件的字节取回来与磁盘上一致、上传落在宿主磁盘上且字节一致、`DELETE`/`MOVE` 403、没 token 与错 token 401、PROPFIND 207、`xfer_stop` 之后路由 404 而文件服务器的端口也空了；宿主推理关掉时共享照旧答 200（探针与代理都是进程内的 `fetch`，绊线罩在上面），关着的时候新开的共享也成功；第二次共享顶掉第一次（旧的端口没了）、TTL 到期后路由 404 并说「nothing is shared」、审计里留下两条关闭记录与流量。
+- test: 反证：把绊线改回按裸 hostname 匹配，上面第二个叙事红三项，报的是「the file server did not answer … (a2mcp takeover: host inference is disabled in this mode)」——与远端那台机器上看到的症状同形。文件路由此前没有任何真宿主核验：单测用一只替身服务器，`test:obtain` 直接驱动 dufs 二进制，场景套件一次都没调过 `xfer_share`。
 - 版本位: 远程调用方经协议拿到的东西没变（这是桥自己进程内的开关，不在协议上），不进 minor；这一笔不发版。
 
 ## 2026-10-21 — 提示词重写，并把参考客户端点名
