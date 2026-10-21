@@ -48,7 +48,7 @@ a2mcp 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable HTTP 子
 deny 是三层的并集，分工按「每条推理请求最后从哪个口出去」划的，判据读自宿主自己的代码（`pi-ai/src/utils/transport-fetch.ts` 是所有推理请求必经的那一个 fetch）：
 
 - **deny api + 宿主当前持有的模型行。** `a2mcp-deny` 注册成自定义 api，它的 `streamSimple` 只计数、只失败；`agent.setModel` 把宿主 agent 手里那一行换成同一行的 deny 副本（agent 持有的是它捕获的 `Model` 对象，不是查表）。宿主自己那一轮因此在建请求之前就被拒：一次尝试，不进重试循环，也不去解析凭据（deny 副本不带 `resolveHeaders`，否则 pi-ai 会在 api 分派之前先跑 provider 的 `!command` 取密钥程序）。返回错误 `a2mcp takeover: host inference is disabled in this mode`，这句话不命中宿主的任何重试触发条件，真实宿主上实测被拒的一轮只发起一次、以 `retryable: false` 终止。
-- **目的地绊线。** 包一层宿主进程的 `globalThis.fetch`，URL 主机匹配快照里任一 `baseUrl` 的请求一律拒绝。pi-ai 的取 fetch 顺序是 `options.fetch ?? globalThis.fetch`，取的是全局绑定、每次调用现读，所以这层盖住所有走 fetch 的推理请求——包括自建注册表、不问会话的那类调用者：task 执行器、web 搜索、commit 消息。
+- **目的地绊线。** 包一层宿主进程的 `globalThis.fetch`，URL 的 host（带端口）匹配快照里任一 `baseUrl` 的请求一律拒绝。键是 host 不是裸 hostname：默认端口在 URL 上被去掉，`http://host` 与 `http://host:80` 本来就是一个键；而裸 hostname 会把同一主机的每个端口一起拒掉——provider 挂在 loopback 上时，桥自己的文件服务器也在内。pi-ai 的取 fetch 顺序是 `options.fetch ?? globalThis.fetch`，取的是全局绑定、每次调用现读，所以这层盖住所有走 fetch 的推理请求——包括自建注册表、不问会话的那类调用者：task 执行器、web 搜索、commit 消息。
 - **注册表影子化，只声明不得不声明的那两个 provider。** 有两条道不是 fetch：cowork 道（`provider: anthropic` + `api: anthropic-messages` 时宿主换一个 `node:https` 直连客户端）和 Codex 的 websocket 道（`api: openai-codex-responses`，且宿主把 `providers.openaiWebsockets` 这个设置逐次转发给 provider 调用，所以是按 api 判、不是按行上的标志判）。这两条道的 provider 名字被重新注册到 deny 后面；默认装法下是 73 个 provider 里的 2 个。
 
 另有一个降噪层按住会让宿主自己忙起来的自主源（长命令自动转后台、宿主侧重试、advisor、TTSR、prewalk、autolearn、cache warming、自动压缩），全是运行时 override，不落盘。

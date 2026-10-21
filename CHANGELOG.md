@@ -4,6 +4,16 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## 2026-10-21 — 绊线只挡 provider 自己的端口
+
+宿主推理被关掉时，装在宿主进程上的 fetch 绊线按 provider 的 `baseUrl` 记目的地。它原来记两样：`host`（带端口）和 `hostname`（不带）。第二样是多余的——URL 会把默认端口去掉，`http://host` 与 `http://host:80` 本来就是一个键，请求与配置不用靠它也对得上。
+
+代价是远端那台机器上实测出来的：provider 挂在 loopback 上（`http://127.0.0.1:61866`）时，裸的 `127.0.0.1` 进了键集，那台机器上**每一个** loopback 请求都被拒——桥自己的文件服务器（`dufs` 在一个空闲的 loopback 端口上）算在内。取文件于是失败：`the file server did not answer on 127.0.0.1:65487/xfer/ within 10000ms (a2mcp takeover: host inference is disabled in this mode)`——说的是推理，撞上的是文件。
+
+- fix: `src/takeover.ts` 的 `tripwireKeys` 只记 `host`，`makeTripwire` 只按 `host` 匹配。provider 自己的端点照样被拒，别的主机端口不再陪着一起死。
+- test: `bun test` 277 → 278。`test/takeover.test.ts` 的 `tripwireKeys` 那组：键集里有 `127.0.0.1:61866`，没有 `127.0.0.1`，也没有那台机器上别的 loopback 端口。
+- 版本位: 远程调用方经协议拿到的东西没变（这是桥自己进程内的开关，不在协议上），不进 minor；这一笔不发版。
+
 ## 2026-10-21 — 提示词重写，并把参考客户端点名
 
 操作员交给远程 agent 的那段英文提示词，原先说三件事（工具真在那台机器上跑、一次一件事、自己带超时）。它漏了两件：副作用留痕（读到结果时命令已经跑过、文件已经改过，那台机器上不会回滚），以及**不会说 MCP 的一侧别自己写客户端**。后者是实测出来的现象：agent 反复重推握手（一个会话头、一个 JSON-RPC id，二十行），每次重写都多一处能错的地方。

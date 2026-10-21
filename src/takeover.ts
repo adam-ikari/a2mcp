@@ -28,10 +28,10 @@
  *    not a lookup). The host's own turn is then refused before a request is
  *    built: one attempt, no retry loop, no credential resolution.
  * 2. **A destination-keyed `globalThis.fetch` tripwire.** Every request whose URL
- *    host matches a `baseUrl` seen in the pre-arm registry snapshot is refused
- *    there. This is what covers everything that resolves a model on its own —
- *    task subagents, websearch, commit generation — because their request ends
- *    up in `globalThis.fetch`, which they look up at call time.
+ *    host — port included — matches a `baseUrl` seen in the pre-arm registry
+ *    snapshot is refused there. This is what covers everything that resolves a
+ *    model on its own — task subagents, websearch, commit generation — because
+ *    their request ends up in `globalThis.fetch`, which they look up at call time.
  * 3. **Registry shadowing, for the providers whose requests skip the global.**
  *    `coworkFetch` is a raw `node:https` client and the Codex transport opens a
  *    websocket; neither is a fetch, so those provider names are re-registered
@@ -340,10 +340,14 @@ function isDenyRow(model: unknown): boolean {
 }
 
 /**
- * The destinations the tripwire refuses: every `host` and `hostname` appearing
- * as a row `baseUrl` in the pre-arm snapshot. Both forms because a request URL
- * may carry an explicit default port the configured baseUrl does not. Non-URL
- * baseUrls contribute nothing — there is no destination to match.
+ * The destinations the tripwire refuses: the `host` of every row `baseUrl` in
+ * the pre-arm snapshot, port included as the URL has it. A default port is left
+ * out of the URL on both sides (`http://host` and `http://host:80` are one key),
+ * so a request and a baseUrl agree without the hostname form.
+ *
+ * Not the bare hostname: a provider on loopback would put `127.0.0.1` in the
+ * set, and then every other port on that host is refused with it — the bridge's
+ * own file server on a free loopback port among them.
  */
 export function tripwireKeys(rows: readonly RegistryRowView[]): Set<string> {
 	const keys = new Set<string>();
@@ -352,7 +356,6 @@ export function tripwireKeys(rows: readonly RegistryRowView[]): Set<string> {
 		try {
 			const u = new URL(row.baseUrl);
 			keys.add(u.host);
-			keys.add(u.hostname);
 		} catch {
 			// not a URL: nothing to match on
 		}
@@ -379,15 +382,12 @@ function makeTripwire(prev: Fetch, keys: ReadonlySet<string>): Fetch {
 	return ((input: string | URL | Request, init?: RequestInit) => {
 		const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 		let host = "";
-		let hostname = "";
 		try {
-			const u = new URL(raw);
-			host = u.host;
-			hostname = u.hostname;
+			host = new URL(raw).host;
 		} catch {
 			return prev(input as never, init as never);
 		}
-		if (keys.has(host) || keys.has(hostname)) {
+		if (keys.has(host)) {
 			denies++;
 			console.error(`[a2mcp] takeover denied an outbound request to ${host}; denied=${denies}`);
 			return Promise.reject(new Error(SENTINEL));

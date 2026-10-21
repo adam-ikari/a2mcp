@@ -234,14 +234,20 @@ describe("buildDenyOverlays", () => {
 });
 
 describe("tripwireKeys", () => {
-	test("collects host and hostname of every URL-shaped baseUrl", () => {
+	test("collects the host of every URL-shaped baseUrl, port included", () => {
 		const keys = tripwireKeys([
 			row({ provider: "a", id: "m1", baseUrl: "https://api.anthropic.com/v1" }),
 			row({ provider: "b", id: "m2", baseUrl: "http://127.0.0.1:8080/p" }),
 		]);
 		expect(keys.has("api.anthropic.com")).toBe(true);
 		expect(keys.has("127.0.0.1:8080")).toBe(true);
-		expect(keys.has("127.0.0.1")).toBe(true);
+	});
+
+	test("a loopback provider does not take the host's other ports with it", () => {
+		const keys = tripwireKeys([row({ provider: "a", id: "m1", baseUrl: "http://127.0.0.1:61866/v1" })]);
+		expect(keys.has("127.0.0.1")).toBe(false);
+		expect(keys.has("127.0.0.1:65487")).toBe(false);
+		expect(keys.has("127.0.0.1:61866")).toBe(true);
 	});
 
 	test("non-URL and missing baseUrls contribute nothing", () => {
