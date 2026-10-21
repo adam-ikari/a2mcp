@@ -1,14 +1,15 @@
 /**
- * File transfer over plain HTTP, wired into the MCP endpoint as tools.
+ * File transfer over WebDAV, wired into the MCP endpoint as tools.
  *
  * ## What this is, and what it is not
  *
  * There is no transfer protocol here. The bytes never touch JSON-RPC: a tool call says
  * *which* path to hand out, `dufs` serves that path on a loopback port, and the bridge
- * proxies it under `/xfer/` on its own port (src/server.ts). A caller then moves files
- * with `curl`, `rclone`, a browser or a WebDAV client — GET to download, PUT to upload —
- * the same thing they would do against any other HTTP file server, with the same Bearer
- * token the MCP calls use.
+ * proxies it under `/xfer/` on its own port (src/server.ts). The route speaks WebDAV —
+ * the standard protocol for moving files over HTTP — so a caller mounts it with any
+ * WebDAV client that can send the bridge's `Authorization: Bearer` header (`rclone`,
+ * `curl`, or their own HTTP client): GET to download, PUT to upload, PROPFIND for a
+ * listing, Range to resume. One gate, the same Bearer token the MCP calls use.
  *
  * That shape was chosen against the alternative, an encode-and-chunk protocol on
  * the MCP channel: MCP has no binary content type (JSON-RPC is text; its image and
@@ -75,9 +76,10 @@ export const XFER_TOOLS: McpTool[] = [
 	{
 		name: "xfer_share",
 		description:
-			"Serve a host path over plain HTTP at the bridge's own /xfer/ route, under the same " +
-			"Bearer token as the tool calls: download with GET (range requests work), upload with PUT, " +
-			"or point any WebDAV client at the route. " +
+			"Serve a host path over WebDAV at the bridge's own /xfer/ route, under the same " +
+			"Bearer token as the tool calls: mount it with any WebDAV client that can send " +
+			"`Authorization: Bearer <token>` (rclone, curl, or your own HTTP client) — GET to " +
+			"download (range requests work), PUT to upload, PROPFIND for a listing. " +
 			"The share closes itself at `ttlSeconds` (default 3600) or on xfer_stop. " +
 			"Reachable on the host's loopback; while the operator's `/a2mcp tunnel` is open the reply's " +
 			"`publicUrl` is the same /xfer/ route on that hostname. " +

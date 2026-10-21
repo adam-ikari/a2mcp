@@ -238,7 +238,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 ## 传文件
 
-传文件走普通 HTTP。`xfer_share` 把一条宿主路径交给 [`dufs`](https://github.com/sigoden/dufs)，dufs 在 `127.0.0.1` 上找一个空端口监听，桥再把这个端口挂到自己端点的 `/xfer/` 路由后面。回包给出的是路由（`http://127.0.0.1:<port>/xfer/`）、文件服务器的端口和到期时间，没有第二份凭据。调用 `tools/list` 用的那个 Bearer token 同时给 `GET` 和 `PUT` 授权：代理替掉请求里带来的 `Authorization`，换上桥为这次共享生成的 basic-auth 对，回程再删掉文件服务器的 `www-authenticate` 头。下行 `curl -H 'Authorization: Bearer <token>' -O <url>/<name>`，上行 `-T`，Range 可续传，WebDAV 客户端可用，浏览器打开就是 dufs 自己的目录列表。`DELETE` 和 `MOVE` 回 403，桥只向文件服务器要了上传。共享在 TTL（默认 3600 秒）到期、`xfer_stop`、桥停止时关闭；第二次共享顶掉第一次。`xfer_status` 与 `xfer_stop` 不收参数。字节不经过 JSON-RPC，桥不自带字节协议。
+传文件走 **WebDAV**。`xfer_share` 把一条宿主路径交给 [`dufs`](https://github.com/sigoden/dufs)（一个 WebDAV 文件服务器），dufs 在 `127.0.0.1` 上找一个空端口监听，桥再把这个端口挂到自己端点的 `/xfer/` 路由后面。回包给出的是路由（`http://127.0.0.1:<port>/xfer/`）、文件服务器的端口和到期时间，没有第二份凭据。调用 `tools/list` 用的那个 Bearer token 同时给这条路由授权：代理替掉请求里带来的 `Authorization`，换上桥为这次共享生成的 basic-auth 对，回程再删掉文件服务器的 `www-authenticate` 头。所以拿任何能发 `Authorization: Bearer <token>` 的 WebDAV 客户端挂它就行——`rclone`、`curl`，或者你自己写的 HTTP 客户端：GET 下行、PUT 上行、PROPFIND 列目录、Range 续传。浏览器加不了那个头，所以它跟没带 token 的人一样拿到 401。`DELETE` 和 `MOVE` 回 403，桥只向文件服务器要了上传。共享在 TTL（默认 3600 秒）到期、`xfer_stop`、桥停止时关闭；第二次共享顶掉第一次。`xfer_status` 与 `xfer_stop` 不收参数。字节不经过 JSON-RPC，桥不自带字节协议。
 
 路由开在回环端口上，本机之外一个字节都进不来。公网主机名只有一个来源：操作员跑 `/a2mcp tunnel`。隧道开着时，`xfer_share` 与 `xfer_status` 把它作为 `publicUrl` 回给调用方——同一个 `/xfer/` 路由，换到公网主机名下；隧道没开就是 `publicUrl: null`，`usage.public` 点名两条路：SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。工具只报这条主机名，自己不开隧道。
 

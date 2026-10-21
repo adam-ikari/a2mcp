@@ -177,7 +177,7 @@ features:
   - title: 驱动接在本机上的设备
     details: DAP 调试器（xd://debug）、LSP（xd://lsp）这类设备不进工具目录，远程 agent 用 read/write 的 path 参数就能读写和执行。有什么设备，跟着本机 omp 装了哪些扩展走。
     link: /intro#设备
-  - title: 传文件走普通 HTTP
+  - title: 传文件走 WebDAV
     details: xfer_share 收一条宿主路径，交给 dufs 服务，挂在桥自己端口的 /xfer/ 路由下；字节不经过 JSON-RPC，要的还是那个 Bearer token。公网那一面是操作员的 /a2mcp tunnel：一条 quick tunnel 只顶一个 origin，所以文件路由和工具调用走同一个主机名、同一个 token。PATH 上找不到 dufs，桥按钉死的版本加归档 sha256 拉一份装进自己的目录。token 就是那份能力：拿到它的人能读能写这条路由背后的路径，直到共享关掉。
     link: /intro#传文件
   - title: 宿主推理可以整体关掉
