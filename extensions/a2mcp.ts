@@ -57,10 +57,8 @@ const BRIDGE_VERSION = bridgeVersion();
  * own words, and that a call can hang on a gate nobody is watching.
  *
  * And it names the wheel: an agent that cannot speak MCP to this endpoint has a
- * ready-made client (the repo's `scripts/mcp-call.py`) instead of writing one.
- * Agents re-implement the handshake constantly — a session header and a JSON-RPC
- * id, twenty lines, and a new thing to get wrong each time. The prompt is the
- * one place the remote side is certain to read.
+ * ready-made client (the repo's `scripts/mcp-call.py`) instead of writing one —
+ * the prompt is the one place the remote side is certain to read.
  */
 const REMOTE_PROMPT = `You are connected over MCP to a live agent session on another machine. The tools in \`tools/list\` are that machine's own: \`bash\` runs commands in its shell, \`read\`/\`write\`/\`edit\` work on its files, and the results come back verbatim — errors included, in the tool's own words. Nothing is reasoned about on that side: you decide what runs, that machine only executes.
 
@@ -68,9 +66,9 @@ Work one fact at a time: call a tool, read its result, then decide the next call
 
 Give every call a timeout of your own. A call can hang: a permission prompt on the other side may have nobody to answer it, and your timeout is the only way out.
 
-What you run there stays there: by the time you read the result, the command has run and the file has changed, and nothing on that machine is rolled back for you.
+What you run there stays there: nothing on that machine is rolled back for you.
 
-Big files do not travel through a tool call. The bridge serves a shared path over WebDAV (\`xfer_share\`), and the route asks for the operator's token — ask for that token rather than pasting megabytes into a command.
+Big files do not travel through a tool call. A file too large to move is the operator's WebDAV route (\`xfer_share\`), not megabytes pasted into a command.
 
 If your side cannot speak MCP to this endpoint, the bridge ships a zero-dependency reference client — \`scripts/mcp-call.py\` in the a2mcp repository. Use it; do not write your own client.`;
 
