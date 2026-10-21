@@ -139,7 +139,13 @@ function mountMain(): void {
 		// A model on the fake, because these tests are about a configured host: the
 		// placeholder in src/auto-model.ts must stay out of the way when the session
 		// already has one, and an empty slot here would notify into these notes.
-		session: { getToolByName: () => undefined, model: { id: "fake-model" } } as never,
+		// `getAllToolInfos` is what the bridge's catalog reads (src/bridge.ts), so a
+		// fake without it cannot answer `tools/list` at all.
+		session: {
+			getToolByName: () => undefined,
+			getAllToolInfos: () => [{ name: "read", description: "Read a file", parameters: { type: "object" } }],
+			model: { id: "fake-model" },
+		} as never,
 	});
 }
 
@@ -421,9 +427,79 @@ describe("the a2mcp command", () => {
 		// The prompt is English: it is read by a model on the other side.
 		expect(out).toContain("You are connected over MCP to a live agent session on another machine.");
 		expect(out).toContain("Give every call a timeout of your own.");
+		// The two things a first caller gets wrong: the machine is real, so what it
+		// ran stays there; and a big file does not travel through a tool call.
+		expect(out).toContain("What you run there stays there");
+		expect(out).toContain("Big files do not travel through a tool call.");
 		// And it carries no credential: a token inside a prompt would put it in a
 		// model's context, which is a wider place than a config file.
 		expect(out.slice(out.indexOf("prompt:"))).not.toContain(TOKEN);
+	});
+
+	/**
+	 * The text a client reads is English.
+	 *
+	 * The remote side is a model, and the wire is where it reads: the tool
+	 * descriptions, the handshake, the error bodies, the prompt. English there is
+	 * not a stylistic choice — the host's own tool descriptions are English, so a
+	 * Chinese error body in an English catalog reads like a mistake to whoever is
+	 * on the other side. The docs are Chinese on purpose (the site renders
+	 * Chinese); this guard is about the wire.
+	 *
+	 * It covers the bridge's own strings. The host's descriptions are the host's,
+	 * passed through verbatim — the bridge does not rewrite them.
+	 */
+	test("the text a client reads is English", async () => {
+		const r = newRunner();
+		await r.start();
+		const port = r.advertisedPort() as number;
+		// Han, the CJK punctuation, and the fullwidth forms: any of them in a
+		// client-facing string is the bug this guard exists for.
+		const cjk = /[　-〿一-鿿＀-￯]/;
+		const post = (body: unknown, headers: Record<string, string> = {}) =>
+			fetch(`http://127.0.0.1:${port}/`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", ...headers },
+				body: JSON.stringify(body),
+			});
+
+		const init = await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+		const sid = init.headers.get("mcp-session-id");
+		expect(sid).toBeTruthy();
+		expect(await init.text(), "the initialize result").not.toMatch(cjk);
+
+		const listed = await post({ jsonrpc: "2.0", id: 2, method: "tools/list" }, { "mcp-session-id": sid as string });
+		const catalog = (await listed.json()) as {
+			result: {
+				tools: Array<{
+					name: string;
+					description: string;
+					inputSchema?: { properties?: Record<string, { description?: string }> };
+				}>;
+			};
+		};
+		expect(catalog.result.tools.length).toBeGreaterThan(0);
+		for (const t of catalog.result.tools) {
+			expect(t.description, `${t.name} description`).not.toMatch(cjk);
+			for (const [prop, schema] of Object.entries(t.inputSchema?.properties ?? {})) {
+				expect(schema.description ?? "", `${t.name}.${prop}`).not.toMatch(cjk);
+			}
+		}
+
+		// The bridge's own error bodies are the same reading surface: a model
+		// meets them when a call is refused.
+		const dark = await fetch(`http://127.0.0.1:${port}/`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list" }),
+		});
+		expect(await dark.text(), "the 401 body").not.toMatch(cjk);
+		const noShare = await fetch(`http://127.0.0.1:${port}/xfer/`, { headers: { authorization: `Bearer ${TOKEN}` } });
+		expect(await noShare.text(), "the 404 body").not.toMatch(cjk);
+
+		// And the prompt the operator hands the remote agent.
+		await r.command("prompt");
+		expect(texts(r), "the prompt block").not.toMatch(cjk);
 	});
 
 	test("every subcommand says not running when the bridge never started", async () => {

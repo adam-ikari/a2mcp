@@ -218,10 +218,11 @@ What separates them is whether your client already speaks MCP.
 ```sh
 curl -fsSL https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/mcp-call.py -o mcp-call.py
 python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> list
+python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> schema read
 python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> call bash '{"command":"adb devices"}'
 ```
 
-`list` prints each tool with the first line of its description; `call <name> <json>` runs one tool and prints its text output. The exit code is the signal — non-zero on a bad token, a transport error, or a result flagged `isError`. Every call carries a timeout (default 30s, `--timeout` to change), because a tool awaiting approval on a host with no UI hangs instead of erroring. `--url`/`--token` also read `A2MCP_URL`/`A2MCP_TOKEN`. The script is not in the install tarball, only at that raw URL, and it is a reference implementation — adapt it freely rather than treating it as a supported surface.
+`list` prints each tool with the first line of its description; `schema <name>` prints that tool's whole catalog entry — name, description, input schema — so you can read what a tool wants without writing a client to ask for it; `call <name> <json>` runs one tool and prints its text output. The exit code is the signal — non-zero on a bad token, a transport error, or a result flagged `isError`. Every call carries a timeout (default 30s, `--timeout` to change), because a tool awaiting approval on a host with no UI hangs instead of erroring. `--url`/`--token` also read `A2MCP_URL`/`A2MCP_TOKEN`. The script is not in the install tarball, only at that raw URL, and it is a reference implementation — adapt it freely rather than treating it as a supported surface.
 
 ## Prompt for the remote agent
 
@@ -355,7 +356,7 @@ bun install
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
 bun run test:tree     # repo shape: no symlink points off this machine, 3 checks, no deps, no local omp (runs before bun test on purpose)
-bun test              # unit tests: test/*.test.ts (276: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
+bun test              # unit tests: test/*.test.ts (277: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
 bun run test:obtain   # the pinned binaries: fetches both for this platform, HEADs all ten asset URLs, reads the two Windows rows as bytes, 41 checks (needs no local omp; writes only inside its own /tmp directory)
 bun run test:registry # drive the takeover against the host's real model registry, 28 checks, seconds (needs no local omp, no credentials)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
@@ -364,7 +365,7 @@ bun run test:approval  # approval-boundary discriminating check, ~95s (needs a l
 bun run test:takeover  # host inference deny/restore against a counting sink, ~60s (needs a local omp)
 bun run test:scenario  # end-to-end scenarios, 8 narratives / 41 steps, ~45s (needs a local omp)
 bun run test:install   # published-package self-containment + a real host over MCP, 55 items (needs a local omp; fetches ~6.4 MB from GitHub and once installs the package from the registry — that group info-skips while the package is unpublished)
-bun run test:mcp-call  # the reference client scripts/mcp-call.py against a real host + a fake 404 server, 6 checks (needs a local omp and python3; no python3 → the whole probe info-skips, exit 0)
+bun run test:mcp-call  # the reference client scripts/mcp-call.py against a real host + a fake 404 server, 7 checks (needs a local omp and python3; no python3 → the whole probe info-skips, exit 0)
 bun run test:bootstrap # the one-shot installer's decisions, 47 items, ~9s (everything but the last group runs against a recording stub omp and a fake curl; the last group needs a local omp)
 bun run website        # local docs site preview (VitePress); port is printed (5173 upward, next free if taken); first run `cd website && bun install`
 ```

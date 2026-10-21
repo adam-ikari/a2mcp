@@ -185,10 +185,11 @@ a2mcp listening on http://127.0.0.1:<port> (token <前6字符>…)
 ```sh
 curl -fsSL https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/mcp-call.py -o mcp-call.py
 python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> list
+python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> schema read
 python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> call bash '{"command":"adb devices"}'
 ```
 
-`list` 逐个打印工具名和它描述的第一行；`call <名字> <json>` 调一个工具、把文本结果打到 stdout。退出码就是判据，token 不对、传输出错、结果被标了 `isError`，都是非零。每次调用自带超时（默认 30 秒，`--timeout` 改），因为无 UI 的宿主上等审批的工具是挂着不报错。`--url`/`--token` 也读 `A2MCP_URL`/`A2MCP_TOKEN`。脚本不在安装 tarball 里，只有这个 raw URL；它是参考实现，随便改，不当受支持的接口看待。
+`list` 逐个打印工具名和它描述的第一行；`schema <名字>` 打印那一个工具的整条目录项（名字、描述、入参 schema）——要读一个工具想要什么，不必自己写个客户端去问；`call <名字> <json>` 调一个工具、把文本结果打到 stdout。退出码就是判据，token 不对、传输出错、结果被标了 `isError`，都是非零。每次调用自带超时（默认 30 秒，`--timeout` 改），因为无 UI 的宿主上等审批的工具是挂着不报错。`--url`/`--token` 也读 `A2MCP_URL`/`A2MCP_TOKEN`。脚本不在安装 tarball 里，只有这个 raw URL；它是参考实现，随便改，不当受支持的接口看待。
 
 ## 给远程 agent 的提示词
 
@@ -321,7 +322,7 @@ bun install
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
-bun test              # 单测：test/*.test.ts（276 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
+bun test              # 单测：test/*.test.ts（277 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
 bun run test:obtain   # 钉死的两个二进制：本机这一行真下载、钉表十个 asset 全 HEAD、Windows 那两行按字节读，41 项（不需要本机 omp；只往它自己那个 /tmp 目录里写）
 bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
@@ -330,7 +331,7 @@ bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp�
 bun run test:takeover  # 宿主推理 deny/restore 对一个计数 sink 实测，约 60 秒（需本机 omp）
 bun run test:scenario  # 端到端场景，8 个叙事 / 41 步，约 45 秒（需本机 omp）
 bun run test:install   # 发布包自包含 + 真实宿主走 MCP，55 项（需本机 omp；会向 GitHub 拉约 6.4 MB，还从 registry 真装一次包——包没发上 registry 之前那一组按 info 跳过）
-bun run test:mcp-call  # 参考客户端 scripts/mcp-call.py 打真实宿主 + 一只强制 404 的假服务器，6 项（需本机 omp 和 python3；没有 python3 整段按 info 跳过、退 0）
+bun run test:mcp-call  # 参考客户端 scripts/mcp-call.py 打真实宿主 + 一只强制 404 的假服务器，7 项（需本机 omp 和 python3；没有 python3 整段按 info 跳过、退 0）
 bun run test:bootstrap # 一键脚本的判断核验，47 项，约 9 秒（除最后一组都用自制的记账 stub omp 加一只记录 argv 的假 curl；最后一组需本机 omp）
 bun run website        # 文档站（VitePress）本地预览，端口见输出（5173 起，被占则顺延）；首次先 cd website && bun install
 ```

@@ -16,12 +16,15 @@ it hangs, and only your timeout ends it.
 
 Usage:
     python3 mcp-call.py --url URL --token TOKEN list
+    python3 mcp-call.py --url URL --token TOKEN schema read
     python3 mcp-call.py --url URL --token TOKEN call bash '{"command":"adb devices"}'
     python3 mcp-call.py --url URL --token TOKEN call read '{"path":"xd://"}'
 
 `--url`/`--token` also read from A2MCP_URL / A2MCP_TOKEN. Exit code is the caller's
 signal: 0 on success, non-zero on auth error, transport error, or a tool result
-flagged `isError`.
+flagged `isError`. `schema` prints one tool's whole catalog entry — name,
+description and input schema — so a caller can read what a tool wants without
+hand-rolling a client to ask for it.
 """
 
 import argparse
@@ -151,7 +154,7 @@ def main(argv):
     ap.add_argument("--token", default=os.environ.get("A2MCP_TOKEN"), help="Bearer token (or A2MCP_TOKEN)")
     ap.add_argument("--timeout", type=float, default=30.0, help="per-call seconds (default 30)")
     ap.add_argument("--keep-session", action="store_true", help="skip the DELETE on exit")
-    ap.add_argument("cmd", choices=["list", "call"])
+    ap.add_argument("cmd", choices=["list", "schema", "call"])
     ap.add_argument("rest", nargs="*", help="for call: <tool-name> [json-arguments]")
     args = ap.parse_args(argv)
 
@@ -169,6 +172,17 @@ def main(argv):
                 desc = (tool.get("description") or "").splitlines()
                 sys.stdout.write(f"{tool.get('name')}\t{desc[0] if desc else ''}\n")
             return 0
+
+        if args.cmd == "schema":
+            if not args.rest:
+                ap.error("schema needs a tool name")
+            res = client.list_tools()
+            for tool in res.get("tools", []):
+                if tool.get("name") == args.rest[0]:
+                    sys.stdout.write(json.dumps(tool, ensure_ascii=False, indent=2) + "\n")
+                    return 0
+            sys.stderr.write(f"mcp-call: no tool named {args.rest[0]}\n")
+            return 1
 
         if not args.rest:
             ap.error("call needs a tool name")

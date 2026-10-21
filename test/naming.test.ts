@@ -49,6 +49,7 @@ const SKIP_PATHS = [
 	"LICENSE",
 	"bun.lock",
 	"node_modules",
+	"__pycache__",
 	".qoder",
 	"brain",
 	join("docs", "superpowers"),

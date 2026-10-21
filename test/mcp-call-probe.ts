@@ -104,6 +104,27 @@ try {
 			`code=${listed.code}; xfer: ${owned.join(",") || "none"} of ${XFER_TOOL_NAMES.length}; ${toolNames.filter(Boolean).length} lines`,
 		);
 
+		// schema: the whole catalog entry for one tool, so a caller can read what
+		// a tool wants without writing a client to ask for it. The tool named here
+		// is the bridge's own, so the assertion cannot go stale on a host change.
+		const schema = await runClient(["--url", url, "--token", token, "schema", "xfer_share"]);
+		let schemaOk = false;
+		try {
+			const parsed = JSON.parse(schema.stdout) as {
+				name?: string;
+				inputSchema?: { properties?: Record<string, unknown> };
+			};
+			schemaOk =
+				schema.code === 0 && parsed.name === "xfer_share" && typeof parsed.inputSchema?.properties?.path === "object";
+		} catch {
+			schemaOk = false;
+		}
+		check(
+			schemaOk,
+			"`schema` prints one tool's name, description and input schema",
+			`code=${schema.code}; stdout=${JSON.stringify(schema.stdout.slice(0, 80))}`,
+		);
+
 		// call bash: the README's promise, a remote tool call running on this machine.
 		const called = await runClient([
 			"--url",

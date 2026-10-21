@@ -45,18 +45,34 @@ const BRIDGE_VERSION = bridgeVersion();
  *
  * English on purpose: it is read by a model on the other side, not by the
  * operator — the operator reads this repo's own prose. It says what the endpoint
- * is, how to work against it, and the two things that bite a first caller: the
- * working directory is not yours to assume, and a call can hang.
+ * is, how to work against it, and the things that bite a first caller.
  *
  * It carries no URL and no token. Those go into the remote client's `mcp.json`,
  * where the credential belongs; a token inside a prompt would put it in a model's
  * context, which is a different and much wider place than a config file.
+ *
+ * It also repeats nothing the tool descriptions already say — the host's own
+ * `read`/`bash`/`edit` descriptions are in `tools/list`, right there. What the
+ * catalog cannot say is where those tools run, that the results are the machine's
+ * own words, and that a call can hang on a gate nobody is watching.
+ *
+ * And it names the wheel: an agent that cannot speak MCP to this endpoint has a
+ * ready-made client (the repo's `scripts/mcp-call.py`) instead of writing one.
+ * Agents re-implement the handshake constantly — a session header and a JSON-RPC
+ * id, twenty lines, and a new thing to get wrong each time. The prompt is the
+ * one place the remote side is certain to read.
  */
-const REMOTE_PROMPT = `You are connected over MCP to a live agent session on another machine. The tools in \`tools/list\` run for real there: \`bash\` executes commands in that machine's shell, \`read\`/\`write\`/\`edit\` work on its files, and the results come back verbatim. Nothing is reasoned about on that side — you decide what runs, that machine only executes.
+const REMOTE_PROMPT = `You are connected over MCP to a live agent session on another machine. The tools in \`tools/list\` are that machine's own: \`bash\` runs commands in its shell, \`read\`/\`write\`/\`edit\` work on its files, and the results come back verbatim — errors included, in the tool's own words. Nothing is reasoned about on that side: you decide what runs, that machine only executes.
 
 Work one fact at a time: call a tool, read its result, then decide the next call. Use absolute paths; do not assume a working directory. The machine is often a device lab — \`adb\`, flashing tools and serial ports are reached through \`bash\`.
 
-Give every call a timeout of your own. A call can hang: a permission prompt on the other side may have nobody to answer it, and your timeout is the only way out.`;
+Give every call a timeout of your own. A call can hang: a permission prompt on the other side may have nobody to answer it, and your timeout is the only way out.
+
+What you run there stays there: by the time you read the result, the command has run and the file has changed, and nothing on that machine is rolled back for you.
+
+Big files do not travel through a tool call. The bridge serves a shared path over WebDAV (\`xfer_share\`), and the route asks for the operator's token — ask for that token rather than pasting megabytes into a command.
+
+If your side cannot speak MCP to this endpoint, the bridge ships a zero-dependency reference client — \`scripts/mcp-call.py\` in the a2mcp repository. Use it; do not write your own client.`;
 
 let server: { port: number; fellBack: boolean; stop(): void } | null = null;
 let cfg: BridgeConfig | null = null;

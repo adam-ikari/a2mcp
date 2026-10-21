@@ -5,16 +5,16 @@
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
 | `bun run test:tree` | 仓库形状核验，3 项，无依赖 | 否 | `tree-probe: repo shape OK` |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 276 pass / 0 fail（18 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 277 pass / 0 fail（18 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
 | `bun run test:obtain` | 外部二进制获取核验，41 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，36 项 | 是 | `HARDEN OK` |
-| `cd website && bun run check` | 站点渲染与 SEO 核验，125 项 | 否 | `render-check: all pages OK` |
+| `cd website && bun run check` | 站点渲染与 SEO 核验，215 项 | 否 | `render-check: all pages OK` |
 | `bun run test:approval` | 审批边界判别核验，约 95 秒 | 是 | `VERDICT: B`（预期），exit 0 |
 | `bun run test:takeover` | 宿主推理 deny/restore 核验，34 项，约 65 秒 | 是 | `takeover probe: all assertions met` |
 | `bun run test:install` | 发布包自包含 + 端到端，55 项（其中 npm 真装那组 4 项在包发到 registry 之前按 `info:` 跳过——包名形态是预留，这一组就是不发不跑） | 是 | `PACKAGE OK` |
-| `bun run test:mcp-call` | 参考客户端 `scripts/mcp-call.py` 核验，6 项（真宿主走一遍 + 一只强制 404 的假服务器验重握手；没有 python3 整段 `info:` 跳过、退 0） | 是 | `MCP-CALL OK` |
+| `bun run test:mcp-call` | 参考客户端 `scripts/mcp-call.py` 核验，7 项（真宿主走一遍 + 一只强制 404 的假服务器验重握手；没有 python3 整段 `info:` 跳过、退 0） | 是 | `MCP-CALL OK` |
 | `bun run test:bootstrap` | 一键脚本的判断核验，47 项，约 9 秒 | 第五组要 | `BOOTSTRAP OK` |
 | `bun run test:scenario` | 端到端场景，8 个叙事 / 41 步，约 45 秒 | 是 | `SCENARIOS: 41 steps, 0 failed` |
 
@@ -73,11 +73,11 @@
 
 全过 → `PACKAGE OK`；任何一项不过 → `FAIL: <label>` + exit 1。
 
-## `test:mcp-call` — 参考客户端核验（6 项）
+## `test:mcp-call` — 参考客户端核验（7 项）
 
 **核验 `scripts/mcp-call.py` 真能把桥说的那套握手走下来。** 桥给「能跑代码但不是 MCP 客户端」的调用方发了一个零依赖 Python 3 参考客户端，它替调用方处理会话头、404 重握手、超时与退出码——正是手搓 `mcp_call.py` 最容易写错的两处：会话生命周期和退出码。这个探针就盯这两处。
 
-分两组。A 组起一座真宿主（同 `test:install` 第四组的启动形状，只是用软链装扩展、不跑 `omp install`），拿 `python3` 驱动脚本：`list` 退 0 且打印出桥自己的三个 `xfer_*`（名字从 `src/xfer.ts` 的 `XFER_TOOL_NAMES` 读，不抄第二份）；`call bash` 在本机真跑、把输出打到 stdout、退 0；调一个不存在的工具拿到 `isError` 并退非零；token 写错时退非零且 stderr 点名 401。B 组对一只 `Bun.serve` 假服务器跑——它只在第一次 `tools/call` 上回 404，验客户端会重新握手再重试一次那一条。真会话 24 小时才过期，探针等不起，所以这条自愈路用假服务器单独钉。
+分两组。A 组起一座真宿主（同 `test:install` 第四组的启动形状，只是用软链装扩展、不跑 `omp install`），拿 `python3` 驱动脚本：`list` 退 0 且打印出桥自己的三个 `xfer_*`（名字从 `src/xfer.ts` 的 `XFER_TOOL_NAMES` 读，不抄第二份）；`schema <tool>` 打印那一条工具的名字、描述与入参 schema（手搓的客户端最常缺这一项——要读一个工具想要什么，就自己写个客户端去问）；`call bash` 在本机真跑、把输出打到 stdout、退 0；调一个不存在的工具拿到 `isError` 并退非零；token 写错时退非零且 stderr 点名 401。B 组对一只 `Bun.serve` 假服务器跑——它只在第一次 `tools/call` 上回 404，验客户端会重新握手再重试一次那一条。真会话 24 小时才过期，探针等不起，所以这条自愈路用假服务器单独钉。
 
 前置 `omp` 与 `python3`：本机没有 `python3` 时整段 `info:` 跳过、退 0（与 install 的 npm 组同一条纪律，CI 不因缺可选依赖红）。全过 → `MCP-CALL OK`；任何一项不过 → `FAIL: <label>` + exit 1。
 
@@ -282,7 +282,7 @@
 
 `test/audit.test.ts` 那组钉的是三件：一条记录落在它自己那天的文件里（跨天的那条不在今天的文件里）、另一个日期的文件桥不删、一批记录同时写进去之后一条不少且都在同一个文件里。变异：把日期去掉，那两项红；让桥删掉别的日期的文件，那一项红；把轮转加回来，那一项红（文件长不过旧上限，目录里多出 `.1`）。
 
-## 入口那一层（`test/entry.test.ts`，24 项）
+## 入口那一层（`test/entry.test.ts`，32 项）
 
 `extensions/a2mcp.ts` 此前没有任何单测能引到它——不起了宿主就摸不到，而它管的是这台服务器的生死。它现在被直接 import：`$A2MCP_CONFIG` 指到临时文件，端口写 `0`，`Main` 会话是真注册进 `AgentRegistry.global()` 的假货。不 mock 任何模块：入口的每个决定最后都要落到一个能被连接的端口上，所以断言一律是「从广播里解析出那个端口，然后去连它」。连不上就是没在服务，200 就是在服务——这比数调用次数结实，而 `mock.module` 在本机还有个硬伤：Bun 的模块 mock 是进程级的，`test/config.test.ts` 的 `loadConfig` 会被同一进程里的 mock 换掉，一次 `bun test` 就绿不回来了。
 
@@ -305,10 +305,11 @@
 | 子代理结束端口仍在；`Main` 没了端口才释放；释放后新的 `session_start` 重绑 | 3 |
 | `/a2mcp`：注册名、rotate 先落盘再生效、落盘失败则运行中的仍是旧 token、`token` 出全串而 status 只出前缀、未运行时三个子命令都拒绝 | 5 |
 | `/a2mcp tunnel`：打开并报 URL 与「token 是唯一闸门」、start 落审计；二次打开幂等（一个子进程、一条审计）；`tunnel stop` 关子进程并落 stop 审计、再 stop 报 none open；端口释放时子进程同行 | 4 |
+| 客户端读到的文字是英文：目录里的描述与入参说明、`initialize` 的回包、桥自己的两个错误体（401 与 404）、提示词那一块 | 1 |
 
 最后四项对着假 cloudflared 跑：配置的 `xfer.cloudflared` 写绝对路径，走的是 obtain 的逃生门（不查 PATH、零下载），脚本 announce 一个固定的 `trycloudflare.com` 主机名并把 spawn/SIGTERM 各记一行——「一个子进程而不是两个」「子进程随桥而死」就数这些行，不碰 pid。真隧道的公网半程在这里仍然不是证据：本机网络对 `*.trycloudflare.com` 重签 TLS，回环 curl 只算人工核验（`bun run test:obtain` 那一节的判样直接沿用）。审计侧 `test/audit.test.ts` 补一条记录形状（`tool: "tunnel"`、`sid: null`、error 截 200），并把 `auditTunnel` 挂进「每个入口都返回队列尾巴」那组签名断言。
 
-变异核验十项：去掉 `hasMainSession()` 那道闸、把 `rotate` 的赋值挪回写盘之前、启动失败的 catch 里不再 `stop()`、catch 里什么都不清、`hasMainSession()` 恒真与恒假、去掉在途那道闸（红的正是并发那条）、去掉绑完之后的那次复查（红的正是绑定中途结束那条）、把 `hasMainSession()` 的比较换回 `!== undefined`（红的正是 parked 那两条），各红自己那一两条。只有把广播里的端口换成配置值而不是实际绑上的那个，红了七条：端口报错了，所有「去连它」的断言一起塌。这正是把断言写成真连接的代价与好处，它不给你留「实现错了但计数对得上」的余地。
+变异核验十二项：去掉 `hasMainSession()` 那道闸、把 `rotate` 的赋值挪回写盘之前、启动失败的 catch 里不再 `stop()`、catch 里什么都不清、`hasMainSession()` 恒真与恒假、去掉在途那道闸（红的正是并发那条）、去掉绑完之后的那次复查（红的正是绑定中途结束那条）、把 `hasMainSession()` 的比较换回 `!== undefined`（红的正是 parked 那两条）、把一个工具描述换成中文、把提示词里一句换成中文（这两道红的正是「客户端读到的文字是英文」那一条与提示词那一条），各红自己那一两条。只有把广播里的端口换成配置值而不是实际绑上的那个，红了七条：端口报错了，所有「去连它」的断言一起塌。这正是把断言写成真连接的代价与好处，它不给你留「实现错了但计数对得上」的余地。
 
 ## 名字守卫（`test/naming.test.ts`，6 项）
 
@@ -316,7 +317,7 @@
 
 按形态匹配，不是全文禁那个协议名：`docs/protocol.md` 拿它当隔壁那个协议来比较，那是合法用法。拦的是自指的四种形态——旧包名、旧桥名、旧环境变量前缀、旧斜杠命令，外加旧前缀打头的标识符和散文里那句旧称呼。这比一刀切禁字符串弱，弱在哪里也写明了：要拦临时目录前缀就得把那个前缀列成形态，而两个历史设计稿的文件名长得和它一样。
 
-扫描面是 `src`、`extensions`、`test`、`scripts`、`.github`、`docs` 顶层、`website`（生成物除外）加四个根文件。豁免两种：整文件是历史（变更日志、brain、设计稿、锁文件与站点构建输出——锁文件记的是它生成时那个目录名，本仓库的工作目录留着旧拼写是有意的），以及逐条列出的旧名引用：README 的迁移段必须写出该卸载哪个、哪个文件从此没人读，探针与被替换那句断言的注释也都得拼旧名字。按文件生效而不是按行，这是个真实的洞；收下它是因为每个文件只有一个理由拼旧名字，而没人用的豁免会让这条测试变红——表自己烂不掉。守卫这份文件自己也在豁免里：旧拼写在它那儿是数据，它不能同时是扫描对象。
+扫描面是 `src`、`extensions`、`test`、`scripts`、`.github`、`docs` 顶层、`website`（生成物除外）加四个根文件。豁免两种：整文件是历史（变更日志、brain、设计稿、锁文件、站点构建输出与 Python 字节码缓存——锁文件记的是它生成时那个目录名，本仓库的工作目录留着旧拼写是有意的；`__pycache__` 是 import 仓库里那个 Python 脚本时落下的构建产物，不是活页面），以及逐条列出的旧名引用：README 的迁移段必须写出该卸载哪个、哪个文件从此没人读，探针与被替换那句断言的注释也都得拼旧名字。按文件生效而不是按行，这是个真实的洞；收下它是因为每个文件只有一个理由拼旧名字，而没人用的豁免会让这条测试变红——表自己烂不掉。守卫这份文件自己也在豁免里：旧拼写在它那儿是数据，它不能同时是扫描对象。
 
 另三条是结构断言：`pi.extensions` 里每个路径都存在，而 `extensions/` 里除了它不许有第二个 `.ts`；`harness.linkExtension()` 软链出去的文件名就是它；包名、命令名、`serverInfo.name` 是同一个词。v0.3.0 上这三个是三个词，远程调用方在 `initialize` 里读到的名字和宿主 `plugin list` 里的不是一回事。
 
