@@ -40,6 +40,24 @@ function bridgeVersion(): string {
 }
 const BRIDGE_VERSION = bridgeVersion();
 
+/**
+ * The text the operator hands to the remote agent.
+ *
+ * English on purpose: it is read by a model on the other side, not by the
+ * operator — the operator reads this repo's own prose. It says what the endpoint
+ * is, how to work against it, and the two things that bite a first caller: the
+ * working directory is not yours to assume, and a call can hang.
+ *
+ * It carries no URL and no token. Those go into the remote client's `mcp.json`,
+ * where the credential belongs; a token inside a prompt would put it in a model's
+ * context, which is a different and much wider place than a config file.
+ */
+const REMOTE_PROMPT = `You are connected over MCP to a live agent session on another machine. The tools in \`tools/list\` run for real there: \`bash\` executes commands in that machine's shell, \`read\`/\`write\`/\`edit\` work on its files, and the results come back verbatim. Nothing is reasoned about on that side — you decide what runs, that machine only executes.
+
+Work one fact at a time: call a tool, read its result, then decide the next call. Use absolute paths; do not assume a working directory. The machine is often a device lab — \`adb\`, flashing tools and serial ports are reached through \`bash\`.
+
+Give every call a timeout of your own. A call can hang: a permission prompt on the other side may have nobody to answer it, and your timeout is the only way out.`;
+
 let server: { port: number; fellBack: boolean; stop(): void } | null = null;
 let cfg: BridgeConfig | null = null;
 /**
@@ -300,7 +318,7 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 
 	pi.registerCommand("a2mcp", {
 		description:
-			"Show a2mcp status, rotate its token with `a2mcp rotate`, show the full token with `a2mcp token`, toggle incognito mode with `a2mcp incognito` (remote calls leave no record while it is on), or open (`a2mcp tunnel`) and close (`a2mcp tunnel stop`) a public quick tunnel in front of the bridge endpoint — tool calls and the /xfer file route both ride it.",
+			"Show a2mcp status, rotate its token with `a2mcp rotate`, show the full token with `a2mcp token`, print the remote setup with `a2mcp prompt` (url, token, and the prompt to hand the remote agent), toggle incognito mode with `a2mcp incognito` (remote calls leave no record while it is on), or open (`a2mcp tunnel`) and close (`a2mcp tunnel stop`) a public quick tunnel in front of the bridge endpoint — tool calls and the /xfer file route both ride it.",
 		handler: async (args, ctx) => {
 			try {
 				if (args.trim() === "rotate") {
@@ -316,6 +334,36 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 					await saveConfig({ ...cfg, token: next });
 					cfg.token = next;
 					ctx.ui.notify("a2mcp token rotated — update remote mcp.json");
+					return;
+				}
+				if (args.trim() === "prompt") {
+					if (!server || !cfg) {
+						ctx.ui.notify("a2mcp not running", "error");
+						return;
+					}
+					// The URL and the token go into the remote client's mcp.json; the
+					// prompt goes into the remote agent. The token is printed in full
+					// for the same reason `/a2mcp token` prints it in full: this is the
+					// operator's own screen, and the operator is the one handing the
+					// credential to their own client. It sits above the prompt block
+					// rather than inside it, so copying the prompt does not copy the
+					// credential with it.
+					const url = mcpTunnel ? `${mcpTunnel.url}/` : `http://${cfg.host}:${server.port}/`;
+					const urlNote = mcpTunnel
+						? "public tunnel — a remote client can use this one"
+						: "loopback only — no public address; `/a2mcp tunnel` opens one, or forward the port over SSH";
+					ctx.ui.notify(
+						[
+							"a2mcp prompt — the url and token go into the remote mcp.json; the prompt goes into the remote agent.",
+							"",
+							`url:    ${url}`,
+							`        (${urlNote})`,
+							`token:  ${cfg.token}`,
+							"",
+							"prompt:",
+							REMOTE_PROMPT,
+						].join("\n"),
+					);
 					return;
 				}
 				if (args.trim() === "incognito") {

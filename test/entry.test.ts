@@ -405,6 +405,26 @@ describe("the a2mcp command", () => {
 		expect(texts(other)).not.toContain(onDisk);
 	});
 
+	test("`prompt` prints the url, the token and the prompt to hand the remote agent", async () => {
+		const r = newRunner();
+		await r.start();
+		await r.command("prompt");
+		const out = texts(r);
+		// The url a remote client can use, the token in full (the operator is the one
+		// handing the credential to their own client, as `/a2mcp token` does), and
+		// the prompt itself.
+		expect(out).toContain("url:    http://127.0.0.1:");
+		expect(out).toContain("loopback only");
+		expect(out).toContain(`token:  ${TOKEN}`);
+		expect(out).toContain("prompt:");
+		// The prompt is English: it is read by a model on the other side.
+		expect(out).toContain("You are connected over MCP to a live agent session on another machine.");
+		expect(out).toContain("Give every call a timeout of your own.");
+		// And it carries no credential: a token inside a prompt would put it in a
+		// model's context, which is a wider place than a config file.
+		expect(out.slice(out.indexOf("prompt:"))).not.toContain(TOKEN);
+	});
+
 	test("every subcommand says not running when the bridge never started", async () => {
 		rmSync(configPath(), { force: true });
 		writeConfig({ port: "not a number" });
@@ -545,6 +565,16 @@ setTimeout(() => process.exit(0), 60_000);
 		// reuses it and writes nothing at all.
 		await r.command("tunnel stop");
 		expect(tunnelRecords().length).toBe(before + 1);
+	});
+
+	test("`prompt` names the tunnel when one is open", async () => {
+		const cf = fakeCloudflared();
+		const r = await startWithFake(cf);
+		await r.command("tunnel");
+		await r.command("prompt");
+		const out = texts(r);
+		expect(out).toContain("url:    https://entry-tunnel.trycloudflare.com/");
+		expect(out).toContain("public tunnel");
 	});
 
 	test("a second tunnel reuses the open one and spawns nothing", async () => {
