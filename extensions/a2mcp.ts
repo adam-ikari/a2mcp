@@ -137,7 +137,9 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 				reportArmFailure(ctx, e);
 			}
 		}
-		liveCallTool = buildCallTool(pi, ctx);
+		// The token getter reads the config as it is now, so a rotation is covered:
+		// the audit scrubs the credential that is live, not the one that was.
+		liveCallTool = buildCallTool(pi, ctx, () => cfg?.token ?? "");
 		if (server) return; // one endpoint per process
 		if (bringingUp) {
 			// Ride along with the start already in flight rather than bind a second one.

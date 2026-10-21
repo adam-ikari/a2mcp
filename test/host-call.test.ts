@@ -92,8 +92,11 @@ function mount(opts: {
 	throws?: Error;
 	/** Thrown from the host's event sink, to model a host that cannot take the event. */
 	emitThrows?: Error;
+	/** The credential the bridge scrubs out of a failure's text before logging it. */
+	token?: string;
 }): Harness {
 	const name = opts.toolName ?? "read";
+	const token = opts.token ?? "test-token";
 	const seen: Recorded[] = [];
 	const events: Array<Record<string, unknown>> = [];
 	const session = {
@@ -161,7 +164,7 @@ function mount(opts: {
 		seen,
 		events,
 		controls,
-		call: buildCallTool(pi as unknown as ExtensionAPI, extCtx),
+		call: buildCallTool(pi as unknown as ExtensionAPI, extCtx, () => token),
 		catalog: async () => (await buildToolCatalog(pi as unknown as ExtensionAPI)()).map((t) => ({ name: t.name })),
 	};
 }
@@ -240,6 +243,43 @@ describe("buildCallTool host hand-off", () => {
 		// so `grep <audit id> <agentDir>/sessions/` finds the arguments the audit
 		// log folded away.
 		expect(h.events[0]?.toolCallId).toBe(h.seen[0]?.toolCallId);
+	});
+
+	test("a failed call records why it failed", async () => {
+		// The outcome of a remote call exists nowhere else — the host's transcript
+		// keeps the arguments and never the result — so the audit log is the only
+		// place a failure's reason can live. A log that says `isError: true` and
+		// nothing else records that something failed and not what.
+		const h = mount({ result: { content: [{ type: "text", text: "device not present" }], isError: true } });
+		await h.call("read", { path: "/gone" }, "sess-why");
+		const done = await untilRecord((l) => l.sid === "sess-why" && l.phase === "done");
+		expect(done).toMatchObject({ isError: true, error: "device not present" });
+	});
+
+	test("a failure that echoes the token does not put it in the record", async () => {
+		// The reason is whatever the tool said, and a shell that chokes on a command
+		// line echoes that command line — which can carry the token the caller used
+		// to reach the bridge. The token never enters a record, so it is cut out of
+		// the text rather than trusted not to appear: an operator pastes this log
+		// into a bug report, and the credential travels with it.
+		const token = "g70u9Bm7_-3vcFccCUJgluNnqINiRGVEqfmQQmlQ0ow";
+		const leaky = `curl: (3) bad URL with ${token} in it`;
+		const h = mount({ token, result: { content: [{ type: "text", text: leaky }], isError: true } });
+		await h.call("read", { path: "/gone" }, "sess-leak");
+		const done = await untilRecord((l) => l.sid === "sess-leak" && l.phase === "done");
+		expect(String(done?.error)).toContain("<token>");
+		expect(String(done?.error)).not.toContain(token);
+	});
+
+	test("a successful call records no error text", async () => {
+		// The field belongs to failures: a successful call has nothing to explain,
+		// and a record that carried an `error` on a success would read as a
+		// contradiction.
+		const h = mount({});
+		await h.call("read", { path: "/etc/hostname" }, "sess-noerr");
+		const done = await untilRecord((l) => l.sid === "sess-noerr" && l.phase === "done");
+		expect(done).toMatchObject({ isError: false });
+		expect(done?.error).toBeUndefined();
 	});
 
 	test("args reach the host tool unchanged, and nothing is validated on the way", async () => {

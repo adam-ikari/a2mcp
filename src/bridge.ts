@@ -122,6 +122,29 @@ function emitRenderEvent(agent: AgentSession["agent"], make: () => RenderEvent):
 }
 
 /**
+ * The failure's own text for the audit record, with the token taken out of it.
+ *
+ * The outcome of a remote call exists nowhere else — the host's transcript keeps
+ * the arguments and never the result — so this is the only place a failure's
+ * reason can live. The reason is whatever the tool said, and a tool's message can
+ * be anything: a shell that chokes on a command line echoes that command line,
+ * and a command line can carry the token the caller used to reach the bridge. The
+ * token never enters a record (the bridge holds it in the `Authorization` header
+ * and does not log it), so it is cut out here rather than trusted not to appear.
+ *
+ * The cut is on the current token, so a rotated one is no longer covered — the
+ * old value stops being valid at the rotation, and the operator who rotates it is
+ * the one who knows it.
+ */
+function failureText(r: { content: McpContent[]; isError: boolean }, token: string): string | null {
+	if (!r.isError) return null;
+	const text = r.content.find((b) => b?.type === "text")?.text;
+	if (!text) return null;
+	const secret = token.trim();
+	return secret.length > 0 ? text.split(secret).join("<token>") : text;
+}
+
+/**
  * Build the tools/call executor: resolve the name against the same registry
  * tools/list advertises, then hand it to the host's tool implementation.
  *
@@ -130,10 +153,15 @@ function emitRenderEvent(agent: AgentSession["agent"], make: () => RenderEvent):
  * the live Main session so the host's built-in approval gate
  * (ExtensionToolWrapper) governs write/exec calls; rejections surface as
  * isError results.
+ *
+ * `token` is a getter rather than a value: the operator can rotate the token at
+ * runtime, and a captured copy would keep scrubbing a credential that stopped
+ * being one.
  */
 export function buildCallTool(
 	pi: ExtensionAPI,
 	extCtx: ExtensionContext,
+	token: () => string,
 ): (name: string, args: unknown, sid?: string | null) => Promise<{ content: McpContent[]; isError: boolean }> {
 	const runHost = async (
 		name: string,
@@ -234,7 +262,7 @@ export function buildCallTool(
 		}
 		// Awaited before the reply: a caller that reads the audit log right after
 		// its 200 has to find its own call in it.
-		await auditDone(id, sid ?? null, name, args, r.isError);
+		await auditDone(id, sid ?? null, name, args, r.isError, failureText(r, token()));
 		return r;
 	};
 }

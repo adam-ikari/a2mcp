@@ -4,6 +4,16 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## 2026-10-20 — 失败的那条 done 记着原因
+
+那台宿主一天里 44 次失败，在审计日志里全是同一个形状：`isError: true`，没有第二样东西。结果这一半全世界只有审计日志有——宿主那份 transcript（`~/.omp/agent/sessions/**.jsonl`）记着参数、从来没有结果，远程调用不走消息流——所以那条记录只说明「失败了」，不说明「为什么」。
+
+- feat: `src/audit.ts` 的 `auditDone` 多一个 `error` 字段：工具自己那条消息的前 200 字符（与 `xfer` / `tunnel` / `host_llm` 同一上限），且只在 `isError: true` 时有——`isError: false` 旁边挂一个 `error` 是日志里的自相矛盾，而这份日志是给人判断「这次调用能不能信」用的。`src/bridge.ts` 从结果里取第一条 text 作为原因。
+- 边界: 文本里若回显了 token（命令里带了 token、shell 又把命令行原样吐回来），按当前 token 抹成 `<token>`——token 不进记录这条不靠「工具大概不会那么说」。`buildCallTool` 因此多收一个 token 的 getter 而不是值（`/a2mcp rotate` 之后旧的已作废，抹的是当下那个），`extensions/a2mcp.ts` 接到 `cfg?.token`。
+- test: `bun test` 255 → 259。`test/host-call.test.ts` 多三项（失败记下原因、回显 token 的失败被抹干净、成功不带 `error` 字段），`test/audit.test.ts` 多一项（`error` 截 200，且只在失败时有）。两处反证都验过：去掉 `isError &&` 那一项红（成功的记录里挂了 error），把抹除换成原样返回那一项红（记录里留着 token）。
+- docs: 协议页的审计补充多一条（`error` 的来处、上限、只在失败时有、token 抹除），两份 README 的审计一条各加一句。
+- 版本位: 远程调用方经协议拿到的东西没变——`error` 只落在宿主盘上的审计日志里，不在 MCP 回包里——按 2026-10-18 那条判据不进 minor；这一笔不发版。
+
 ## 2026-10-20 — 一次调用一个 id：审计行里的 id 就是宿主 transcript 里的 toolCallId
 
 一次远程调用在宿主那侧与桥那侧各留一份记录，两份都只有一半。宿主的 `~/.omp/agent/sessions/**.jsonl` 里记着 `tool_execution_start`：完整参数在，结果永远没有——远程调用不走消息流，那份 transcript 里既没有 `tool_execution_end` 也没有 `isError`。桥的审计日志反过来：结果与远端归因在，长参数被折成 `<len,sha256>`。操作员要回答的那句「远程客户端跑了什么、成了没有」需要两份合起来看，而两份此前各铸一个 UUID、无从对上——实测同一次调用在审计日志里是 `138f5ab0-…`，在宿主 transcript 里是 `30012d7d-…`，能配上的只有时间戳，在忙的宿主上猜时间戳就是猜。

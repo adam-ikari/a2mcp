@@ -45,7 +45,7 @@ describe("audit rotation retention", () => {
 		let last: Promise<void> | undefined;
 		for (let i = 0; i < pairs; i++) {
 			void auditStart(`${tag}-${i}`, "sid", "read", fatter, env);
-			last = auditDone(`${tag}-${i}`, "sid", "read", fatter, false, env);
+			last = auditDone(`${tag}-${i}`, "sid", "read", fatter, false, null, env);
 		}
 		await last;
 	};
@@ -122,7 +122,7 @@ describe("audit never loses a call", () => {
 		// and this goes red immediately, no timing involved.
 		for (const [name, call] of [
 			["auditStart", () => auditStart("shape-start", "sid", "read", {}, env)],
-			["auditDone", () => auditDone("shape-done", "sid", "read", {}, false, env)],
+			["auditDone", () => auditDone("shape-done", "sid", "read", {}, false, null, env)],
 			["auditHostLlm", () => auditHostLlm("sid", true, null, env)],
 			["auditTunnel", () => auditTunnel("stop", {}, null, env)],
 		] as const) {
@@ -139,6 +139,26 @@ describe("audit never loses a call", () => {
 		// rather than in its id — and `args` is itself a serialized string, so the
 		// payload shows up escaped inside the line.
 		expect(raw).toContain('"tool":"host_llm"');
+	});
+
+	test("a done record carries the failure's text, cut at 200, and only on a failure", async () => {
+		// The outcome of a remote call exists nowhere else — the host's transcript
+		// keeps the arguments and never the result — so the reason a call failed has
+		// to live in this record; `isError: true` on its own says that something
+		// failed and nothing about what. The cut is the same 200 the other records'
+		// error halves use: the text is a tool's own output and can be any length.
+		await auditDone("why-1", "sid", "read", {}, true, "x".repeat(300), env);
+		await auditDone("why-2", "sid", "read", {}, false, "a success has no reason", env);
+		const recs = readRecords().filter((r) => r.id === "why-1" || r.id === "why-2");
+		const failed = recs.find((r) => r.id === "why-1");
+		expect(failed).toMatchObject({ isError: true, phase: "done" });
+		expect(String(failed?.error)).toHaveLength(200);
+		// And a success carries no error field at all: `isError: false` beside an
+		// `error` would be a contradiction in a log people read to decide whether to
+		// trust a call.
+		const ok = recs.find((r) => r.id === "why-2");
+		expect(ok).toMatchObject({ isError: false });
+		expect(ok?.error).toBeUndefined();
 	});
 
 	test("a tunnel record carries no session and cuts its error like the others", async () => {
@@ -165,7 +185,7 @@ describe("audit never loses a call", () => {
 		// queue tail now, and a sync call-throw assertion on a promise-returning
 		// function proves nothing about the rejection it used to be guarding.
 		await expect(auditStart("big-start", "sid", "read", { when: 10n }, env)).resolves.toBeUndefined();
-		await expect(auditDone("big-done", "sid", "read", { when: 10n }, false, env)).resolves.toBeUndefined();
+		await expect(auditDone("big-done", "sid", "read", { when: 10n }, false, null, env)).resolves.toBeUndefined();
 		// Distinct ids, not one pair: both appends are in flight at once and their
 		// order in the file is not a contract.
 		const start = recordFor("big-start");
@@ -205,7 +225,9 @@ describe("audit never loses a call", () => {
 			// real — a sync `not.toThrow()` on a promise-returning function asserted
 			// nothing at all.
 			await expect(auditStart("dead-1", "sid", "read", { path: "/etc/hostname" }, dead)).resolves.toBeUndefined();
-			await expect(auditDone("dead-1", "sid", "read", { path: "/etc/hostname" }, true, dead)).resolves.toBeUndefined();
+			await expect(
+				auditDone("dead-1", "sid", "read", { path: "/etc/hostname" }, true, null, dead),
+			).resolves.toBeUndefined();
 		} finally {
 			console.error = realError;
 			process.off("unhandledRejection", collect);

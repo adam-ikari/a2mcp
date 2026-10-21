@@ -157,7 +157,11 @@ function appendLine(line: string, env?: NodeJS.ProcessEnv): Promise<void> {
  *   that never settles (e.g. an approval prompt waiting for a UI that does
  *   not exist) still leaves evidence: a `start` line with no matching `done`.
  * - `auditDone` fires once the call settles and carries the outcome
- *   (`isError`).
+ *   (`isError`), and — when the call failed — the failure's own text, cut at
+ *   200 characters like the other records' error halves. The text is here because
+ *   the outcome of a remote call exists nowhere else: the host's session
+ *   transcript keeps the arguments and never the result, so a log that says only
+ *   `isError: true` records that something failed and nothing about what.
  *
  * Both lines carry the args summary (self-contained for grep) and the
  * Mcp-Session-Id (`sid`, so a shared token's calls are attributable to a
@@ -191,10 +195,24 @@ export function auditDone(
 	tool: string,
 	args: unknown,
 	isError: boolean,
+	error?: string | null,
 	env?: NodeJS.ProcessEnv,
 ): Promise<void> {
 	return appendLine(
-		`${JSON.stringify({ ts: new Date().toISOString(), id, sid, phase: "done", tool, isError, args: serializeArgs(args) })}\n`,
+		`${JSON.stringify({
+			ts: new Date().toISOString(),
+			id,
+			sid,
+			phase: "done",
+			tool,
+			isError,
+			args: serializeArgs(args),
+			// Only on a failure: `isError: false` next to an `error` is a
+			// contradiction in the log, and the record is read by people deciding
+			// whether to trust a call. The caller passes what the tool said; whether
+			// that belongs in the record is decided here.
+			...(isError && error ? { error: error.slice(0, 200) } : {}),
+		})}\n`,
 		env,
 	);
 }
