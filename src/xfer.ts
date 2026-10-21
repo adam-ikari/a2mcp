@@ -386,12 +386,23 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 		} catch (e) {
 			const why = (e as Error).message;
 			server.kill("SIGKILL");
+			// The file server's own reason, when it has one: "exited with code 1"
+			// says nothing about which path or which flag was wrong, and the reason
+			// is on its stderr. The secret is scrubbed — it is that file server's
+			// own credential, and this text goes to the caller.
+			const said = serverErr
+				.trim()
+				.split("\n")
+				.map((l) => l.trim())
+				.filter(Boolean)
+				.pop();
+			const because = said ? `${why} (${said.replaceAll(secret, "<secret>")})` : why;
 			const missing = /ENOENT|not found|127/.test(`${why}${serverErr}`);
 			const hint = missing
 				? ` — the bridge resolves '${cfg.dufs}' itself: PATH first, then a pinned download into ${defaultBinDir(process.env, process.platform)}. A configured value containing '/' or '\\' is used exactly as given and never fetched`
 				: "";
-			await auditXfer(sid, "share", { path, port }, why);
-			return text(`${why}${hint}`, true);
+			await auditXfer(sid, "share", { path, port }, because);
+			return text(`${because}${hint}`, true);
 		}
 
 		const startedAt = now();

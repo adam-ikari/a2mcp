@@ -34,6 +34,7 @@
 - docs: 协议页、两份 README 与 `xfer_share` 的工具描述都改成以 WebDAV 开头，并点名谁能挂：任何能发 `Authorization: Bearer <token>` 的客户端（`rclone`、`curl`、自己写的 HTTP 客户端）。
 - 顺手改对一句: 原文说「浏览器打开就是 dufs 自己的目录列表」——那条路由的闸门是桥的 Bearer token，浏览器加不了那个头，所以它拿到的与不带 token 的人一样是 401。目录列表要拿 `PROPFIND` 去要，认证过了才有。
 - 边界: 桥不自带字节协议这条没变——它挂的是现成的 WebDAV 服务器；`DELETE` 与 `MOVE` 仍然 403（桥只向文件服务器要了上传）。
+- fix: 共享开不起来时，报错带上文件服务器自己那句原因（凭据擦掉）：「exited with code 1」本身不说是哪条路径、哪个 flag 不对，而 `dufs` 写的是 `Error: Path '…' doesn't exist`。
 - 版本位: 远程调用方经协议拿到的东西没变（`tools/list` 里只有描述文字变了，名字、参数、回包、token 都不变），按 2026-10-18 那条判据不进 minor；这一笔不发版。
 
 ## 2026-10-21 — 审计日志按 UTC 日分文件，桥不设上下限

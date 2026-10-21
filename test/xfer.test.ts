@@ -99,6 +99,21 @@ Bun.serve({
 const stub = join(stubDir, "stub-dufs");
 writeFileSync(stub, STUB, { mode: 0o755 });
 
+/**
+ * A stand-in that fails the way a file server fails: a reason on stderr, then
+ * exit. The reason it prints carries the credential it was handed, so the test
+ * can see both that the reason reaches the caller and that the credential does
+ * not.
+ */
+const FAILING = `#!/usr/bin/env bun
+const argv = process.argv.slice(2);
+const creds = (argv[argv.indexOf("--auth") + 1] ?? "").split("@")[0];
+console.error("Error: Path '" + argv[0] + "' is not readable (creds " + creds + ")");
+process.exit(1);
+`;
+const failingStub = join(stubDir, "failing-dufs");
+writeFileSync(failingStub, FAILING, { mode: 0o755 });
+
 const opened: Xfer[] = [];
 
 function makeXfer(
@@ -223,6 +238,15 @@ describe("xfer_share refusals", () => {
 		expect(r.isError).toBe(true);
 		expect(textOf(r)).toContain("no-such-dufs-here");
 		expect(textOf(r)).toContain("downloads nothing");
+	});
+
+	test("a file server that fails says why, and its credential does not travel with the reason", async () => {
+		const x = makeXfer({ dufs: failingStub });
+		const r = await x.call("xfer_share", { path: dir }, "sid-1");
+		expect(r.isError).toBe(true);
+		expect(textOf(r)).toContain("is not readable");
+		expect(textOf(r)).toContain("<secret>");
+		expect(textOf(r)).not.toMatch(/creds omp:[A-Za-z0-9_-]{8,}/);
 	});
 
 	test("a bare name goes through the resolver, and the path it returns is what runs", async () => {
