@@ -20,7 +20,7 @@ a2mcp 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable HTTP 子
 
 1. 路径与 HTTP 方法：`/xfer` 前缀（`/xfer` 与 `/xfer/…`）是文件路由，方法原样放过；其他路径非 POST/DELETE → 405
 2. 鉴权（→ 401）。两个面共用同一个 Bearer token
-3. `/xfer` 前缀 → 反代到文件服务器，见「桥自己的工具：`xfer_*`」。不进 JSON-RPC 分支，也不写审计：审计记的是共享的开与停，不是每一次 GET/PUT
+3. `/xfer` 前缀 → 反代到文件服务器，见「桥自己的工具：`xfer_*`」。不进 JSON-RPC 分支，也不逐次写审计：审计记的是共享的开与停，不是每一次 GET/PUT。但代理会数这一路上过了多少请求、多少字节、多少次上传，计数落在**关掉共享的那一条**记录里（`args.usage`）——「共享开着」与「有人动过它、动了多少」是两个问题，前者现在答得上，后者原来答不上
 4. `/host-llm` 路由（受理 `POST`；这条路径上的其他方法 405，不进 JSON-RPC 分支）
 5. body 解析（→ 400 parse error）
 6. JSON-RPC 形状校验（→ 400 invalid request）
@@ -164,7 +164,7 @@ providers:
 
 ### 桥自己的工具：`xfer_*`
 
-`tools/list` 里那三个名字不是宿主的工具，是桥自己服务的（`src/xfer.ts`）。**按「`tools/list` 里每个名字都是宿主工具」写死的客户端要改：目录是宿主注册表逐字加恰好这三个。** 三者都由桥分派，不进宿主的 `getToolByName()`，也不过宿主的审批门；每次动作写一条审计，`tool: "xfer"`（`phase: "done"`，`args.action` 为 `share` / `close` / `stop` / `install`，`args` 带路径、本地端口、TTL 与路由，不含任何内容）。
+`tools/list` 里那三个名字不是宿主的工具，是桥自己服务的（`src/xfer.ts`）。**按「`tools/list` 里每个名字都是宿主工具」写死的客户端要改：目录是宿主注册表逐字加恰好这三个。** 三者都由桥分派，不进宿主的 `getToolByName()`，也不过宿主的审批门；每次动作写一条审计，`tool: "xfer"`（`phase: "done"`，`args.action` 为 `share` / `close` / `stop` / `install`，`args` 带路径、本地端口、TTL 与路由，不含任何内容）。**关掉共享的那一条另带 `args.usage`**（`requests` / `bytes` / `uploads`）：代理数这一路上过了多少请求与字节，字节按两个 content-length 计，所以是下限不是测量。它说的是「有多少东西流过」，不是「谁流的」——token 是共享的，字节不带身份。共享开着而没人动过时这个字段整个不在（不是一个 0）。
 
 **`xfer_share`** — 参数 `{ path, ttlSeconds? }`。`path` 必填，是文件或目录（`~` 与 `~/x` 展开到宿主家目录，相对路径按宿主的 working directory 解析）；`ttlSeconds` 缺省 3600。成功时 `result.content[0].text` 是一段 JSON：
 

@@ -279,7 +279,7 @@ The bridge finds the file server itself — `PATH` first, and when nothing answe
 
 `win32-arm64` has no row, and the reason is upstream's: `cloudflared` ships no Windows ARM64 build, and while one `xfer_share` needed both binaries the two tables were pinned together. A share runs on `dufs` alone now, so that platform could gain a file-server row, and it has not. The two win32 rows are verified to the byte, not to execution — the asset URLs answer, the zip hashes match, the entry reads out through the code path a Windows host will call, the `.exe` is a PE within the download cap, all inside `test:obtain`; the first `xfer_share` on Windows is also the first execution of those bytes.
 
-A share that has to fetch waits for the fetch; the reply's `installed` names the version pulled (`null` when it was already on `PATH`). Every call writes one audit record (`tool: "xfer"`), and each fetch pairs with an `install` record.
+A share that has to fetch waits for the fetch; the reply's `installed` names the version pulled (`null` when it was already on `PATH`). Every call writes one audit record (`tool: "xfer"`), and each fetch pairs with an `install` record. The record that closes a share also carries a tally of what crossed the route — requests, bytes, uploads — so "the share was open" and "someone moved something over it" are two different questions and only the first one used to be answerable. The bytes are counted from the two content-lengths, so the number is a floor, and they say how much moved, never who: the token is shared.
 
 ## Devices
 
@@ -353,7 +353,7 @@ bun install
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
 bun run test:tree     # repo shape: no symlink points off this machine, 3 checks, no deps, no local omp (runs before bun test on purpose)
-bun test              # unit tests: test/*.test.ts (261: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
+bun test              # unit tests: test/*.test.ts (266: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
 bun run test:obtain   # the pinned binaries: fetches both for this platform, HEADs all ten asset URLs, reads the two Windows rows as bytes, 37 checks (needs no local omp; writes only inside its own /tmp directory)
 bun run test:registry # drive the takeover against the host's real model registry, 28 checks, seconds (needs no local omp, no credentials)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)

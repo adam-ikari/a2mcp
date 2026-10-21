@@ -46,6 +46,17 @@ export interface XferRoute {
 	port: number;
 	baseUrl: string;
 	auth: string;
+	/**
+	 * Report one request that went through the route.
+	 *
+	 * The audit records a share's opening and its closing, not every GET and PUT
+	 * in between — one record per request would drown the log, and the bytes are
+	 * not attributable anyway (the token is shared). The share keeps a tally
+	 * instead, and writes it into the record that closes it: that answers "was
+	 * this path touched, and how much moved", which is the question an operator
+	 * asks about a public route.
+	 */
+	note?(usage: { method: string; bytes: number }): void;
 }
 
 /**
@@ -275,6 +286,17 @@ export async function startServer(
 		const out = new Headers(res.headers);
 		for (const h of HOP_BY_HOP) out.delete(h);
 		out.delete("www-authenticate");
+		// What crossed the route, counted once. The bytes come from the two
+		// content-lengths — the request body in, the response body out — which are
+		// the true ones here because `accept-encoding: identity` is forced below, so
+		// the upstream's length is the length of the bytes that move. A request
+		// without a content-length (chunked) counts as zero: the tally is a floor,
+		// not a measurement.
+		const length = (h: Headers) => {
+			const n = Number(h.get("content-length") ?? "");
+			return Number.isFinite(n) && n > 0 ? n : 0;
+		};
+		t.note?.({ method: req.method, bytes: length(headers) + length(res.headers) });
 		return new Response(res.body, { status: res.status, statusText: res.statusText, headers: out });
 	}
 

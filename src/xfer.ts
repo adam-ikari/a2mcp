@@ -116,6 +116,13 @@ export interface XferToolResult {
 	isError: boolean;
 }
 
+/** What crossed a share while it was open. A floor, not a measurement. */
+interface ShareUsage {
+	requests: number;
+	bytes: number;
+	uploads: number;
+}
+
 interface Share {
 	path: string;
 	port: number;
@@ -125,6 +132,7 @@ interface Share {
 	expiresAt: number;
 	server: ChildProcess;
 	timer: ReturnType<typeof setTimeout>;
+	usage: ShareUsage;
 }
 
 export interface XferDeps {
@@ -249,9 +257,21 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 		return origin.length === 0 ? null : `${origin}${XFER_ROUTE}/`;
 	};
 
-	async function close(reason: string): Promise<void> {
+	/**
+	 * The tally, as it goes into a record — absent when nothing crossed the route.
+	 *
+	 * A floor, not a measurement: bytes are counted from the two content-lengths,
+	 * so a chunked request counts as zero. And it says how much moved, never who
+	 * moved it: the token is shared, so the bytes carry no identity.
+	 */
+	function usageFields(usage: ShareUsage | null): Record<string, unknown> {
+		if (!usage || usage.requests === 0) return {};
+		return { usage: { requests: usage.requests, bytes: usage.bytes, uploads: usage.uploads } };
+	}
+
+	async function close(reason: string): Promise<ShareUsage | null> {
 		const s = share;
-		if (!s) return;
+		if (!s) return null;
 		share = null;
 		clearTimeout(s.timer);
 		// The waiter is registered before the signal is sent and the two statements are
@@ -268,7 +288,10 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 			s.server.kill("SIGKILL");
 			await dead;
 		}
-		if (reason !== "stop") await auditXfer(null, "close", { path: s.path, port: s.port, why: reason }, null);
+		if (reason !== "stop") {
+			await auditXfer(null, "close", { path: s.path, port: s.port, why: reason, ...usageFields(s.usage) }, null);
+		}
+		return s.usage;
 	}
 
 	function text(value: unknown, isError = false): XferToolResult {
@@ -376,7 +399,7 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 		// A pending share must not keep the process alive on its own; shutdown closes
 		// it explicitly.
 		timer.unref?.();
-		share = { path, port, auth, startedAt, expiresAt, server, timer };
+		share = { path, port, auth, startedAt, expiresAt, server, timer, usage: { requests: 0, bytes: 0, uploads: 0 } };
 
 		const url = routeUrl();
 		const publicUrl = publicRouteUrl();
@@ -410,15 +433,32 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 
 	return {
 		handles: (name) => (XFER_TOOL_NAMES as readonly string[]).includes(name),
-		target: () =>
-			share === null ? null : { port: share.port, baseUrl: `http://127.0.0.1:${share.port}`, auth: share.auth },
+		target: () => {
+			// The share is captured, not looked up again: a request that was routed
+			// to one share must not land its tally on the share that replaced it
+			// while it was in flight.
+			const s = share;
+			if (s === null) return null;
+			return {
+				port: s.port,
+				baseUrl: `http://127.0.0.1:${s.port}`,
+				auth: s.auth,
+				note: (u: { method: string; bytes: number }) => {
+					s.usage.requests++;
+					s.usage.bytes += u.bytes;
+					if (u.method === "PUT" || u.method === "POST" || u.method === "PATCH") s.usage.uploads++;
+				},
+			};
+		},
 		async call(name, args, sid) {
 			try {
 				if (name === "xfer_share") return await begin(args, sid);
 				if (name === "xfer_stop") {
 					const was = share;
-					await close("stop");
-					await auditXfer(sid, "stop", { path: was?.path ?? null }, null);
+					// The tally goes into the record that closes the share, whichever
+					// one that is — `close` writes its own, except for this reason.
+					const usage = await close("stop");
+					await auditXfer(sid, "stop", { path: was?.path ?? null, ...usageFields(usage) }, null);
 					return text(was ? { stopped: true, path: was.path } : { stopped: false, note: "nothing was shared" });
 				}
 				if (name === "xfer_status") {

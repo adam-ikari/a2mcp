@@ -101,6 +101,67 @@ async function via(path: string, init: RequestInit & { headers?: Record<string, 
 }
 
 describe("/xfer proxy — what reaches the file server", () => {
+	test("a request through the route is reported to the share, with the bytes that crossed", async () => {
+		// The audit records a share's opening and closing, not every GET and PUT in
+		// between — one record per request would drown the log. The share keeps a
+		// tally instead, and the proxy feeds it: "was this path touched, and how
+		// much moved" is the question an operator asks about a public route.
+		reset();
+		const notes: Array<{ method: string; bytes: number }> = [];
+		shared = {
+			port: stubPort,
+			baseUrl: stubBase,
+			auth: INTERNAL,
+			note: (u) => {
+				notes.push(u);
+			},
+		};
+		table["GET /xfer/a.bin"] = () => new Response("0123456789", { headers: { "content-length": "10" } });
+		const res = await via("xfer/a.bin");
+		expect(res.status).toBe(200);
+		expect(notes).toEqual([{ method: "GET", bytes: 10 }]);
+	});
+
+	test("an upload is reported with the bytes that went in", async () => {
+		reset();
+		const notes: Array<{ method: string; bytes: number }> = [];
+		shared = {
+			port: stubPort,
+			baseUrl: stubBase,
+			auth: INTERNAL,
+			note: (u) => {
+				notes.push(u);
+			},
+		};
+		table["PUT /xfer/up.bin"] = () => new Response(null, { status: 201 });
+		const res = await via("xfer/up.bin", { method: "PUT", body: "hello" });
+		expect(res.status).toBe(201);
+		expect(notes).toEqual([{ method: "PUT", bytes: 5 }]);
+	});
+
+	test("a request that never reached the file server is not counted", async () => {
+		// The upstream being gone is the share closing under a client; nothing
+		// crossed, so nothing is counted.
+		reset();
+		const notes: Array<{ method: string; bytes: number }> = [];
+		// The port belongs to nothing: what `close()` leaves behind for a client
+		// whose share closed under it.
+		shared = {
+			port: 1,
+			baseUrl: "http://127.0.0.1:1",
+			auth: INTERNAL,
+			note: (u) => {
+				notes.push(u);
+			},
+		};
+		const realError = console.error;
+		console.error = () => {};
+		const res = await via("xfer/gone.bin");
+		console.error = realError;
+		expect(res.status).toBe(502);
+		expect(notes).toEqual([]);
+	});
+
 	test("the path is forwarded with the prefix intact, because the file server was told it", async () => {
 		reset();
 		table["GET /xfer/dir/file.txt"] = () => new Response("payload", { status: 200 });

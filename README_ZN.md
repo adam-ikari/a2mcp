@@ -246,7 +246,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 `win32-arm64` 没有钉表行，原因在上游：`cloudflared` 不发 Windows ARM64 构建。从前一次 `xfer_share` 要用到两个二进制，两张表就一起钉；现在共享只吃 `dufs`，这个平台可以单补文件服务器那一行，目前没有补。win32 那两行验到字节、没验到执行——URL 应答、zip 哈希对上、条目能按 Windows 主机将要调的那段代码读出、`.exe` 是 PE 且没超下载上限，都在 `test:obtain` 里；Windows 上的第一次 `xfer_share` 也是这些字节的第一次执行。
 
-需要拉取的共享会等拉完，回包 `installed` 点名拉的版本，本来就在 PATH 的是 `null`。每次调用一条审计（`tool: "xfer"`），拉取的几次各配一条 `install`。
+需要拉取的共享会等拉完，回包 `installed` 点名拉的版本，本来就在 PATH 的是 `null`。每次调用一条审计（`tool: "xfer"`），拉取的几次各配一条 `install`。关掉共享的那一条另带这一路上的计数（请求数、字节数、上传次数），于是「共享开着」与「有人往上搬过东西」是两个问题，而原来只有前一个答得上。字节按两个 content-length 计，是个下限；它说的是搬了多少，不是谁搬的——token 是共享的。
 
 ## 设备
 
@@ -319,7 +319,7 @@ bun install
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
-bun test              # 单测：test/*.test.ts（261 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
+bun test              # 单测：test/*.test.ts（266 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
 bun run test:obtain   # 钉死的两个二进制：本机这一行真下载、钉表十个 asset 全 HEAD、Windows 那两行按字节读，37 项（不需要本机 omp；只往它自己那个 /tmp 目录里写）
 bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）

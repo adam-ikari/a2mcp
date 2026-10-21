@@ -334,6 +334,44 @@ describe("xfer_share lifecycle", () => {
 		expect(JSON.parse(rec.args ?? "{}")).toMatchObject({ path: shareDir, route: `${XFER_ROUTE}/` });
 	});
 
+	test("the closing record carries what crossed the share", async () => {
+		// The audit records a share's opening and its closing, not every GET and PUT
+		// in between — one record per request would drown the log. The tally is the
+		// answer to "was this path touched, and how much moved", which is the
+		// question an operator asks about a route that may be sitting behind a public
+		// hostname. It says how much, never who: the token is shared, so the bytes
+		// carry no identity.
+		const x = makeXfer();
+		await x.call("xfer_share", { path: dir }, "sid-usage");
+		const t = x.target();
+		if (!t) throw new Error("target() is null with a share open");
+		t.note?.({ method: "GET", bytes: 4096 });
+		t.note?.({ method: "PUT", bytes: 128 });
+		await x.call("xfer_stop", {}, "sid-usage");
+		// The last matching record, not the first: the audit file spans every test
+		// in this file and they all share one directory.
+		const recs = (await recordsFor(dir)).map((l) => JSON.parse(l) as { args?: string });
+		const stopped = recs
+			.map((r) => JSON.parse(r.args ?? "{}"))
+			.filter((a) => a.action === "stop")
+			.pop();
+		expect(stopped).toMatchObject({ usage: { requests: 2, bytes: 4224, uploads: 1 } });
+	});
+
+	test("a share nothing crossed carries no usage at all", async () => {
+		// The field is absent rather than zeroed: a share nobody touched is not a
+		// fact about a share.
+		const x = makeXfer();
+		await x.call("xfer_share", { path: dir }, "sid-nousage");
+		await x.call("xfer_stop", {}, "sid-nousage");
+		const recs = (await recordsFor(dir)).map((l) => JSON.parse(l) as { args?: string });
+		const stopped = recs
+			.map((r) => JSON.parse(r.args ?? "{}"))
+			.filter((a) => a.action === "stop")
+			.pop();
+		expect(stopped?.usage).toBeUndefined();
+	});
+
 	test("a bridge whose origin is not yet known still answers with the route", async () => {
 		const x = makeXfer({ bridgeUrl: undefined });
 		const body = JSON.parse(textOf(await x.call("xfer_share", { path: dir }, "sid-2"))) as { url: string };
