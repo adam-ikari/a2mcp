@@ -362,7 +362,7 @@ bun install
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
 bun run test:tree     # repo shape: no symlink points off this machine, 3 checks, no deps, no local omp (runs before bun test on purpose)
-bun test              # unit tests: test/*.test.ts (277: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
+bun test              # unit tests: test/*.test.ts (279: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
 bun run test:obtain   # the pinned binaries: fetches both for this platform, HEADs all ten asset URLs, reads the two Windows rows as bytes, 41 checks (needs no local omp; writes only inside its own /tmp directory)
 bun run test:registry # drive the takeover against the host's real model registry, 28 checks, seconds (needs no local omp, no credentials)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
