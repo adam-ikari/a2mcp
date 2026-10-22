@@ -226,16 +226,22 @@ python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> call bash '{"
 
 ## Prompt for the remote agent
 
-A remote agent will call the host's tools as if they were the same-named tools it already knows, and `tools/list` returns the host's registry verbatim — on this machine `edit` is a patch syntax (`[PATH#TAG]` plus `PUT N.=M:`), not `oldString`/`newString`, and a guess gets back `File not found`. Put the block below in its session or system prompt, replacing `<port>`, `<token>` and the tool prefix with the names from your `mcp.json`. If that agent is not registered as an MCP client and so has to run the calls itself, have it use `scripts/mcp-call.py` from [Two ways in](#two-ways-in) rather than write the handshake from scratch.
+A remote agent will call the host's tools as if they were the same-named tools it already knows, and `tools/list` returns the host's registry verbatim — on this machine `edit` is a patch syntax (`[PATH#TAG]` plus `PUT N.=M:`), not `oldString`/`newString`, and a guess gets back `File not found`.
+
+The block below is the text `/a2mcp prompt` prints. It carries neither the URL nor the token — those go into the remote client's `mcp.json`, not into the prompt. Put the block in the agent's session or system prompt.
 
 ```text
-You have been given the tools of another machine (the host) through the MCP server omp-host.
+You are connected over MCP to a live agent session on another machine. The tools in `tools/list` are that machine's own: `bash` runs commands in its shell, `read`/`write`/`edit` work on its files, and the results come back verbatim — errors included, in the tool's own words. Nothing is reasoned about on that side: you decide what runs, that machine only executes.
 
-- These tools really execute on the host: bash runs in the host's shell, read/write/edit read and write files on the host's disk. Paths are host paths, not paths in your own environment — when unsure, run bash first and look at $HOME and pwd.
-- The tool list and each tool's schema come from tools/list, and it holds exactly what the host currently has enabled. Read a tool's schema before calling it; it is not necessarily the same shape as the same-named tool you have used elsewhere.
-- The host issues no model requests and has no agent working for you: bash/read return what they return, and the reasoning is yours.
-- The host may require approval for some tools; with no interactive UI on the host, such a call hangs rather than erroring. Put a timeout on every call.
-- If one command says it, do not split it across several round trips.
+Work one fact at a time: call a tool, read its result, then decide the next call. Use absolute paths; do not assume a working directory. The machine is often a device lab — `adb`, flashing tools and serial ports are reached through `bash`.
+
+Give every call a timeout of your own. A call can hang: a permission prompt on the other side may have nobody to answer it, and your timeout is the only way out.
+
+What you run there stays there: nothing on that machine is rolled back for you.
+
+Big files do not travel through a tool call. A file too large to move is the operator's WebDAV route (`xfer_share`), not megabytes pasted into a command.
+
+If your side cannot speak MCP to this endpoint, the bridge ships a zero-dependency reference client — `scripts/mcp-call.py` in the a2mcp repository. Use it; do not write your own client.
 ```
 
 ## Cross-machine forwarding
