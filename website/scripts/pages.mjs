@@ -83,7 +83,7 @@ export const PAGES = [
 		nav: "传文件",
 		title: "传文件：把宿主路径开成 HTTP 路由",
 		description:
-			"xfer_share 把一条宿主路径交给 dufs，桥反代成自己端口的 /xfer/ 路由：同一个 Bearer token 授权，Range 与 WebDAV 可用，隧道开着时回包带 publicUrl。",
+			"xfer_share 把一条宿主路径交给 dufs，桥反代成自己端口的 /xfer/ 路由：同一个 Bearer token 授权，Range 与 WebDAV 可用。",
 		group: "用起来",
 		source: "README_ZN.md",
 		h1: "传文件",
@@ -105,7 +105,7 @@ export const PAGES = [
 		nav: "跨机转发",
 		title: "跨机转发：SSH 端口转发与公网隧道",
 		description:
-			"默认只绑回环。跨机用 SSH 端口转发；想让远程直连公网，宿主会话里跑 /a2mcp tunnel 起一条 quick tunnel——它顶的是整个端口，工具与 /xfer/ 一起出去，token 是唯一的门。",
+			"默认只绑回环。跨机用 SSH 端口转发；想要公网主机名，宿主会话里跑 /a2mcp tunnel，工具与 /xfer/ 一起出去。",
 		group: "用起来",
 		source: "README_ZN.md",
 		h1: "跨机转发",

@@ -245,7 +245,7 @@ title: 把本机 omp 的工具开成远程 MCP 接口
 hero:
   name: a2mcp
   text: 把本机的工具开给远程的 agent
-  tagline: 一个 omp 扩展。装上后，本机 omp 多开出一个 MCP 接口，别的 agent 从远程调用这台机器上的 read、bash、edit——命令在本机真跑，文件在本机真改。推理归调用方，桥自己从不请求模型。
+  tagline: 装上后，本机 omp 多开出一个 MCP 接口，别的 agent 从远程调这台机器上的工具——命令在本机真跑，文件在本机真改。
   actions:
     - theme: brand
       text: 快速开始
@@ -256,28 +256,28 @@ hero:
 
 features:
   - title: 装上它
-    details: 机器上已经有 omp，就一条 omp install 加仓库的 git URL；新机器走一键脚本，它先装宿主，再执行同一条命令。两条路装完是同一个样子：通知栏报出监听地址，配置与 token 桥自己生成。
+    details: 有 omp 就一条 omp install；没有先跑一键脚本，它先装宿主再装扩展。
     link: /start
   - title: 接上第一个远程 agent
-    details: 客户端会说 MCP 就直接填 mcp.json，别自己造客户端；不会说 MCP 但能跑代码的（贴进提示词的 agent、CI 任务、自写脚本），取 scripts/mcp-call.py——零依赖的 Python 3 参考客户端，握手、会话头与重连都写好了。
+    details: 会说 MCP 的填 mcp.json；不会的用 scripts/mcp-call.py，别自己写客户端。
     link: /start#两条接入路
   - title: 传文件走 WebDAV
-    details: xfer_share 收一条宿主路径，交给 dufs 服务，挂在桥自己端口的 /xfer/ 路由下；字节不经过 JSON-RPC，要的还是那个 Bearer token。公网那一面是操作员的 /a2mcp tunnel：一条 quick tunnel 只顶一个 origin，所以文件路由和工具调用走同一个主机名、同一个 token。隧道开着时回包带 publicUrl，远端 agent 拿得到就能直接拼地址。
+    details: xfer_share 把一条宿主路径挂在 /xfer/ 路由下，字节不经过 JSON-RPC。
     link: /files
   - title: 驱动接在本机上的设备
-    details: adb、idf.py、串口工具、烧录器都是本机 PATH 上的命令。远程 agent 调 bash，命令就在这台机器的 shell 里跑；宿主把工具挂成虚拟设备时，read/write 的 path 参数就能读写和执行。
+    details: adb、串口工具都是本机 PATH 上的命令，远程 agent 调 bash 就在这台机器上跑。
     link: /devices
   - title: 跨机转发
-    details: 默认只监听 127.0.0.1，跨机器用 SSH 端口转发接进来。要一个公网主机名，宿主会话里跑 /a2mcp tunnel——它顶的是整个端口，MCP 端点与开着共享的 /xfer/ 路由一起出去，token 是唯一的闸门。
+    details: 默认只绑回环；跨机用 SSH 端口转发，要公网主机名就在宿主会话里跑 /a2mcp tunnel。
     link: /reach
   - title: 宿主推理可以整体关掉
-    details: 远程调用可能唤醒宿主自己的 agent，花宿主的 token。host_llm 配置与 POST /host-llm 把这件事变成开关：deny 在位时宿主的会话发不出任何模型请求，核验探针对着一个真在听的计数 sink 数过——零是数出来的。token 即工具执行全权，这是默认配置下的事实，文档里写清楚。
+    details: host_llm 置 deny 时，宿主的会话发不出任何模型请求。
     link: /safety
   - title: 协议参考
-    details: 客户端要实现的全部约定：处理顺序、会话生命周期、错误码总表、xfer_* 工具与 /xfer/ 文件路由、宿主推理切换。协议面与代码冲突时以代码为准。
+    details: 客户端要实现的全部约定：处理顺序、会话、错误码、xfer_* 工具与 /xfer/ 路由。
     link: /protocol
   - title: 测试与核验
-    details: 279 项单测之外，几个探针大多拉起真实的 omp 跑完整流程：deny 那一个对着真在听的计数 sink 数出零，发布包那一个装回去跑通才算过。各项覆盖什么、怎么判读，测试页写着。
+    details: 279 项单测之外，几个探针大多拉起真实的 omp 跑完整流程。
     link: /testing
 ---
 
@@ -286,12 +286,6 @@ ${rewrite(guide.preamble)}
 ---
 
 ${rewrite(guide.sections.get("许可"))}
-
-## 接下来
-
-- [快速开始](/start)：装上它，配置 token，把 mcp.json 填给远程 agent。
-- [安全与边界](/safety)：token 就是工具执行全权，默认配置下没有第二道门。
-- [协议参考](/protocol)：要自己写客户端的话，wire 契约在那里。
 `;
 writeFileSync(join(CONTENT, "index.md"), home);
 
