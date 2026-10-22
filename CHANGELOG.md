@@ -1,8 +1,15 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.7.0`（2026-10-20，隧道开着时 `xfer_share` / `xfer_status` 的回包多一个 `publicUrl`：同一条 `/xfer/` 路由在操作员那条 `/a2mcp tunnel` 上的地址，隧道没开是 `null`）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.7.1`（2026-10-22，宿主推理被关掉时，桥装在宿主进程上的 fetch 绊线只按 provider 自己那个端口记目的地——provider 挂在 loopback 上时，桥自己的文件路由不再跟着一起被拒，见那节）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
+
+## 2026-10-22 — 两份 README 的提示词换成当前那段
+
+提示词重写之后，代码里的 `REMOTE_PROMPT` 换了，两份 README 里贴的还是旧稿：中文那份是五条要点，英文那份是另一版英文。操作员照着 README 抄给远程 agent 的，还是上一版。
+
+- docs: 两份 README 的「给远程 agent 的提示词」段落贴代码里那一段，逐字相同——`/a2mcp prompt` 打印什么，README 里就是什么。周边那句改说清：那段文字不带 URL 也不带 token，那两样进远程客户端的 `mcp.json`。
+- 版本位: 远程调用方经协议拿到的东西没变（README 是给人看的），按 2026-10-18 那条判据不进 minor。
 
 ## 2026-10-21 — 绊线只挡 provider 自己的端口
 
@@ -387,6 +394,15 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.7.1 — 修：provider 挂在 loopback 上时，桥自己的文件路由不再跟着死
+
+**这一版修的是一处真 bug：宿主推理被关掉时，桥在宿主进程上装的 fetch 绊线按 provider 的 `baseUrl` 记目的地，它原来记两样——`host`（带端口）与裸 `hostname`（不带）。第二样是多余的：URL 会把默认端口去掉，`http://host` 与 `http://host:80` 本来就是一个键。于是 provider 挂在 loopback 上时，那台机器上每一个 loopback 请求都被拒，桥自己的文件服务器（`dufs` 在一个空闲的 loopback 端口上）算在内，取文件失败时报的是「host inference is disabled in this mode」——说的是推理，撞上的是文件。现在键集里只有 `host`。** 协议面没动：`tools/list` 与 `initialize` 的形状一个字没动，三个 `xfer_*` 工具的名字、参数、回包字段与 token 都不变；变的是操作员那段提示词、审计日志文件的名字与位置、工具描述与失败正文里的文字。按 2026-10-18 判据（调用方经协议拿到的东西变了进 minor）进 patch 位。远程 `mcp.json` 不用改，token 不换代。
+
+- 内容: 见上 2026-10-21 的「绊线只挡 provider 自己的端口」「文件传输说成 WebDAV」「提示词重写，并把参考客户端点名」「审计日志按 UTC 日分文件，桥不设上下限」四节，与 2026-10-22 那一节（两份 README 的提示词换成当前那段）。另有两笔一并进去：`2b2dba5` 把文件路由第一次放进真宿主核验（场景套件此前一次都没调过 `xfer_share`），`cda1aa6` 共享开不起来时报错带上文件服务器自己那句原因。
+- 边界: 这一版不新增暴露面，也不新增协议上的任何方法。绊线那一条是桥自己进程内的开关，对远程调用方不可见；审计日志换了文件名与位置，但日志不是协议面。
+- 升级: 宿主上装的是旧版的，要 `omp install <git-url>` 重装并重启宿主会话才拿到绊线那一条修复。重装后隧道是新的 quick tunnel（主机名换新），token 也换新的，远端 `mcp.json` 跟着改。
+- 回归（发版前这一遍，2026-10-22，宿主 omp 18.12.1）: `bun test` 279 项 833 断言全绿；`lint` / `tsc` 干净；`tree` 3 项、`registry` 5497 行（14.2 ms 装配）、`SMOKE OK`（22 个工具）、`HARDEN OK` 36 项、`SCENARIOS: 85 steps, 0 failed`、`takeover` 64.7 秒（inference POST=1、元数据非 POST=1）、审批 `VERDICT: B`（挂起 ≥90001 ms、不是 `isError`）、`MCP-CALL OK`、`BOOTSTRAP OK`、`test:obtain` PASS（dufs 0.46.0、cloudflared 2026.10.1；真隧道 announce 到的那个主机名从发布它的那台机器 curl 回去仍是证书错误，那条读数照旧）、`test:install` `PACKAGE OK`（npm 真装那组按 `info:` 跳过）；站点 `build` + `check` 全过。
 
 ## v0.7.0 — 隧道开着时，共享回包带上公网地址
 
