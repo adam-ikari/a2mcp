@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-22T01:41:55"
+updated: "2026-10-22T06:40:30"
 ---
 
 <!-- compiled_truth -->
@@ -1161,4 +1161,16 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   kind: decision
   summary: "给远程 agent 的提示词只有一处：extensions/a2mcp.ts 的 REMOTE_PROMPT。两份 README 的「给远程 agent 的提示词」段落逐字抄它，/a2mcp prompt 打印的也是它。提示词重写之后两份 README 贴的仍是旧稿（中文那份是五条要点，英文那份是另一版英文），操作员照着 README 抄给远程 agent 的还是上一版——漂移过一次，所以这条「单一来源、逐字抄」是规矩而不是习惯。提示词仍是英文（它读的是对面那个模型不是操作员），且不带 URL 也不带 token：那两样进远程客户端的 mcp.json。"
   source: "2026-10-22 README 提示词"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-22T06:39:46
+  kind: decision
+  summary: "站点按任务拆页，正文仍只有一份。website/scripts/pages.mjs 是站点唯一的页面地图：哪些页存在、叫什么、渲染自哪个仓库文件、归哪一组；sync.mjs、sitemap.mjs、render-check.mjs、llms.mjs 都读它。README 照旧是散文的唯一出处——拆的是渲染，不是文字。两条不变量在构建时验：README 的每个 H2 恰好落在一页上，地图点名的节在 README 里必须存在（改个名打断构建，而不是悄悄把一页清空）。页与页之间的括注引用变成带锚点的链接，锚点按 VitePress 的规则算，构建后对着 dist/ 里真实存在的 id 核。站点从 8 页变 14 页，旧的 /intro 不再存在。"
+  source: "2026-10-22 站点拆页"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-22T06:40:30
+  kind: note
+  summary: "站点的构建有两种形状：本地 base 是 /，CI（GitHub Pages）base 是 /a2mcp/。断言必须对两种都对——内链检查一度只认本地那种形状（拿 HTML 里的 /a2mcp/start 去比地图里的 /start），本地全绿、CI 里 404 条链接全判成「没有这一页」。教训：站点上的断言要拿构建出来的 BASE 去剥前缀再比，别拿「本地那份」当唯一形状。要复现 CI 的形状就带着 GITHUB_ACTIONS=true GITHUB_REPOSITORY=owner/repo 跑一遍。"
+  source: "2026-10-22 站点检查的两种形状"
   affects: [a2a-mcp-bridge]
