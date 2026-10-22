@@ -50,4 +50,4 @@ computer use 让模型看屏幕猜坐标去点按，本桥让调用方按名字�
 
 ## 边界
 
-本桥只暴露 `tools/list` + `tools/call`，没有 resources、没有 prompts、不做键鼠注入——它不实现 computer use 的那一半，也不打算实现。固定路由到宿主 `Main` 会话。完整 wire 契约见 [协议参考](./protocol.md)，暴露面与威胁模型见 [使用指南](./intro)。
+本桥只暴露 `tools/list` + `tools/call`，没有 resources、没有 prompts、不做键鼠注入——它不实现 computer use 的那一半，也不打算实现。固定路由到宿主 `Main` 会话。完整 wire 契约见 [协议参考](./protocol.md)，暴露面与威胁模型见 [安全与边界](./safety)。

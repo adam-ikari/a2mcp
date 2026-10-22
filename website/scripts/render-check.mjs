@@ -14,7 +14,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { sourceOf } from "./sources.mjs";
+import { PAGES, sourcesOf } from "./pages.mjs";
 
 const SITE = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(SITE, ".vitepress", "dist");
@@ -120,8 +120,8 @@ function dumpDom(path) {
 
 // Pages carrying a ```mermaid fence, each with a label that must survive into
 // the rendered SVG. mermaid entity-encodes non-ASCII, so decode before looking.
-const PAGES = [
-	{ path: "/intro", label: "远程 omp" },
+const PAGES_WITH_DIAGRAM = [
+	{ path: "/start", label: "远程 omp" },
 	{ path: "/protocol", label: "受控端 TUI" },
 ];
 // A page with no diagram: it must load clean and carry no stray diagram.
@@ -153,7 +153,7 @@ let failed = 0;
 	console.log(`OK   control    browser + static server respond (${control.length}B)\n`);
 }
 
-for (const { path, label } of PAGES) {
+for (const { path, label } of PAGES_WITH_DIAGRAM) {
 	const dom = await dumpDom(path);
 	const hasSvg = /<div class="mermaid">[\s\S]*?<svg[\s\S]*?<\/svg>/.test(dom);
 	const text = diagramText(dom);
@@ -196,18 +196,13 @@ srv.close();
 const headChecks = [];
 const titles = new Map();
 const descriptions = new Map();
-for (const file of [
-	"index.html",
-	"intro.html",
-	"protocol.html",
-	"computer-use.html",
-	"testing.html",
-	"changelog.html",
-	"superpowers/specs/2026-09-10-a2a-mcp-bridge-design.html",
-	"superpowers/plans/2026-09-10-a2a-mcp-bridge.html",
-]) {
+// The page list comes from the map the site is built from, not from a list
+// written here: a page added to pages.mjs and forgotten here would be checked
+// by nothing, and a page removed from the map would still be checked here.
+for (const entry of PAGES) {
+	const file = entry.path === "" ? "index.html" : `${entry.path}.html`;
 	const html = readFileSync(join(DIST, file), "utf8");
-	const page = file.replace(/\.html$/, "");
+	const page = entry.path;
 
 	const title = html.match(/<title>([^<]+)<\/title>/)?.[1] ?? "";
 	const description = html.match(/<meta name="description" content="([^"]*)"/)?.[1] ?? "";
@@ -239,8 +234,9 @@ for (const file of [
 	// og:image must be a raster format: Twitter/X, Facebook and Slack all drop
 	// an SVG, so the card silently never appears.
 	const raster = /\.(png|jpe?g|gif|webp)$/i.test(ogImage ?? "");
-	const expectedType = page === "index" ? "WebSite" : "TechArticle";
-	const expectedExtra = page === "index" ? "SoftwareApplication" : "BreadcrumbList";
+	const isHome = entry.path === "";
+	const expectedType = isHome ? "WebSite" : "TechArticle";
+	const expectedExtra = isHome ? "SoftwareApplication" : "BreadcrumbList";
 
 	titles.set(title, [...(titles.get(title) ?? []), page]);
 	descriptions.set(description, [...(descriptions.get(description) ?? []), page]);
@@ -296,6 +292,78 @@ for (const [label, seen] of [
 }
 
 /*
+ * Every internal link must land on a page that exists, and every anchor must
+ * exist on that page.
+ *
+ * The site's cross-references are built by sync.mjs from the section names in
+ * the README, and the anchor part of a link is a slug of a heading — neither
+ * the build nor VitePress's dead-link check looks at the fragment. So a
+ * renamed heading leaves a link that goes nowhere: the page renders, the build
+ * passes, and the reader lands at the top of a page they meant to be inside.
+ * This reads the built HTML and checks the fragments against the ids that are
+ * actually there.
+ */
+{
+	const pages = PAGES.map((p) => ({
+		path: p.path,
+		file: p.path === "" ? "index.html" : `${p.path}.html`,
+		html: readFileSync(join(DIST, p.path === "" ? "index.html" : `${p.path}.html`), "utf8"),
+	}));
+	const idsOf = (html) => new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]));
+	const broken = [];
+	let checked = 0;
+	for (const from of pages) {
+		for (const m of from.html.matchAll(/href="(\/[^"]*)"/g)) {
+			const href = m[1];
+			if (href.startsWith("//")) continue;
+			const [pathPart, rawAnchor] = href.split("#");
+			// A file with an extension is an asset (the theme's own CSS, an
+			// image), not a page. Only page links have an anchor to check.
+			if (/\.[a-z0-9]+$/i.test(pathPart)) continue;
+			// The built HTML percent-encodes the fragment; the ids in the page
+			// are the raw heading text.
+			const anchor = rawAnchor ? decodeURIComponent(rawAnchor) : "";
+			checked++;
+			const target = pages.find((p) => `/${p.path}` === pathPart || (p.path === "" && pathPart === "/"));
+			if (!target) {
+				broken.push(`${from.path || "index"} -> ${href} (no such page)`);
+				continue;
+			}
+			if (anchor && !idsOf(target.html).has(anchor)) {
+				broken.push(`${from.path || "index"} -> ${href} (no such anchor on /${target.path})`);
+			}
+		}
+	}
+	headChecks.push([
+		broken.length === 0,
+		`internal links: ${checked} checked, ${broken.length} broken${broken.length ? `: ${broken.slice(0, 6).join("; ")}` : ""}`,
+	]);
+}
+
+/*
+ * llms.txt is the index an LLM crawler reads instead of crawling the site.
+ * It is generated from the page map, so it cannot list a page that does not
+ * exist — but it can be missing altogether, or stale, and nothing else on this
+ * site would notice. Check that it exists, names every page, and links to the
+ * published origin.
+ */
+{
+	const llmsPath = join(DIST, "llms.txt");
+	const exists = existsSync(llmsPath);
+	const llms = exists ? readFileSync(llmsPath, "utf8") : "";
+	const listed = [...llms.matchAll(/^- \[(.+?)\]\((.+?)\):/gm)].map((m) => m[2]);
+	const missing = PAGES.filter(
+		(p) => !listed.some((url) => url.endsWith(`/${p.path}`) || (p.path === "" && url.endsWith("/"))),
+	);
+	headChecks.push([exists, `llms.txt: ${exists ? "present" : "missing"}`]);
+	headChecks.push([
+		missing.length === 0,
+		`llms.txt: lists ${listed.length} entries, ${missing.length} page(s) unlisted${missing.length ? `: ${missing.map((p) => p.path || "index").join(", ")}` : ""}`,
+	]);
+	headChecks.push([llms.startsWith("# "), "llms.txt: starts with an H1"]);
+}
+
+/*
  * Page weight, read from the modulepreload hints the build emits.
  *
  * VitePress resolves `appChunk.imports + appChunk.dynamicImports + pageChunk.*`
@@ -304,12 +372,12 @@ for (const [label, seen] of [
  * shipped 1.58 MB of mermaid on all seven: `withMermaid` injected the component
  * into the *entry* rather than registering it lazily. Every check above stays
  * green through that — the diagrams render, the tags are right, the site works —
- * so the only witness is the size itself. Measured now: ~4.5 KB across two
- * chunks; the budget below is 64 KB, which is 14x the current weight and 25x
- * under the regression.
+ * so the only witness is the size itself. Measured now: 3.6 KB on the heaviest
+ * page (index); the budget below is 64 KB, which is 17x the current weight and
+ * 25x under the regression.
  */
 const PRELOAD_BUDGET_BYTES = 64 * 1024;
-for (const file of ["index.html", "testing.html"]) {
+for (const file of ["index.html", "start.html", "files.html", "testing.html"]) {
 	const html = readFileSync(join(DIST, file), "utf8");
 	const preloads = [...new Set([...html.matchAll(/<link rel="modulepreload" href="([^"]+)"/g)].map((m) => m[1]))];
 	let total = 0;
@@ -424,18 +492,26 @@ for (const file of ["index.html", "testing.html"]) {
 	let verified = 0;
 	for (const { url, lastmod } of entries) {
 		const page = pageOf(url);
-		const src = sourceOf(page);
-		const srcExists = Boolean(src) && existsSync(join(repo, src));
+		const sources = sourcesOf(page);
+		const srcExists = sources.length > 0 && sources.every((s) => existsSync(join(repo, s)));
 		headChecks.push([
 			srcExists,
-			`sitemap ${page || "index"}: maps to an existing source file (${src ?? "no mapping"})`,
+			`sitemap ${page || "index"}: maps to an existing source file (${sources.join(", ") || "no mapping"})`,
 		]);
 		const plausible = /^\d{4}-\d{2}-\d{2}$/.test(lastmod) && (headDate === "" || lastmod <= headDate);
-		const claimed = srcExists ? lastCommit(src) : "";
+		// A page rendered from more than one file claims the newest of their
+		// dates, so the comparison is against that same newest date.
+		const claimed = srcExists
+			? (sources
+					.map((s) => lastCommit(s))
+					.filter(Boolean)
+					.sort()
+					.at(-1) ?? "")
+			: "";
 		if (claimed) verified++;
 		headChecks.push([
 			plausible && (claimed === "" ? true : claimed === lastmod),
-			`sitemap ${page || "index"}: lastmod ${lastmod} vs ${src ?? "(unmapped)"} ${claimed || "(git silent)"}`,
+			`sitemap ${page || "index"}: lastmod ${lastmod} vs ${sources.join(", ") || "(unmapped)"} ${claimed || "(git silent)"}`,
 		]);
 	}
 	// Anti-vacuity: with git available, at least one page must actually have been
@@ -447,7 +523,16 @@ for (const file of ["index.html", "testing.html"]) {
 		`sitemap: ${verified}/${entries.length} lastmod compared against git${gitWorks ? "" : " (git silent, dates unchecked)"}`,
 	]);
 	headChecks.push([
-		dates.size > 1 || new Set(entries.map((e) => lastCommit(sourceOf(pageOf(e.url)) ?? ""))).size <= 1,
+		dates.size > 1 ||
+			new Set(
+				entries.map((e) =>
+					sourcesOf(pageOf(e.url))
+						.map((s) => lastCommit(s))
+						.filter(Boolean)
+						.sort()
+						.at(-1),
+				),
+			).size <= 1,
 		`sitemap: ${dates.size} distinct lastmod across ${entries.length} pages (one date only when every source shares it)`,
 	]);
 }

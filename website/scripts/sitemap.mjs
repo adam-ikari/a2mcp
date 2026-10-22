@@ -11,18 +11,14 @@ import { execFileSync } from "node:child_process";
 import { readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { sourceOf } from "./sources.mjs";
+import { sourcesOf } from "./pages.mjs";
+import { siteUrl } from "./site-url.mjs";
 
 const SITE = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(SITE, ".vitepress", "dist");
 const REPO = dirname(SITE);
 
-const [owner, repo] = (process.env.GITHUB_REPOSITORY ?? "").split("/");
-const isUserSite = repo === `${owner}.github.io`;
-const base = isUserSite ? "/" : `/${repo}/`;
-const SITE_URL = (
-	process.env.SITE_URL ?? (owner && repo ? `https://${owner}.github.io${base}` : "http://localhost:5173/")
-).replace(/\/?$/, "/");
+const SITE_URL = siteUrl();
 
 /** Last commit date (YYYY-MM-DD) touching a repo file, or null if git can't say. */
 function lastCommitDate(relPath) {
@@ -40,9 +36,21 @@ function lastCommitDate(relPath) {
 	}
 }
 
+/**
+ * The date a page last changed: the newest of its sources' commit dates. A
+ * page rendered from one file takes that file's date; a page rendered from two
+ * (the home page: the README's prose and the sync script's hero) takes the
+ * newer of the two, because that is when the page last changed.
+ */
+function pageDate(page) {
+	const dates = sourcesOf(page).map(lastCommitDate).filter(Boolean);
+	if (dates.length === 0) return null;
+	return dates.sort().at(-1) ?? null;
+}
+
 // content/ is generated from these repo files by sync.mjs; lastmod must reflect
 // when the SOURCE last changed, not when CI ran. The page → source mapping lives
-// in scripts/sources.mjs because render-check.mjs verifies the same mapping.
+// in scripts/pages.mjs because render-check.mjs verifies the same mapping.
 
 /** Collect every built .html as a clean (extensionless, base-prefixed) URL. */
 function collect(dir) {
@@ -79,7 +87,7 @@ const pages = collect(DIST)
 	// commit, falling back to the newest commit in the repo. Previously this was
 	// the built file's mtime, which is the CI run time — every page claimed to
 	// change on every deploy, and search engines are told to ignore that.
-	.map((p) => ({ ...p, lastmod: lastCommitDate(sourceOf(p.page)) ?? head }))
+	.map((p) => ({ ...p, lastmod: pageDate(p.page) ?? head }))
 	.filter((p) => p.lastmod) // no git -> omit lastmod rather than invent one
 	.sort((a, b) => a.url.localeCompare(b.url));
 
