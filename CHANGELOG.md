@@ -401,7 +401,7 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 
 - 内容: 见上 2026-10-21 的「绊线只挡 provider 自己的端口」「文件传输说成 WebDAV」「提示词重写，并把参考客户端点名」「审计日志按 UTC 日分文件，桥不设上下限」四节，与 2026-10-22 那一节（两份 README 的提示词换成当前那段）。另有两笔一并进去：`2b2dba5` 把文件路由第一次放进真宿主核验（场景套件此前一次都没调过 `xfer_share`），`cda1aa6` 共享开不起来时报错带上文件服务器自己那句原因。
 - 边界: 这一版不新增暴露面，也不新增协议上的任何方法。绊线那一条是桥自己进程内的开关，对远程调用方不可见；审计日志换了文件名与位置，但日志不是协议面。
-- 升级: 宿主上装的是旧版的，要 `omp install <git-url>` 重装并重启宿主会话才拿到绊线那一条修复。重装后隧道是新的 quick tunnel（主机名换新），token 也换新的，远端 `mcp.json` 跟着改。
+- 升级: 宿主上装的是旧版的，要 `omp install <git-url>` 重装并重启宿主会话才拿到绊线那一条修复。token 在配置里（`~/.omp/agent/a2mcp.json`），重装不动它；隧道是 quick tunnel，重开一次换一个主机名，远端 `mcp.json` 里的 URL 跟着改。
 - 回归（发版前这一遍，2026-10-22，宿主 omp 18.12.1）: `bun test` 279 项 833 断言全绿；`lint` / `tsc` 干净；`tree` 3 项、`registry` 5497 行（14.2 ms 装配）、`SMOKE OK`（22 个工具）、`HARDEN OK` 36 项、`SCENARIOS: 85 steps, 0 failed`、`takeover` 64.7 秒（inference POST=1、元数据非 POST=1）、审批 `VERDICT: B`（挂起 ≥90001 ms、不是 `isError`）、`MCP-CALL OK`、`BOOTSTRAP OK`、`test:obtain` PASS（dufs 0.46.0、cloudflared 2026.10.1；真隧道 announce 到的那个主机名从发布它的那台机器 curl 回去仍是证书错误，那条读数照旧）、`test:install` `PACKAGE OK`（npm 真装那组按 `info:` 跳过）；站点 `build` + `check` 全过。
 
 ## v0.7.0 — 隧道开着时，共享回包带上公网地址
