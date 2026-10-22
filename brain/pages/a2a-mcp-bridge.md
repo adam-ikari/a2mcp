@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-21T03:47:54"
+updated: "2026-10-22T01:41:55"
 ---
 
 <!-- compiled_truth -->
@@ -1149,4 +1149,16 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   kind: decision
   summary: "审计日志按 UTC 日分文件：轮转整套拆掉，桥不删任何东西"
   source: "2026-10-21 日文件"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-22T01:41:47
+  kind: decision
+  summary: "绊线的键集里只有 host（带端口）一样，裸 hostname 那样是多余的：URL 会把默认端口去掉，http://host 与 http://host:80 本来就是一个键。代价是远端那台机器上实测出来的——provider 挂在 loopback 上时，裸的 127.0.0.1 进了键集，那台机器上每一个 loopback 请求都被拒，桥自己的文件服务器（dufs 在一个空闲的 loopback 端口上）算在内，取文件失败时报的是「host inference is disabled in this mode」——说的是推理，撞上的是文件。规矩：绊线不许比 host:port 更粗的键，provider 自己的端点照样被拒，同机别的端口不跟着死。"
+  source: "2026-10-21 绊线"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-22T01:41:55
+  kind: decision
+  summary: "给远程 agent 的提示词只有一处：extensions/a2mcp.ts 的 REMOTE_PROMPT。两份 README 的「给远程 agent 的提示词」段落逐字抄它，/a2mcp prompt 打印的也是它。提示词重写之后两份 README 贴的仍是旧稿（中文那份是五条要点，英文那份是另一版英文），操作员照着 README 抄给远程 agent 的还是上一版——漂移过一次，所以这条「单一来源、逐字抄」是规矩而不是习惯。提示词仍是英文（它读的是对面那个模型不是操作员），且不带 URL 也不带 token：那两样进远程客户端的 mcp.json。"
+  source: "2026-10-22 README 提示词"
   affects: [a2a-mcp-bridge]
