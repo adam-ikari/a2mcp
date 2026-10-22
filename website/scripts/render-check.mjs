@@ -316,7 +316,13 @@ for (const [label, seen] of [
 		for (const m of from.html.matchAll(/href="(\/[^"]*)"/g)) {
 			const href = m[1];
 			if (href.startsWith("//")) continue;
-			const [pathPart, rawAnchor] = href.split("#");
+			const [rawPath, rawAnchor] = href.split("#");
+			// The built HTML's links carry the base prefix (/a2mcp/start) while
+			// the map's paths do not (/start) — strip it before the lookup, the
+			// same way the sitemap check does. Without this the check is green
+			// locally (base "/") and red in CI (base "/a2mcp/").
+			let pathPart = rawPath;
+			if (BASE !== "/" && pathPart.startsWith(BASE)) pathPart = pathPart.slice(BASE.length - 1);
 			// A file with an extension is an asset (the theme's own CSS, an
 			// image), not a page. Only page links have an anchor to check.
 			if (/\.[a-z0-9]+$/i.test(pathPart)) continue;
