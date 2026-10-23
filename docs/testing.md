@@ -78,7 +78,7 @@
 
 **核验 `scripts/mcp-call.py` 真能把桥说的那套握手走下来。** 桥给「能跑代码但不是 MCP 客户端」的调用方发了一个零依赖 Python 3 参考客户端，它替调用方处理会话头、404 重握手、超时与退出码——正是手搓 `mcp_call.py` 最容易写错的两处：会话生命周期和退出码。这个探针就盯这两处。
 
-分两组。A 组起一座真宿主（同 `test:install` 第四组的启动形状，只是用软链装扩展、不跑 `omp install`），拿 `python3` 驱动脚本：`list` 退 0 且打印出桥自己的三个 `xfer_*`（名字从 `src/xfer.ts` 的 `XFER_TOOL_NAMES` 读，不抄第二份）；`schema <tool>` 打印那一条工具的名字、描述与入参 schema（手搓的客户端最常缺这一项——要读一个工具想要什么，就自己写个客户端去问）；`call bash` 在本机真跑、把输出打到 stdout、退 0；调一个不存在的工具拿到 `isError` 并退非零；token 写错时退非零且 stderr 点名 401。B 组对一只 `Bun.serve` 假服务器跑——它只在第一次 `tools/call` 上回 404，验客户端会重新握手再重试一次那一条。真会话 24 小时才过期，探针等不起，所以这条自愈路用假服务器单独钉。
+分两组。A 组起一座真宿主（同 `test:install` 第四组的启动形状，只是用软链装扩展、不跑 `omp install`），拿 `python3` 驱动脚本：`list` 退 0 且打印出桥自己的 `xfer_*`（现在五个；名字从 `src/xfer.ts` 的 `XFER_TOOL_NAMES` 读，不抄第二份）；`schema <tool>` 打印那一条工具的名字、描述与入参 schema（手搓的客户端最常缺这一项——要读一个工具想要什么，就自己写个客户端去问）；`call bash` 在本机真跑、把输出打到 stdout、退 0；调一个不存在的工具拿到 `isError` 并退非零；token 写错时退非零且 stderr 点名 401。B 组对一只 `Bun.serve` 假服务器跑——它只在第一次 `tools/call` 上回 404，验客户端会重新握手再重试一次那一条。真会话 24 小时才过期，探针等不起，所以这条自愈路用假服务器单独钉。
 
 前置 `omp` 与 `python3`：本机没有 `python3` 时整段 `info:` 跳过、退 0（与 install 的 npm 组同一条纪律，CI 不因缺可选依赖红）。全过 → `MCP-CALL OK`；任何一项不过 → `FAIL: <label>` + exit 1。
 
