@@ -1,6 +1,6 @@
 {
   "name": "a2mcp",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Expose a running omp session's tools over MCP (Streamable HTTP), plus file transfer over the bridge's own /xfer route",
   "license": "MIT",
   "type": "module",
@@ -45,6 +45,7 @@
     "test:bootstrap": "bun test/bootstrap-probe.ts",
     "test:obtain": "bun test/obtain-probe.ts",
     "test:scenario": "bun test/scenario.ts",
+    "test:tunnel-xfer": "bun test/tunnel-xfer-probe.ts",
     "website": "cd website && bun run start"
   },
   "devDependencies": {

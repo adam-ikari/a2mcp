@@ -83,7 +83,7 @@ export const PAGES = [
 		nav: "传文件",
 		title: "传文件：把宿主路径开成 HTTP 路由",
 		description:
-			"xfer_share 把一条宿主路径交给 dufs，桥反代成自己端口的 /xfer/ 路由：同一个 Bearer token 授权，Range 与 WebDAV 可用。",
+			"xfer_share 把一条宿主路径交给 dufs，桥反代成自己端口的 /xfer/ 路由：同一个 Bearer token 授权，Range 与 WebDAV 可用；只会调工具的客户端用 xfer_get / xfer_put 分块搬。",
 		group: "用起来",
 		source: "README_ZN.md",
 		h1: "传文件",

@@ -206,7 +206,7 @@ Give every call a timeout of your own. A call can hang: a permission prompt on t
 
 What you run there stays there: nothing on that machine is rolled back for you.
 
-Big files do not travel through a tool call. A file too large to move is the operator's WebDAV route (`xfer_share`), not megabytes pasted into a command.
+Files move two ways. `xfer_share` opens a WebDAV route on the bridge's own origin (`/xfer/`); if you can send an HTTP request with `Authorization: Bearer <token>`, use it — GET, Range, PUT, one request per file, no base64. If you cannot, `xfer_get` and `xfer_put` carry the same file in base64 chunks over tool calls: each reply gives the `next` offset, and `xfer_put` writes the file when its pieces reach `total`. Never paste megabytes into a command.
 
 If your side cannot speak MCP to this endpoint, the bridge ships a zero-dependency reference client — `scripts/mcp-call.py` in the a2mcp repository. Use it; do not write your own client.
 ```
@@ -245,9 +245,11 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 ## 传文件
 
-传文件走 **WebDAV**。`xfer_share` 把一条宿主路径交给 [`dufs`](https://github.com/sigoden/dufs)（一个 WebDAV 文件服务器），dufs 在 `127.0.0.1` 上找一个空端口监听，桥再把这个端口挂到自己端点的 `/xfer/` 路由后面。回包给出的是路由（`http://127.0.0.1:<port>/xfer/`）、文件服务器的端口和到期时间，没有第二份凭据。调用 `tools/list` 用的那个 Bearer token 同时给这条路由授权：代理替掉请求里带来的 `Authorization`，换上桥为这次共享生成的 basic-auth 对，回程再删掉文件服务器的 `www-authenticate` 头。所以拿任何能发 `Authorization: Bearer <token>` 的 WebDAV 客户端挂它就行——`rclone`、`curl`，或者你自己写的 HTTP 客户端：GET 下行、PUT 上行、PROPFIND 列目录、Range 续传。浏览器加不了那个头，所以它拿到的与不带 token 的人一样是 401。`DELETE` 和 `MOVE` 回 403，桥只向文件服务器要了上传。共享在 TTL（默认 3600 秒）到期、`xfer_stop`、桥停止时关闭；第二次共享顶掉第一次。`xfer_status` 与 `xfer_stop` 不收参数。字节不经过 JSON-RPC，桥不自带字节协议。
+传文件走 **WebDAV**。`xfer_share` 把一条宿主路径交给 [`dufs`](https://github.com/sigoden/dufs)（一个 WebDAV 文件服务器），dufs 在 `127.0.0.1` 上找一个空端口监听，桥再把这个端口挂到自己端点的 `/xfer/` 路由后面。回包给出的是路由（`http://127.0.0.1:<port>/xfer/`）、文件服务器的端口和到期时间，没有第二份凭据。调用 `tools/list` 用的那个 Bearer token 同时给这条路由授权：代理替掉请求里带来的 `Authorization`，换上桥为这次共享生成的 basic-auth 对，回程再删掉文件服务器的 `www-authenticate` 头。所以拿任何能发 `Authorization: Bearer <token>` 的 WebDAV 客户端挂它就行——`rclone`、`curl`，或者你自己写的 HTTP 客户端：GET 下行、PUT 上行、PROPFIND 列目录、Range 续传。浏览器加不了那个头，所以它拿到的与不带 token 的人一样是 401。`DELETE` 和 `MOVE` 回 403，桥只向文件服务器要了上传。共享在 TTL（默认 3600 秒）到期、`xfer_stop`、桥停止时关闭；第二次共享顶掉第一次。`xfer_status` 与 `xfer_stop` 不收参数。这条路由上字节不经过 JSON-RPC。桥不带自己的字节协议——它驱动的是 `dufs` 的 WebDAV；只会发工具调用的客户端用下一段那两个工具，走的还是同一个文件服务器。
 
 路由开在回环端口上，本机之外一个字节都进不来。公网主机名只有一个来源：操作员跑 `/a2mcp tunnel`。隧道开着时，`xfer_share` 与 `xfer_status` 把它作为 `publicUrl` 回给调用方——同一个 `/xfer/` 路由，换到公网主机名下；隧道没开就是 `publicUrl: null`，`usage.public` 点名两条路：SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。工具只报这条主机名，自己不开隧道。
+
+也能一块一块地过 MCP。发不了带 `Authorization` 头的 HTTP 请求、只会调工具的客户端用 `xfer_get` 与 `xfer_put`：同一份共享、同样的路径，base64 分块，一块一次调用。`xfer_get` 一块缺省 256 KB（上限 1 MB），回包带 `total` 与 `next`，`next` 是 `null` 就到底了；`xfer_put` 不带 `offset` 的一次调用写完整个文件，分块时第一块给 `total`、之后照着 `next` 递，累到 `total` 的那一次才落盘，块在那之前留在桥的内存里（上限 16 MB、空闲 10 分钟丢弃）。两者都经文件服务器收发——一次 Range GET，一次 PUT——所以共享根、谁能写、路径怎么解析仍是 `dufs` 的事。代价是实的：base64 多 33%，每块一次调用、占一份上下文。能发 HTTP 的就走 `/xfer/`，那条路一个字节都不经 JSON-RPC。
 
 **token 就是一份能力**：拿着它的人，在共享关闭之前能读能写那条路径。共享自己不再往外发凭据：每次生成的那对 basic-auth 只出现在桥代发的请求里，工具回包、审计记录、文档都不写它。
 

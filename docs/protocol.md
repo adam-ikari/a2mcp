@@ -159,12 +159,12 @@ providers:
 
 - **无 `nextCursor`**：单页返回全量（宿主 omp 客户端的分页循环在缺省游标时正常终止）。
 - `inputSchema` 为 JSON Schema 2020-12（由宿主工具的 typebox schema 经 `toolWireSchema` 导出）。
-- 内容 = 宿主 `Main` 会话的工具注册表（`AgentSession.getAllToolInfos()`——宿主也正是用它接出 `pi.getAllTools()`），**原样透传不过滤**：含 `hidden` 工具，也含宿主当前对自己模型禁用的工具。**目录 = 宿主注册表逐字 + 桥自己的三个名字（`xfer_share` / `xfer_status` / `xfer_stop`，见下），没有别的**；桥也不解释权限——语义详见 README「安全与边界」。目录、暴露门与执行读同一份注册表，所以「列出来却调不动」只剩两次读之间工具被注销这一种情形。没有活的 `Main` 时（parked/aborted 到端口释放之间那一段）退回入口那份 `pi` 的视图，而不是报出一份宿主其实并没有的空目录
+- 内容 = 宿主 `Main` 会话的工具注册表（`AgentSession.getAllToolInfos()`——宿主也正是用它接出 `pi.getAllTools()`），**原样透传不过滤**：含 `hidden` 工具，也含宿主当前对自己模型禁用的工具。**目录 = 宿主注册表逐字 + 桥自己的五个名字（`xfer_share` / `xfer_status` / `xfer_stop` / `xfer_get` / `xfer_put`，见下），没有别的**；桥也不解释权限——语义详见 README「安全与边界」。目录、暴露门与执行读同一份注册表，所以「列出来却调不动」只剩两次读之间工具被注销这一种情形。没有活的 `Main` 时（parked/aborted 到端口释放之间那一段）退回入口那份 `pi` 的视图，而不是报出一份宿主其实并没有的空目录
 - 请求可带 `params.cursor`，被忽略。
 
 ### 桥自己的工具：`xfer_*`
 
-`tools/list` 里那三个名字不是宿主的工具，是桥自己服务的（`src/xfer.ts`）。**按「`tools/list` 里每个名字都是宿主工具」写死的客户端要改：目录是宿主注册表逐字加恰好这三个。** 三者都由桥分派，不进宿主的 `getToolByName()`，也不过宿主的审批门；每次动作写一条审计，`tool: "xfer"`（`phase: "event"`，`args.action` 为 `share` / `close` / `stop` / `install`，`args` 带路径、本地端口、TTL 与路由，不含任何内容）。**关掉共享的那一条另带 `args.usage`**（`requests` / `bytes` / `uploads`）：代理数这一路上过了多少请求与字节，字节按两个 content-length 计，所以是下限不是测量。它说的是「有多少东西流过」，不是「谁流的」——token 是共享的，字节不带身份。共享开着而没人动过时这个字段整个不在（不是一个 0）。
+`tools/list` 里那五个名字不是宿主的工具，是桥自己服务的（`src/xfer.ts`）。**按「`tools/list` 里每个名字都是宿主工具」写死的客户端要改：目录是宿主注册表逐字加恰好这五个。** 五者都由桥分派，不进宿主的 `getToolByName()`，也不过宿主的审批门；每次动作写一条审计，`tool: "xfer"`（`phase: "event"`，`args.action` 为 `share` / `close` / `stop` / `install` / `get` / `put`，`args` 带路径、本地端口、TTL 与路由，不含任何内容——`xfer_put` 的 base64 也只记长度）。**关掉共享的那一条另带 `args.usage`**（`requests` / `bytes` / `uploads`）：代理数这一路上过了多少请求与字节，字节按两个 content-length 计，所以是下限不是测量。它说的是「有多少东西流过」，不是「谁流的」——token 是共享的，字节不带身份。共享开着而没人动过时这个字段整个不在（不是一个 0）。
 
 **`xfer_share`** — 参数 `{ path, ttlSeconds? }`。`path` 必填，是文件或目录（`~` 与 `~/x` 展开到宿主家目录，相对路径按宿主的 working directory 解析）；`ttlSeconds` 缺省 3600。成功时 `result.content[0].text` 是一段 JSON：
 
@@ -193,6 +193,12 @@ providers:
 **`xfer_status`** — 无参数。有共享：`{"serving": true, "path", "port", "url", "publicUrl", "route", "startedAt", "expiresAt"}`；没有：`{"serving": false}`。`publicUrl` 与 `xfer_share` 同一份读法：隧道开着就是那条公网地址，关着是 `null`。
 
 **`xfer_stop`** — 无参数。有共享：`{"stopped": true, "path"}`；没有：`{"stopped": false, "note": "nothing was shared"}`，没共享也不报错。
+
+**`xfer_get`** — 参数 `{ name, offset?, maxBytes? }`。`name` 是共享根下的路径（前导 `/` 当共享根，`..` 直接拒），`offset` 缺省 0，`maxBytes` 缺省 262144、上限 1048576。回包 `{ name, offset, total, bytes, next, encoding: "base64", data }`：`total` 是文件大小，`next` 是下一次该传的 `offset`，读到末尾是 `null`。它向共享根发一次 Range GET，读的是文件服务器而不是磁盘，所以共享根、什么存在、什么算文件仍由 `dufs` 决定。`dufs` 对终点越过文件末尾的 Range 回 416，工具拿那条 `content-range` 换一个刚好到末尾的区间重试——最后一块不是 chunk 的整数倍时走的就是这条。目录读不了（`dufs` 对目录上的 Range 回 404），回包里点名列目录用宿主自己的工具。
+
+**`xfer_put`** — 参数 `{ name, data, offset?, total? }`。不带 `offset` 的一次调用就是整份文件；分块时第一块带上 `total`，之后每块的 `offset` 用上一块回包的 `next`，累到 `total` 的那一次才写盘。回包未完成 `{ name, received, total, next, done: false }`，完成 `{ name, bytes, done: true }`。块在桥的内存里攒着：上限 16 MB，空闲 10 分钟丢弃，同时在飞最多四份，`offset: 0` 重新开始。超过上限直接拒，点名走 `/xfer/`。写盘还是文件服务器做——一次 PUT 把组装好的字节交过去，路径与权限仍归它。
+
+这两个工具是给「只能发工具调用、发不了带 header 的 HTTP 请求」的调用方兜底的：base64 多 33%，一块一次调用、一块占一份上下文。能发 HTTP 的就走 `/xfer/`，那边一个字节都不经 JSON-RPC、一次一个 Range 或 PUT。
 
 **关闭时机**：TTL 到期、`xfer_stop`、或桥停止（宿主退出）。到期与顶替走同一条关闭路径——`dufs` 收 `SIGTERM`，等它真的退出（监听先注册再发信号，`exit` 只发一次）——并写一条 `xfer` 审计（`args.why` 为 `replaced` / `ttl expired` / `bridge stopped`）。关完之后 `/xfer/` 回 404。
 

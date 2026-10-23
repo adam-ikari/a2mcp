@@ -68,7 +68,7 @@ Give every call a timeout of your own. A call can hang: a permission prompt on t
 
 What you run there stays there: nothing on that machine is rolled back for you.
 
-Big files do not travel through a tool call. A file too large to move is the operator's WebDAV route (\`xfer_share\`), not megabytes pasted into a command.
+Files move two ways. \`xfer_share\` opens a WebDAV route on the bridge's own origin (\`/xfer/\`); if you can send an HTTP request with \`Authorization: Bearer <token>\`, use it — GET, Range, PUT, one request per file, no base64. If you cannot, \`xfer_get\` and \`xfer_put\` carry the same file in base64 chunks over tool calls: each reply gives the \`next\` offset, and \`xfer_put\` writes the file when its pieces reach \`total\`. Never paste megabytes into a command.
 
 If your side cannot speak MCP to this endpoint, the bridge ships a zero-dependency reference client — \`scripts/mcp-call.py\` in the a2mcp repository. Use it; do not write your own client.`;
 

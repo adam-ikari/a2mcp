@@ -1,8 +1,22 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.7.1`（2026-10-22，宿主推理被关掉时，桥装在宿主进程上的 fetch 绊线只按 provider 自己那个端口记目的地——provider 挂在 loopback 上时，桥自己的文件路由不再跟着一起被拒，见那节）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.8.0`（2026-10-23，`tools/list` 多两个桥自己服务的名字 `xfer_get` / `xfer_put`——只会发工具调用、发不了带 header 的 HTTP 请求的客户端也能把文件搬进去搬出来，分块经 `dufs` 收发，见那节）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
+
+## 2026-10-23 — 一块一块地过 MCP：`xfer_get` / `xfer_put`
+
+传文件原先只有一条路：`xfer_share` 把路径交给 `dufs`，桥把这个端口挂在自己端点的 `/xfer/` 后面，调用方拿 Bearer token 走 WebDAV。文档把这条写成判据——字节不经过 JSON-RPC，桥不带字节协议。它在「调用方能发带 `Authorization` 头的 HTTP 请求」时成立；只会调工具的调用方一个字节都搬不动，而宿主的 `read` 到 150 KB 截断、`bash` 只要 768 字节，两条都会把二进制读坏。
+
+- feat: 两个新工具，都由桥分派（`src/xfer.ts`）。`xfer_get` 一次一块读：base64，`offset` 缺省 0，`maxBytes` 缺省 256 KB、上限 1 MB，回包带文件大小 `total` 与下一次的 `next`，末尾是 `null`。`xfer_put` 整份或分块写：不带 `offset` 的一次调用写完整个文件；分块时第一块给 `total`，之后每块照上一块的 `next` 递，累到 `total` 的那一次才落盘。
+- 设计: 两个都**经 `dufs`**——读是共享根上的一次 Range GET，写是组装好字节的一次 PUT。共享根、什么存在、谁能写还是文件服务器的事，桥里没有第二份路径解析器。分块期间字节留在桥的内存里：上限 16 MB，空闲 10 分钟丢弃，同时在飞最多四份，`offset: 0` 重新开始；共享一关，在途的块一起丢（下一份共享挂的是别的路径）。
+- 实测: dufs 0.46.0 对**终点越过文件末尾**的 Range 回 416 而不是截断（10 字节文件上 `8-20` → 416、`8-9` → 206、`0-10` → 416），所以每一份大小不是 chunk 整数倍的文件，最后一块都踩这条。`xfer_get` 拿 416 里那条 `content-range` 换一个刚好到末尾的区间重试一次。
+- 反转: 两份 README 那句「字节不经过 JSON-RPC，桥不自带字节协议」改成有条件的说法——默认走 `/xfer/`，一个字节都不经 JSON-RPC；只会调工具的一方走这两个工具。代价与做法写在同一段里：base64 多 33%，一块一次调用、一块占一份上下文。
+- test: `bun test` 279 → 294。`test/xfer.test.ts` 多 15 项：1000 字节按 137 切八趟、256 KB 缺省与 1 MB 上限、不足一字节的 `maxBytes` 取 1、末尾与空文件、`..` 与绝对路径、目录、没共享、分块上传、错位拒绝、超上限在分配前拒、块长过 `total` 的拒绝、共享关闭丢弃、空闲十分钟丢弃、空格与 `#` 的名字、反斜杠当分隔符、url-safe base64、审计一条一块且不含 payload。假 dufs 补上 416 行为——不补的话重试路径一次都走不到。
+- test: 新探针 `test:tunnel-xfer`（`test/tunnel-xfer-probe.ts`，14 项，约 35 秒）。一条 origin 上先走 MCP：`initialize`、`tools/list` 里五个传输工具、`xfer_share` 回包里的 `publicUrl`；再用那个地址按 WebDAV 客户端的用法取 300 KB（sha256）、`Range: bytes=1000-1999` 得 206、无 token 与错 token 401、PUT 200 KB 落盘。然后同一份文件过 `xfer_get` 五趟、过 `xfer_put` 四趟，两条路逐字节相等；`xfer_stop` 之后路由 404。第 5 节起真 cloudflared，只断言本地那半：隧道开着时 `publicUrl` 等于公告的主机名加 `/xfer/`。origin 是进程内的一只 `Bun.serve`（path、method、headers、body 原样转发），因为这台机器给被代理的主机名重签证书，真隧道地址在本机取不回来，要取回就先得绕过证书校验。
+- test: 变异两处：`next` 写成恒非 `null`，读循环变六趟，`reads === 5` 那条红；`publicRouteUrl` 少拼 `/xfer/`，`publicUrl` 那条红，连带三处取字节的断言一起红（405，请求打到了 MCP 端点本身）。
+- docs: 两份 README 的传文件段、`docs/protocol.md`（五个名字、两个工具的字段与上限、审计的 `get`/`put`）、`docs/testing.md`（294 项、`test/xfer-route.test.ts` 20 项与 `test/xfer.test.ts` 35 项、新探针一行与一节）、提示词那段改成「文件走两条路」。
+- 版本位: 远程调用方经协议拿到的东西变了（`tools/list` 多两个名字，两个新入参与回包），按 2026-10-18 判据进 minor，v0.8.0。
 
 ## 2026-10-22 — 单测项数改成 279
 
@@ -401,6 +415,15 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.8.0 — 只会调工具的调用方也能搬文件：`xfer_get` / `xfer_put`
+
+**这一版对远程调用方变的是目录与传文件那一面：`tools/list` 多两个桥自己服务的名字。`xfer_get` 一次一块读出共享里的文件（base64、`offset` / `maxBytes`、回包带 `total` 与 `next`），`xfer_put` 整份或分块写进去（不带 `offset` 一次写完；分块时第一块给 `total`，累到才落盘，块在那之前留在桥的内存里，上限 16 MB）。两个都经 `dufs` 收发：一次 Range GET，一次组装后的 PUT，所以共享根、路径解析与权限仍是文件服务器的事。其余没动：MCP Streamable HTTP `2025-11-25`、单 Bearer token、`tools/list` 仍是宿主注册表逐字加桥自己的名字（现在五个）、`xfer_share` / `xfer_status` / `xfer_stop` 的名字与回包字段不变。远程 `mcp.json` 不用改，token 不换代；按 2026-10-18 判据（调用方经协议拿到的东西变了进 minor）进 v0.8.0。**
+
+- 内容: 见上 2026-10-23 的「一块一块地过 MCP：`xfer_get` / `xfer_put`」一节（两个工具的实现与上限、dufs 416 那一条实测、两份 README 与三份 docs 的改口、`bun test` 279→294、新探针 `test:tunnel-xfer` 14 项、两处变异）。
+- 边界: 「一条隧道同时带工具与文件」在公网那半程仍只有人工证据——本机网络对 `*.trycloudflare.com` 重签 TLS，探针里搬字节的那条 origin 是本进程的一只 `Bun.serve`（path/method/headers/body 原样转发），真 cloudflared 只核 `publicUrl` 的那一半接线。分块工具的承载上限是 16 MB：更大的文件走 `/xfer/` 路由，这条边界写进回包正文，不是踩到才说。上游 `read` / `bash` 的截断数是文档里原有的实测值，这一轮没重量。
+- 升级: 宿主上装的是旧版的，要 `omp install <git-url>` 重装并重启宿主会话才多出这两个工具；token 与端口在配置里，重装不动它们。只会调工具的远程客户端不需要改 `mcp.json`——新工具是同一份目录里多出来的两行。
+- 回归（发版前这一遍，2026-10-23，宿主 omp 18.12.1）: `bun test` 294 项 937 断言全绿；`lint` / `tsc` 干净；`tree` 3 项、`registry` 5497 行（15.3 ms 装配）、`SMOKE OK`（24 个工具，多了这两个）、`HARDEN OK` 36 项、`SCENARIOS: 85 steps, 0 failed`、`takeover` 62.0 秒（inference POST=1、元数据非 POST=1）、审批 `VERDICT: B`（≥90002 ms 挂起、start=1 done=0）、`MCP-CALL OK`、`BOOTSTRAP OK`、`test:tunnel-xfer` PASS 14 项、`test:obtain` PASS（dufs 0.46.0、cloudflared 2026.10.1）、`test:install` `PACKAGE OK`；站点 `build` + `check` 全过。
 
 ## v0.7.1 — 修：provider 挂在 loopback 上时，桥自己的文件路由不再跟着死
 
