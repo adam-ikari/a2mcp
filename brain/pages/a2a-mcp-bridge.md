@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-22T06:40:30"
+updated: "2026-10-23T09:49:10"
 ---
 
 <!-- compiled_truth -->
@@ -1173,4 +1173,10 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   kind: note
   summary: "站点的构建有两种形状：本地 base 是 /，CI（GitHub Pages）base 是 /a2mcp/。断言必须对两种都对——内链检查一度只认本地那种形状（拿 HTML 里的 /a2mcp/start 去比地图里的 /start），本地全绿、CI 里 404 条链接全判成「没有这一页」。教训：站点上的断言要拿构建出来的 BASE 去剥前缀再比，别拿「本地那份」当唯一形状。要复现 CI 的形状就带着 GITHUB_ACTIONS=true GITHUB_REPOSITORY=owner/repo 跑一遍。"
   source: "2026-10-22 站点检查的两种形状"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-23T09:49:10
+  kind: reversal
+  summary: "2026-10-23 桥不再说「字节永不经过 JSON-RPC」。xfer_share 那条 WebDAV 路由照旧是首选（一次 Range GET / 一次 PUT，不经 base64），但只会发工具调用、发不了带 Authorization 头的 HTTP 请求的调用方原先一个字节都搬不动（宿主的 read 到 150 KB 截断、bash 768 字节）。新增两个桥自己服务的工具：xfer_get 一次一块读（base64，offset 缺省 0，maxBytes 缺省 256 KB / 上限 1 MB，回包 total 与 next），xfer_put 整份或分块写（offset: 0 重来、第一块给 total、累到 total 那次落盘，块暂存桥内存：上限 16 MB、空闲 10 分钟丢、同时在飞四份、共享关闭一起丢）。两者都经 dufs 收发（Range GET、组装后一次 PUT），路径解析、共享根与权限仍是文件服务器的事，桥里没有第二份路径解析器；这就是不引入第二个权威的做法。实测 dufs 0.46.0 对终点越界的 Range 回 416 带 totals（10 字节文件 8-20 → 416、8-9 → 206），所以非整数倍的末块靠 416 的 content-range 换一个刚好到末尾的区间重试一次。代价写在文档里：base64 多 33%、一块一次调用与一份上下文。证据：bun test 292（test/xfer.test.ts 33 项，假 dufs 补 416 行为否则重试路径不可达）、新探针 test:tunnel-xfer 14 项（一条 origin 上 /xfer/ 与 MCP 两条路的字节逐字节相等，真 cloudflared 只断言 publicUrl 的本地接线）、变异两处（next 恒非 null → 读循环 6 趟红；publicRouteUrl 少拼 /xfer/ → 3 项红）。"
+  source: "src/xfer.ts, docs/protocol.md, CHANGELOG 2026-10-23, test/tunnel-xfer-probe.ts"
   affects: [a2a-mcp-bridge]
