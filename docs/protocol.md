@@ -194,9 +194,9 @@ providers:
 
 **`xfer_stop`** — 无参数。有共享：`{"stopped": true, "path"}`；没有：`{"stopped": false, "note": "nothing was shared"}`，没共享也不报错。
 
-**`xfer_get`** — 参数 `{ name, offset?, maxBytes? }`。`name` 是共享根下的路径（前导 `/` 当共享根，`..` 直接拒），`offset` 缺省 0，`maxBytes` 缺省 262144、上限 1048576。回包 `{ name, offset, total, bytes, next, encoding: "base64", data }`：`total` 是文件大小，`next` 是下一次该传的 `offset`，读到末尾是 `null`。它向共享根发一次 Range GET，读的是文件服务器而不是磁盘，所以共享根、什么存在、什么算文件仍由 `dufs` 决定。`dufs` 对终点越过文件末尾的 Range 回 416，工具拿那条 `content-range` 换一个刚好到末尾的区间重试——最后一块不是 chunk 的整数倍时走的就是这条。目录读不了（`dufs` 对目录上的 Range 回 404），回包里点名列目录用宿主自己的工具。
+**`xfer_get`** — 参数 `{ name, offset?, maxBytes? }`。`name` 是共享根下的路径（前导 `/` 当共享根，反斜杠当分隔符，`..` 直接拒），`offset` 缺省 0，`maxBytes` 缺省 262144、上限 1048576。回包 `{ name, offset, total, bytes, next, encoding: "base64", data }`：`total` 是文件大小，`next` 是下一次该传的 `offset`，读到末尾是 `null`。它向共享根发一次 Range GET，读的是文件服务器而不是磁盘，所以共享根、什么存在、什么算文件仍由 `dufs` 决定。`dufs` 对终点越过文件末尾的 Range 回 416，工具拿那条 `content-range` 换一个刚好到末尾的区间重试——最后一块不是 chunk 的整数倍时走的就是这条。目录读不了（`dufs` 对目录上的 Range 回 404），回包里点名列目录用宿主自己的工具。
 
-**`xfer_put`** — 参数 `{ name, data, offset?, total? }`。不带 `offset` 的一次调用就是整份文件；分块时第一块带上 `total`，之后每块的 `offset` 用上一块回包的 `next`，累到 `total` 的那一次才写盘。回包未完成 `{ name, received, total, next, done: false }`，完成 `{ name, bytes, done: true }`。块在桥的内存里攒着：上限 16 MB，空闲 10 分钟丢弃，同时在飞最多四份，`offset: 0` 重新开始。超过上限直接拒，点名走 `/xfer/`。写盘还是文件服务器做——一次 PUT 把组装好的字节交过去，路径与权限仍归它。
+**`xfer_put`** — 参数 `{ name, data, offset?, total? }`（`name` 同上）。不带 `offset` 的一次调用就是整份文件；分块时第一块带上 `total`，之后每块的 `offset` 用上一块回包的 `next`，累到 `total` 的那一次才写盘。回包未完成 `{ name, received, total, next, done: false }`，完成 `{ name, bytes, done: true }`。块在桥的内存里攒着：上限 16 MB，空闲 10 分钟丢弃，同时在飞最多四份，`offset: 0` 重新开始。超过上限直接拒，点名走 `/xfer/`；某一块长过已宣告的 `total` 也拒，点名 `offset: 0` 重来。写盘还是文件服务器做——一次 PUT 把组装好的字节交过去，路径与权限仍归它。
 
 这两个工具是给「只能发工具调用、发不了带 header 的 HTTP 请求」的调用方兜底的：base64 多 33%，一块一次调用、一块占一份上下文。能发 HTTP 的就走 `/xfer/`，那边一个字节都不经 JSON-RPC、一次一个 Range 或 PUT。
 

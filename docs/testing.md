@@ -8,7 +8,7 @@
 | `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 294 pass / 0 fail（18 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
 | `bun run test:obtain` | 外部二进制获取核验，41 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
-| `bun run test:tunnel-xfer` | 文件传输 × 隧道，14 项（同一条 origin 上：`/xfer/` 路由、MCP 分块、真 cloudflared 的公告），约 35 秒 | 否 | `PASS — tunnel + file transfer, one origin` |
+| `bun run test:tunnel-xfer` | 文件传输 × 隧道，14 项（同一条 origin 上：`/xfer/` 路由、MCP 分块、真 cloudflared 的公告），约 10 秒，第 5 节等 cloudflared announce 时更久 | 否 | `PASS — tunnel + file transfer, one origin` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，36 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，215 项 | 否 | `render-check: all pages OK` |
@@ -194,7 +194,7 @@
 
 隧道那一半的读数也在这组里：隧道开着时 `xfer_share` 与 `xfer_status` 的 `publicUrl` 是那条公网地址，关着是 `null`，`usage.public` 改口点名 SSH 转发与请操作员开隧道两条路。测试只翻那个 getter 的返回值——工具读现成状态，开隧道的是 `/a2mcp tunnel`，这一点由它自己的测试与审计管着。
 
-分块那一对有自己的一组，钉的是算术和拒绝，不是接线：一块的边界在哪（1000 字节按 137 切，八次，最后一次是零头）、`next` 到末尾是 `null`、`total` 是文件大小、`offset` 到末尾与空文件都回零字节而不是报错、分块的 `offset` 必须接上一次的 `received`（错位拒绝，且已收到的块还在）、`total` 超过 16 MB 在分配之前就拒（只拿 `total` 判，不读那 20 MB）、`offset: 0` 重来、空闲十分钟丢弃（`now` 是注入的）、共享一关在途的块一起丢、`..` 出不了共享（前导 `/` 是共享根，`/etc/passwd` 读成共享里的 `etc/passwd`，回 404 而不是宿主的文件）、目录读不了、名字里的空格与 `#` 原样往返、url-safe base64 与标准写法等价、审计一条一块且不含 payload。
+分块那一对有自己的一组，钉的是算术和拒绝，不是接线：一块的边界在哪（1000 字节按 137 切，八次，最后一次是零头）、`next` 到末尾是 `null`、`total` 是文件大小、`offset` 到末尾与空文件都回零字节而不是报错、分块的 `offset` 必须接上一次的 `received`（错位拒绝，且已收到的块还在）、`total` 超过 16 MB 在分配之前就拒（只拿 `total` 判，不读那 20 MB）、`offset: 0` 重来、块长过已宣告 `total` 的拒绝、反斜杠当分隔符、空闲十分钟丢弃（`now` 是注入的）、共享一关在途的块一起丢、`..` 出不了共享（前导 `/` 是共享根，`/etc/passwd` 读成共享里的 `etc/passwd`，回 404 而不是宿主的文件）、目录读不了、名字里的空格与 `#` 原样往返、url-safe base64 与标准写法等价、审计一条一块且不含 payload。
 
 假 dufs 这组里多了一个必须有的行为：**终点越过文件末尾的 Range 是 416，不是截断**。实测 dufs 0.46.0 对 10 字节文件上的 `8-20` 回 416、`8-9` 回 206，所以每一份大小不是 chunk 整数倍的文件，最后一块都正好踩这一条。夹具照着实测写，`xfer_get` 拿 416 的 `content-range` 换一个刚好到末尾的区间再问一次；夹具要是不 416（第一版是截断的），这条重试路径一次都不会走到，测试照样绿。
 
