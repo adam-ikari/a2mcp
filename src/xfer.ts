@@ -20,12 +20,14 @@
  * downloads and directory listings for free.
  *
  * So no file byte crosses the MCP channel: `tools/list` carries three verbs for the
- * route, never its contents. A client that can make tool calls but cannot send an HTTP
- * request has one other way in — `scripts/a2mcp-proxy.mjs`, a caller-side stdio proxy
- * that speaks this route on its behalf (Range GET down, PUT + `PATCH
- * X-Update-Range: append` up) and adds `a2mcp_upload` / `a2mcp_download` to the
- * catalog it forwards. The proxy is not part of the bridge and gives the bridge no new
- * tool; the share root and what may be written stay where they already were.
+ * route, never its contents. The route is standard WebDAV, so the caller uses a client
+ * it already has — `curl`, `rclone`, or any WebDAV client — and the bridge ships no
+ * file client of its own. A download resumes with a Range request; an interrupted
+ * upload restarts in a standard client, or continues through `dufs`'s `PATCH
+ * X-Update-Range: append` if the client can send that non-WebDAV header.
+ *
+ * There is no request-body cap on the route: a `PUT` is a request body on this port,
+ * and a size the caller cannot predict would truncate transfers at an arbitrary point.
  *
  * One port, one gate, rather than one per surface: a cloudflared quick tunnel fronts
  * exactly one origin (src/tunnel.ts), so files and tools share a hostname by sharing

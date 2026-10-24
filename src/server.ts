@@ -29,8 +29,6 @@ export interface BridgeDeps {
 	getTools(): Promise<McpTool[]>;
 	callTool(name: string, args: unknown, sid: string | null): Promise<{ content: McpContent[]; isError: boolean }>;
 	serverInfo(): { name: string; version: string };
-	/** The caller-side proxy's source; null when the package did not ship it. */
-	clientScript?(): string | null;
 	/** Absent when the bridge runs without takeover wiring; the route then answers 501. */
 	takeover?: TakeoverDeps;
 	/** Absent when there is no file-share wiring; `/xfer/*` then answers 404. */
@@ -75,20 +73,20 @@ export interface XferRouteDeps {
 /**
  * Ceiling on one request body, for every request on this port.
  *
- * History, because the number has meant three different things: JSON-RPC only (1 MB),
- * then a raw-byte endpoint that needed 128 MB and was removed (2026-10-16), and now the
- * `/xfer` route back — a `PUT` of a file is a request body on this port, so the cap is
- * the upload limit. The limit is 128 MB because that is what the removed endpoint
- * already paid for and what `dufs` itself imposes no ceiling against: a caller past it
- * gets the body refused here, not silently truncated by the file server.
+ * There is none. The `/xfer` route carries whole files as request bodies, and a
+ * bridge that picked a number would be choosing which files a caller may move — a
+ * decision the bridge does not get to make. The previous 128 MB cap was the third
+ * value this constant had held; it is gone rather than raised, because a `PUT` that
+ * stops at a size the caller cannot predict is the same failure as a truncated file.
  *
- * The cost is memory *per in-flight request*: Bun buffers a body up to this limit
- * before the handler sees it. Lower it if that is worth more than a large upload.
+ * The cost is memory *per in-flight request*: Bun buffers a body before the handler
+ * sees it, so several concurrent large uploads are several large buffers. That is the
+ * operator's call — the token holder is already trusted with the host's shell.
  *
- * Measured: Bun accepts `maxRequestBodySize` well past 1 MB (checked at 16, 128
- * and 256 MB — bodies just under each cap arrived intact).
+ * `Number.POSITIVE_INFINITY` is accepted by Bun; measured with a body well past the
+ * old cap.
  */
-const MAX_REQUEST_BODY_BYTES = 128 * 1024 * 1024;
+const MAX_REQUEST_BODY_BYTES = Number.POSITIVE_INFINITY;
 
 /**
  * How long a connection may carry no traffic before Bun closes it, in seconds.
@@ -147,17 +145,6 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
  * answers 405 — and the proxy would have to rewrite bytes to fix it.
  */
 export const XFER_ROUTE = "/xfer";
-
-/**
- * Where the caller-side proxy is served from.
- *
- * A remote agent that cannot read this repository still needs the client that
- * chunks transfers; fetching it from the endpoint it is already talking to beats
- * sending it to GitHub (a lab host may have no way out). The file is static and
- * behind the same Bearer token as everything else: it is the bridge's own client,
- * not a new surface with a new secret.
- */
-export const CLIENT_ROUTE = "/a2mcp/proxy.mjs";
 
 /** Hop-by-hop headers RFC 7230 says a proxy must not forward, in either direction. */
 const HOP_BY_HOP = [
@@ -318,15 +305,12 @@ export async function startServer(
 		try {
 			const url = new URL(req.url);
 			const isXfer = underXfer(url.pathname);
-			const isClient = url.pathname === CLIENT_ROUTE;
 
 			// The method gates cover the MCP surface only. `/xfer` is a plain HTTP file
 			// route where GET is the download and PUT the upload, so the gate is
 			// prefix-scoped rather than moved: a GET of `/` still has to be refused with
-			// 405 (test/server.test.ts and test/hardening.ts pin it). The client script
-			// is the other GET: one static file, and it is fetched before any session
-			// exists, so it cannot be a POST.
-			if (!isXfer && !isClient) {
+			// 405 (test/server.test.ts and test/hardening.ts pin it).
+			if (!isXfer) {
 				if (req.method === "GET") return new Response(null, { status: 405 });
 				if (req.method !== "POST" && req.method !== "DELETE") return new Response(null, { status: 405 });
 			}
@@ -353,19 +337,6 @@ export async function startServer(
 			// parsed as JSON and refused with -32700), and the DELETE half ends a session on
 			// any path whatsoever (`DELETE /xfer/a` would return 204 for a job dufs does).
 			if (isXfer) return await proxyXfer(req, url);
-
-			// The caller-side client. Static source, no state touched, no audit record:
-			// the interesting event is a transfer, and that is already recorded by the
-			// share's closing tally. A bridge whose package omitted the script answers
-			// 404 rather than serving an empty file the agent would run and fail on.
-			if (isClient) {
-				if (req.method !== "GET") return new Response(null, { status: 405 });
-				const script = deps.clientScript?.() ?? null;
-				if (script === null) return json(404, { error: "the proxy client is not bundled on this bridge" });
-				return new Response(script, {
-					headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" },
-				});
-			}
 
 			// The takeover switch: one token, one raw path outside JSON-RPC, audited,
 			// POST only.

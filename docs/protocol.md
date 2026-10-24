@@ -7,7 +7,7 @@ a2mcp 实现 MCP（Model Context Protocol）`2025-11-25` 的 Streamable HTTP 子
 | 项 | 行为 |
 | --- | --- |
 | 端点 | MCP 侧不校验 URL path，任意路径的 POST/DELETE 均受理；惯例用 `/`（`http://127.0.0.1:<port>/`）。两个例外：`/xfer` 前缀是文件路由（见「桥自己的工具：`xfer_*`」），`/host-llm` 见「宿主推理切换」 |
-| POST | 单条 JSON-RPC 2.0 消息；**不支持 batch**（顶层数组 → 400）；请求体上限 128MB（`maxRequestBodySize`）。`/xfer/` 上的 PUT 上传受的是同一道上限 |
+| POST | 单条 JSON-RPC 2.0 消息；**不支持 batch**（顶层数组 → 400）；请求体不设上限（`maxRequestBodySize: Infinity`，Bun 按在途请求缓冲，内存随并发上传走）。`/xfer/` 上的 PUT 同样不设上限 |
 | GET | 非文件路由 → `405` 空响应体（不实现 SSE 端点与流式推送）；`/xfer/…` 交给文件路由 |
 | DELETE | 非文件路由 → 结束会话，见「会话生命周期」；`/xfer/…` 上的 DELETE 原样转发，文件服务器回 403（桥只向它要了上传权限） |
 | 其他方法（PUT 等） | 非文件路由 → `405`；`/xfer/…` 原样转发 |
@@ -182,7 +182,7 @@ providers:
 - 共享不再有公网那一半：桥把 `dufs` 反向下代理到自己端点的 `/xfer/` 路由上，`url` 就是那条路由，`port` 是 `dufs` 自己听的回环端口。回包是一行紧凑 JSON：不缩进，也不附 `curl` 用法——它是给模型读的，缩进与拿不到 token 的示例命令都只是在花上下文。
 - `publicUrl` 是同一个 `/xfer/` 路由在操作员那条隧道上的地址，`null` 表示隧道没开。**它读的是现成状态，不新增暴露面**：隧道是 `/a2mcp tunnel` 开的，工具既不开也不关它；主机名本来就不是秘密（隧道那节的审计里就写着它）。读的是调用那一刻的状态——隧道在共享期间开或关，`xfer_status` 立刻跟着变。隧道没开时 `publicUrl` 就是 `null`；要够到路由，用 SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。调用方不该为此自己起一条隧道或第二个文件服务器：那条主机名不在这份 token 后面，等于把文件放到公网上——提示词里写明了这一条。
 - 回包里如果还出现 `user` / `secret` / `host` 三个字段，那不是调用方自己起的隧道，是宿主还跑着 0.6.0 之前的版本（那版每次共享自带一条 cloudflared）：判据是 `initialize` 回的 `serverInfo.version`。
-- 代理的契约（`src/server.ts` 的 `proxyXfer`）：`/xfer` 前缀之后的路径、方法、query 与正文**逐字转发**（`?json` 可用，单请求上限 128 MB）；`Authorization` 一律换成桥为这次共享生成的 basic-auth 对，调用方带什么都不影响；逐跳头两边都删，回包额外删 `www-authenticate`；`Accept-Encoding` 改写为 `identity`，避免上游压缩后桥再压缩一遍；`redirect: "manual"`，上游的 3xx 原样报给调用方而不是由桥跟着跑。`dufs` 起不来或共享已经关掉，回 `502`，端口号只进宿主 stderr。
+- 代理的契约（`src/server.ts` 的 `proxyXfer`）：`/xfer` 前缀之后的路径、方法、query 与正文**逐字转发**（`?json` 可用，没有单请求大小上限）；`Authorization` 一律换成桥为这次共享生成的 basic-auth 对，调用方带什么都不影响；逐跳头两边都删，回包额外删 `www-authenticate`；`Accept-Encoding` 改写为 `identity`，避免上游压缩后桥再压缩一遍；`redirect: "manual"`，上游的 3xx 原样报给调用方而不是由桥跟着跑。`dufs` 起不来或共享已经关掉，回 `502`，端口号只进宿主 stderr。
 - 路径逐字转发靠的是 `dufs --path-prefix /xfer`：目录列表里的绝对引用、`?json` 的 `uri_prefix`、WebDAV 的 `D:href` 都带着前缀，跟着一个链接不会掉出路由。不加这个旗标时它们写成根绝对路径（`/__dufs_v0.46.0__/index.css`、`/up.txt`），代理剥掉前缀就全指错地方——这一条是 0.46.0 真机量出来的，`test:obtain` 与 `test:install` 每轮各验一次。
 - 桥只向文件服务器要了上传（`--allow-upload`），`DELETE` 与 `MOVE` 回 403；`MKCOL`、`PROPFIND`、Range 与目录列表是 `dufs` 自带的能力。上传的分块写法也是 `dufs` 的：第一块 `PUT` 建文件，之后每块 `PATCH` 带 `X-Update-Range: append` 追加；PATCH 一个不存在的文件是 404，覆盖一个已存在且非空的文件需要 `--allow-delete`，桥不开，所以那条路是 403。**那条路由说的是 WebDAV**——在 HTTP 上搬文件的标准协议，桥不自带字节协议，只是把一个现成的 WebDAV 服务器挂在自己端口后面：任何能发 `Authorization: Bearer <token>` 的 WebDAV 客户端（`rclone`、`curl`、自己写的 HTTP 客户端）都能挂它，GET 下行、PUT 上行、PROPFIND 列目录、Range 续传。浏览器加不了那个头，所以它拿到的与不带 token 的人一样是 401。
 - 同一时刻只有一个共享：第二次 `xfer_share` 先关掉前一个，回包 `replaced: true`。
@@ -193,18 +193,19 @@ providers:
 
 **`xfer_stop`** — 无参数。有共享：`{"stopped": true, "path"}`；没有：`{"stopped": false, "note": "nothing was shared"}`，没共享也不报错。
 
-### 调用方一侧的代理：`scripts/a2mcp-proxy.mjs`
+### 调用方一侧：现成的 WebDAV 客户端
 
-协议面上没有更多工具。只会调工具、发不了带 `Authorization` 的 HTTP 请求的客户端，在**自己这一侧**跑零依赖代理（Node 20+ 或 Bun）：客户端用 stdio 起它，它把 `initialize` / `tools/list` / `tools/call` 等逐字转给桥，再往目录末尾追加两个本地工具：
+协议面上没有更多工具，也没有桥自己的文件客户端。调用方用任何会发 `Authorization: Bearer <token>` 的 WebDAV 客户端搬：`curl`、`rclone`，或自己写的 HTTP 客户端。`$ROUTE` 取回包里的 `publicUrl`（不为 `null` 时），否则取调用方配置里的桥地址加 `/xfer/`——回包里的 `url` 是宿主回环地址，远程侧够不到。
 
-- `a2mcp_upload { localPath, remotePath }`
-- `a2mcp_download { remotePath, localPath }`
+```sh
+curl -fL -C - -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file" -o LOCAL   # 下载，断点续
+curl -fL -T LOCAL -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file"        # 上传
+curl -fL -X PROPFIND -H "Depth: 1" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/"   # 列目录
+```
 
-字节仍走 `/xfer/`：下载是一串 Range GET，写进 `<localPath>.a2mcp-part`，远程 etag 与大小没变就从断点续；上传第一块 `PUT` 建文件，之后每块 `PATCH` 带 `X-Update-Range: append`。缺省 8 MiB 一块（4 KiB 到 64 MiB），文件字节不进 JSON-RPC，也不进任何一方的上下文。共享优先复用：已有一份覆盖目标就借它；没有就自己开，传完只关自己开的那一份；已有共享不覆盖目标时直接拒绝，点名正在服务的路径，不顶掉也不停掉。上传不覆盖非空远端文件——这是 `--allow-upload` 的边界，覆盖要先在宿主上删。下载的本地目标用 rename 原子替换。代理不是桥的协议面，它给桥带来的只是与任何 WebDAV 客户端相同的读请求；但它随 npm 包发布，桥也把这份源码放在自己端点上，读不到仓库的调用方仍拿得到。
+`-C -` 从本地文件末尾发 Range，下载中断后接着要；`416` 表示本地已经完整。**上传的断点在标准 WebDAV 客户端里用不上**：中断后从零重来。`dufs` 自己的 `PATCH` + `X-Update-Range: append` 可以追加续传，但那个头不是 WebDAV，`curl` 不会发；能发这个头的客户端才能续上传。路由本身没有大小上限——桥取消了 128 MB 的请求体上限，因为按一个调用方猜不到的数字截断，与传出一个坏文件是同一种失败；代价是 Bun 会为每个在途上传缓冲一份请求体，而持 token 的人本来就被当作可信。上传不覆盖非空远端文件（`--allow-upload` 的边界），覆盖要先在宿主上删。共享只活默认一小时，更长的传输中途会丢路由；重新 `xfer_share` 同一条路径后，下载可以接着续。
 
-**取客户端**：`GET /a2mcp/proxy.mjs`，与其他路由同一个 Bearer token，回 `text/javascript; charset=utf-8`、`cache-control: no-store`；包里没有这个文件时回 404，不是空文件。它发生在任何会话之前，因此不带 `Mcp-Session-Id`。这不进 `tools/list`，也不写审计——它只是一份静态源码；真正的传输由共享的关闭统计记录。
-
-**没有 MCP 客户端也能搬**：`node a2mcp-proxy.mjs upload LOCAL_PATH HOST_PATH` 与 `node a2mcp-proxy.mjs download HOST_PATH LOCAL_PATH` 跑同一套分块、续传与共享规则，成功后往 stdout 打一行紧凑 JSON（`localPath` / `remotePath` / `bytes` / `sha256` / `resumedFrom` / `share`），失败走 stderr 且退出码非零。它存在的理由就是不让拿得到 shell 的 agent 自己写隧道或文件服务器。
+token 放进环境变量，不要放进命令行：argv 在 `ps` 里可见。
 
 **关闭时机**：TTL 到期、`xfer_stop`、或桥停止（宿主退出）。到期与顶替走同一条关闭路径——`dufs` 收 `SIGTERM`，等它真的退出（监听先注册再发信号，`exit` 只发一次）——并写一条 `xfer` 审计（`args.why` 为 `replaced` / `ttl expired` / `bridge stopped`）。关完之后 `/xfer/` 回 404。
 

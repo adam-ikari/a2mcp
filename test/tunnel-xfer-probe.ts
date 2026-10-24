@@ -24,8 +24,7 @@
  *
  * It runs the pinned `dufs` and, in section 4, a real `cloudflared`. `bun test` has no
  * egress and no binaries; the unit half of the same code is `test/xfer.test.ts` (share
- * lifecycle against a stub) and `test/xfer-route.test.ts` (the proxy). File transfer
- * through the client proxy is `test/proxy-probe.ts`.
+ * lifecycle against a stub) and `test/xfer-route.test.ts` (the proxy).
  */
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";

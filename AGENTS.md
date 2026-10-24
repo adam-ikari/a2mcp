@@ -53,9 +53,8 @@ paid for with auditing and documentation:
   `publicUrl` — reading a state that exists, not adding a way out. Asked for by the
   maintainer; the contract and usage are in
   `docs/protocol.md` under 桥自己的工具 (`xfer_*`) and in the README under 传文件.
-  File bytes travel only over that route. The optional client proxy
-  (`scripts/a2mcp-proxy.mjs`) lives on the caller's side: it speaks `/xfer/` on the
-  caller's behalf and is not part of the bridge, its catalog, or its permissions.
+  File bytes travel only over that route, and the caller drives it with an existing
+  WebDAV client (`curl`, `rclone`); the bridge ships no file client of its own.
 - `src/obtain.ts` puts a binary on the host's disk. When a name in the `xfer` block
   answers to nothing on PATH, the bridge downloads the pinned release asset, checks its
   sha256 against the hash pinned next to the version, and installs it into its own bin

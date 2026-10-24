@@ -5,11 +5,10 @@
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
 | `bun run test:tree` | 仓库形状核验，3 项，无依赖 | 否 | `tree-probe: repo shape OK` |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 297 pass / 0 fail（19 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 281 pass / 0 fail（18 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
 | `bun run test:obtain` | 外部二进制获取核验，41 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
 | `bun run test:tunnel-xfer` | 文件传输 × 隧道，10 项（同一条 origin 上：`/xfer/` 路由、PUT + PATCH 追加、真 cloudflared 的公告），约 10 秒，第 4 节等 cloudflared announce 时更久 | 否 | `PASS — tunnel + file transfer, one origin` |
-| `bun run test:proxy` | 客户端 MCP 代理端到端核验，23 项，真 dufs + 真 stdio + 两条命令行，约 5 秒 | 否 | `PASS — client MCP proxy, chunked file transfer` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，36 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，215 项 | 否 | `render-check: all pages OK` |
@@ -22,7 +21,7 @@
 
 统一前置（七个起宿主的核验）：PATH 上有 `omp`。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 另外认 `OMP_BIN`；`test:install` 与 `test:mcp-call` 不认——前者要跑的 `omp install` 与被它装的东西必须是同一个，后者起的宿主就是它驱动的那座桥，都固定用 PATH 上那份。`test:mcp-call` 还多一样前置：它跑的是 `python3 scripts/mcp-call.py`，本机没有 `python3` 时整段按 `info:` 跳过、退 0（与 install 的 npm 组、bootstrap 的缺依赖跳过同一条纪律，CI 不因缺可选依赖红）。`test:bootstrap` 前五组连真宿主都不起：它用脚本自己造在临时目录里的记账 `omp` stub 和一只记录 argv 的假 `curl`，PATH 上没有真宿主也照样跑，只有最后一组（真宿主）用 PATH 上那份。**不需要模型凭据**——`test/harness.ts` 写入一个故意不可达的 provider，宿主只要「有模型配置」就能启动，而桥只跑工具不推理（设 `A2MCP_PROBE_REAL_MODELS=1` 可改用真实配置）。`test:takeover` 在这条上是例外，而且是故意的：它的 provider 是一个真在听的计数 sink（`Bun.serve`，答 503）。deny 有没有把宿主推理清零，只能靠数出请求来验，不可达的凭据数不出缺席。`test:install` 的端到端那半程也自包含：它把 `omp install .` 装进自己那个临时 `HOME`，宿主自 18.11.0（18.12.1 上重测仍如此）按 `HOME` 解析 `~/.omp/plugins`，加载的是 `omp-plugins.lock.json` 里的登记（详见下一节）。它的出网有两支：第五组让桥自己从 GitHub 拉文件服务器那一个二进制（6.4 MB，从前是两个、约 46 MB），落点仍是它自己那个临时 `HOME`；第六组真跑一次 `omp install a2mcp`，那是这趟唯一碰 registry 的地方——registry 答不到它整组按 `info:` 跳过，CI 不因网络红。`test:smoke` / `test:hardening` / `test:approval` / `test:scenario` / `test:takeover` 的宿主都跑在**隔离临时 HOME** 里：软链本仓库扩展、独立配置与审计路径、跑完即删（失败时保留现场并在 stderr 打印路径）。保留的现场不自动清理，看完手动删：一个场景核验的目录 33–53 MB，`/tmp` 是真实磁盘不是 tmpfs，攒多了会挤掉别的东西。`test:registry` 两条都不要：它不起宿主、不连网，只在 `/tmp` 下开一个临时 agent 目录。`test:obtain` 也不起宿主，但它要出网到 GitHub 取 release 资产，并且只往自己那一个 `/tmp/a2mcp-obtain-probe-*` 目录里写——机器上真的 `~/.local/bin` 它不碰，`HOME` 换成临时目录之外没有第二条落点。提交前基线：`bun run lint` + `bun run typecheck` + `bun test` 三绿。
 
-七个宿主核验、`test:obtain`、`test:bootstrap` 与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。`test:mcp-call` 那一段依赖 `python3`，`ubuntu-latest` 镜像自带，所以它在 CI 里真跑；换到没有 python3 的机器就按 `info:` 跳过。`test:proxy` 是本地探针，不进 CI：它要真 `dufs` 与 `node`/`bun`，还要走一遍 stdio。
+七个宿主核验、`test:obtain`、`test:bootstrap` 与文档站构建都在 CI 里跑（`ci.yml` 的 `host-probes` 与 `site` 两个 job），宿主版本从 `package.json` 的 pin 读出再装。`test:mcp-call` 那一段依赖 `python3`，`ubuntu-latest` 镜像自带，所以它在 CI 里真跑；换到没有 python3 的机器就按 `info:` 跳过。
 
 ## `test:install` — 发布包自包含核验 + 端到端（55 项）
 
@@ -212,16 +211,6 @@
 origin 是本进程里的一只 `Bun.serve`，不是 cloudflared：它把 path、method、headers、body 原样转给桥的端口，这正是 quick tunnel 的形状（一条 origin，什么都在这条下面）。TLS 与 Cloudflare 那一层故意不装——这台机器的网络给被代理的主机名重签证书，发出去的地址在本机取不回来，要取就得先绕过证书校验，那时测的是网络不是桥。真隧道在第 4 节，只断言本地那一半：隧道开着时共享报出的 `publicUrl` 等于公告的主机名加 `/xfer/`。取回那一半由 `test:obtain` 报（那里记着同一张证书错误）。
 
 要在探针里做而不是单测：这里跑的是钉住的真 `dufs`，第 4 节还起真 `cloudflared`；`bun test` 没有出口也没有这两个二进制。变异跑过两处：`publicRouteUrl` 少拼 `/xfer/`，`publicUrl` 那条红，连带取字节的断言一起红（405，因为请求打到了 MCP 端点本身）；代理不转发 `X-Update-Range`，PATCH 那条红。
-
-## 客户端 MCP 代理（`test/proxy-lib.test.ts` 13 项 / `test/proxy-probe.ts` 23 项）
-
-纯函数那一半在 `bun test` 里：路径归一化把 POSIX、盘符、UNC 与 `~` 收成一种写法，`..`、相对路径与 NUL 拒绝，`covers` 在 Windows 上不分大小写、在 POSIX 上分，`relativeName` 对「目标就是共享的那个文件」回空串并按段编码，`xferUrl` 只拼一次 `/xfer/`，块大小夹在 4 KiB 到 64 MiB，下载续传要求 sidecar 的 etag 与大小都对上，上传续传要求本地文件、已确认长度与前缀 sha256 三样都对上，参数解析认 env 与 argv，`upload` / `download` 两个子命令按打印出来的顺序收两条路径、少一条就报错。
-
-端到端那一半是 `test:proxy`，不进 CI：真 `startServer` + 真 `createXfer`（真 dufs）+ 一个假宿主工具，用 `node`（没有就用当前 runtime）起代理走 stdio，`--chunk-bytes 65536` 强制多块。23 项：`initialize` 与宿主工具调用透传；目录 = 宿主工具 + 三个 `xfer_*` + 两个代理工具，且本地工具只出现一次；300 KB 下载逐字节一致且代理关掉了自己开的共享；200 KB 上传逐字节一致（第一块 PUT、之后 PATCH 追加），再传一次被拒且远端字节不变；手工开的共享被复用且传完仍开着；上传与下载各自从断点续；一个不覆盖目标的共享让下载直接拒绝，原共享既没被顶掉也没被停；同样的下载与上传各走一遍命令行的 `download` / `upload`，回包点名用了哪份共享、字节一致、自己开的共享已关，且回包与 stderr 都不含 token。
-
-命令行那两项用异步 `spawn` 等子进程，不能用 `spawnSync`：桥就在本进程里，同步等待会停住父进程的事件循环，子进程的 HTTP 请求没人应答，传输停在中途（实测 60 秒后超时）。这是这套夹具的硬约束，不是风格。
-
-它必须是探针而不是单测：真 dufs、真子进程、真 stdio 三样都在 `bun test` 之外。`test/proxy-probe.ts` 找不到 `dufs` 时打一行 `info:` 退 0，与其余探针同一条纪律。
 
 ## `test:hardening` — 加固核验（36 项）
 

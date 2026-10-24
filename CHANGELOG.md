@@ -1,8 +1,19 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.9.0`（2026-10-24，传文件离开 MCP 通道：2026-10-23 的 `xfer_get` / `xfer_put` 删掉，桥自带工具回到三个，分块交给调用方一侧的 `scripts/a2mcp-proxy.mjs`，见那节）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.10.0`（2026-10-24，取消请求体上限，删掉调用方代理，传文件交给 `curl` / `rclone` 这样的现成 WebDAV 客户端；`v0.9.0` 的代理只活了一版，见那节）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
+
+## 2026-10-24 — 取消单次上限，删掉自建客户端：传文件交给现成的 WebDAV 客户端
+
+一次真机上取 APK，桥的日志是 `/xfer cannot reach http://127.0.0.1:57937/xfer/hwkbd-dev2.apk — AbortError: The connection was closed.`。这条日志说的是桥到 `dufs` 的那一跳被关掉了：调用方断了（隧道或客户端超时），Bun 取消上游 fetch，桥照实报 502，文件服务本身没有坏。同一天定下两件事：请求体不再有上限，以及上一节那个自建代理删掉。
+
+- feat: `maxRequestBodySize` 从 128 MB 改成 `Number.POSITIVE_INFINITY`。`/xfer/` 上的 PUT 就是这个端口上的一个请求体，上限只有一个作用：在调用方猜不到的大小上把传输拒掉。代价照实说——Bun 按在途请求缓冲请求体，并发的大上传就是几份大缓冲；持 token 的人本来就被当作可信，这个决定交回给操作员。
+- 反转: 删掉 `scripts/a2mcp-proxy.mjs` 与它的类型、两项测试、`test:proxy` 脚本，以及端点上的 `GET /a2mcp/proxy.mjs`（`CLIENT_ROUTE` 与 `clientScript` 一起删）。理由是不重复造轮子：分块、续传、共享发现都是 HTTP/WebDAV 客户端本来就会做的事，`curl` 一个 `-C -` 就够；那套脚本还带来一个桥自己的路由与一份 npm 文件清单，收益抵不上维护面。`dufs` 与 `/xfer/` 路由不动。
+- 续传: 下载用 `curl -C -`（Range），416 表示本地已完整；标准 WebDAV 客户端的上传中断后从零重来，`dufs` 的 `PATCH` + `X-Update-Range: append` 仍在，但那个头不是 WebDAV，`curl` 不发。`$ROUTE` 取 `publicUrl`，否则取调用方配置里的桥地址加 `/xfer/`。
+- docs: `initialize` 的 instructions 第 3 步改成 `curl` / `rclone` 用法，两份 README 里逐字同步的那段一起换；`docs/protocol.md` 删掉代理契约与取客户端那一节、请求体上限改成不设；`docs/testing.md` 删掉代理两节与 `test:proxy` 行；`AGENTS.md` 的 xfer 例外改成「调用方用现成 WebDAV 客户端」；站点「传文件」页的摘要同步。
+- test: `bun test` 297 → 281（代理纯函数 13 项、代发路由 3 项删掉；18 个文件）；`test:proxy` 删除；`test:install` 的包内文件清单不再要求那个脚本。
+- 版本位: 调用方经协议拿到的东西变了——端点不再供 `GET /a2mcp/proxy.mjs`，请求体上限取消（大文件上传从被拒变成可传），`tools/list` 仍是宿主注册表加三个 `xfer_*`；按 2026-10-18 判据进 minor，v0.10.0。
 
 ## 2026-10-24 — 传文件不再过 base64：客户端一侧的 MCP 代理
 
@@ -433,6 +444,15 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.10.0 — 取消单次上限，传文件交给现成客户端
+
+**这一版把 v0.9.0 的调用方代理收回去了，并取消了请求体上限。** 端点不再提供 `GET /a2mcp/proxy.mjs`；`/xfer/` 上的 PUT 与 MCP 的 POST 一样不设大小上限（`maxRequestBodySize: Number.POSITIVE_INFINITY`），代价是 Bun 按在途请求缓冲请求体。传文件用 `curl` / `rclone` 这样的现成 WebDAV 客户端：下载 `-C -` 用 Range 续传，上传在标准客户端里中断后从零重来，`dufs` 的 `PATCH` + `X-Update-Range: append` 留给能发那个头的客户端。`dufs` 与 `/xfer/` 路由、三个 `xfer_*` 工具、单 Bearer token、会话形状都不变。按 2026-10-18 判据（调用方经协议拿到的东西变了进 minor）进 v0.10.0。
+
+- 内容: 见上 2026-10-24 的「取消单次上限，删掉自建客户端：传文件交给现成的 WebDAV 客户端」一节（上限取消与内存代价、代理的删除面、双向续传的边界、文档与项数改动）。
+- 边界: 上传仍不覆盖非空远端文件（`dufs` 只开 `--allow-upload`）；`DELETE` / `MOVE` 仍 403；共享仍是单例、默认一小时。没有上限意味着内存随并发上传走，这是操作员自己的机器。
+- 升级: `omp install https://github.com/adam-ikari/a2mcp.git` 重装并重启宿主会话；token 与端口不动。`mcp.json` 指向过 `scripts/a2mcp-proxy.mjs` 的客户端要改回直接连桥的 URL——那个脚本这一版起不存在；文件用 `curl` / `rclone` 搬。
+- 回归（发版前这一遍，2026-10-24，宿主 omp 18.12.1）: `bun test` 281 项 845 断言全绿（18 文件）；`lint` / `tsc` 干净；`tree` 3 项、`registry` 5497 行、`SMOKE OK`（22 个工具）、`HARDEN OK` 36 项、`SCENARIOS: 85 steps, 0 failed`、`takeover` 65.0 秒（inference POST=1、元数据非 POST=1）、审批 `VERDICT: B`（≥90003 ms 挂起、start=1 done=0）、`MCP-CALL OK`、`BOOTSTRAP OK`、`test:tunnel-xfer` PASS 10 项、`test:install` `PACKAGE OK`（npm 真装组按 `info:` 跳过）、站点 `build` + `check` 14 页全过。`test:obtain` 这一遍的 `dufs` 半程通过，pinned `cloudflared` 从 GitHub 下载停在 30 秒无字节——与 v0.9.0 发版前那一遍同一种网络停顿，本机已有 `cloudflared 2026.9.1`，卡住的是取回。
 
 ## v0.9.0 — 传文件离开 MCP 通道，分块交给调用方一侧的代理
 

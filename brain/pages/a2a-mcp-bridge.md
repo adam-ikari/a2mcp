@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-24T15:18:13"
+updated: "2026-10-24T17:52:57"
 ---
 
 <!-- compiled_truth -->
@@ -1224,3 +1224,15 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   summary: "调用方代理随桥一起发：GET /a2mcp/proxy.mjs 回 scripts/a2mcp-proxy.mjs 的源码（同一 Bearer、不建会话、不写审计、包内缺失回 404），代理同时加 upload/download 两个命令行子命令，给拿得到 shell 却改不了 MCP 客户端配置的一侧用。位置不变——代理仍在调用方一侧，不是桥的协议面；变的只是它现在可被取到，agent 不必照说明重写分块客户端，更不必为传文件自己起隧道或第二个文件服务器。package.json 的 files 加了这个脚本；instructions 第 3 步把 stdio 与命令行两条路都点名。"
   source: "session 2026-10-24; src/server.ts CLIENT_ROUTE; scripts/a2mcp-proxy.mjs; src/instructions.ts; package.json"
   affects: [a2a-mcp-bridge]
+
+- time: 2026-10-24T17:52:57
+  kind: reversal
+  summary: "反转 2026-10-24 的调用方代理：删掉 scripts/a2mcp-proxy.mjs、它的类型与两项测试、test:proxy、GET /a2mcp/proxy.mjs（CLIENT_ROUTE / clientScript），package.json 的 files 与脚本表一起收回。理由是不要重复造轮子——分块、续传、共享发现都是 HTTP/WebDAV 客户端本来就会做的事；传文件改由 curl -C - / rclone 这样的现成客户端完成，dufs 与 /xfer/ 路由不动。续传边界照实：下载用 Range 续，标准 WebDAV 客户端的上传中断后从零重来，dufs 的 PATCH + X-Update-Range: append 留给能发那个非标准头的客户端。证据：bun test 297→281 全绿（18 文件），lint/tsc 干净，test:tunnel-xfer 10 项、test:install PACKAGE OK；v0.10.0。"
+  source: "session 2026-10-24; src/server.ts; extensions/a2mcp.ts; src/instructions.ts; package.json; CHANGELOG v0.10.0"
+  affects: [xfer, docs, release]
+
+- time: 2026-10-24T17:52:57
+  kind: decision
+  summary: "取消单次请求体上限：src/server.ts 的 maxRequestBodySize 从 128 MB 改成 Number.POSITIVE_INFINITY。理由：/xfer/ 上的 PUT 就是这个端口上的一个请求体，一个调用方猜不到的数字只会在中途拒掉传输，与传出一个坏文件是同一种失败；桥不该替操作员决定哪一档文件可传。代价照实：Bun 按在途请求缓冲请求体，并发的大上传就是几份大缓冲——持 token 的人本来就被当作可信，这个决定交给操作员。Bun 接受 Infinity（实测）。docs/protocol.md 与两份 README 同步。"
+  source: "session 2026-10-24; src/server.ts; docs/protocol.md; README.md; README_ZN.md"
+  affects: [xfer, server]

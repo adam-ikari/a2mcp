@@ -210,12 +210,16 @@ How to call:
 Files move over the bridge's own WebDAV route, never through tool arguments. `xfer_share` works like this:
 1. `xfer_share {"path": "/absolute/host/path", "ttlSeconds": 3600}` serves one host file or directory and returns compact JSON: `url` is the route on this endpoint, `publicUrl` is the same route behind the operator's tunnel (or `null`), plus `route`, `path`, `port`, `startedAt`, `expiresAt` and `installed`. The share closes itself at `ttlSeconds` (default 3600).
 2. Transfer over HTTP with `Authorization: Bearer <token>` on every request and paths relative to the shared path. GET downloads, and `Range: bytes=start-end` reads a slice or resumes (a range past the end answers 416 with `content-range: bytes */<size>`). PUT creates a file. PATCH with `X-Update-Range: append` continues a partial upload: first chunk PUT, later chunks PATCH. PROPFIND lists a directory. DELETE and MOVE are refused, and an upload never overwrites an existing non-empty file (403) — remove the remote file some other way first.
-3. Use the ready-made client instead of writing one. `scripts/a2mcp-proxy.mjs` (Node 20+ or Bun, no dependencies) is also served by this endpoint at `/a2mcp/proxy.mjs`. If you can change your MCP client config, run it as your MCP server: it forwards every tool here and adds `a2mcp_upload {localPath, remotePath}` and `a2mcp_download {remotePath, localPath}`. If you cannot, fetch it with the token and URL your client already uses (`A2MCP_TOKEN`, `A2MCP_URL`) and drive it from your own shell: `curl -fsSL -H "Authorization: Bearer $A2MCP_TOKEN" "$A2MCP_URL/a2mcp/proxy.mjs" -o a2mcp-proxy.mjs`, then `node a2mcp-proxy.mjs upload LOCAL_PATH HOST_PATH` or `node a2mcp-proxy.mjs download HOST_PATH LOCAL_PATH`. Both forms move 8 MiB chunks (4 KiB–64 MiB, configurable), resume in both directions, reuse a share that already covers the target, open one when none does, close only the share they opened, and never overwrite a non-empty remote file.
+3. Use an existing WebDAV client instead of writing your own. Anything that can send `Authorization: Bearer <token>` works; `curl` covers the common cases:
+   - download: `curl -fL -C - -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file" -o LOCAL`. `-C -` resumes a partial local file with a Range request; a `416` means the local copy is already complete.
+   - upload: `curl -fL -T LOCAL -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file"`.
+   - list: `curl -fL -X PROPFIND -H "Depth: 1" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/"`.
+   `$ROUTE` is the share's `publicUrl` when it is not `null`; otherwise it is the bridge URL your client already uses, with `/xfer/` appended — not the loopback `url` in the reply, which is the host's own address. `rclone` and other WebDAV clients mount the same route. Interrupted downloads resume from where they stopped. Standard WebDAV clients restart an interrupted upload; `dufs` also accepts `PATCH` with `X-Update-Range: append`, so a client that can send that header resumes instead. Keep the token in an environment variable rather than pasting its value into a command line.
 4. One share at a time: a second `xfer_share` replaces the first and says `replaced: true`. `xfer_status` reports the current share; `xfer_stop` closes it. Close the share you opened when the transfer is done; do not stop a share you did not open.
 5. Reach the route through `publicUrl` when it is not `null`. When it is `null`, ask the operator to run `/a2mcp tunnel` or forward the bridge port over SSH. Do not start your own tunnel or second file server: a hostname you open is not behind this bridge's token, so whatever it serves is public.
 6. Never move file bytes through `read`, `bash` or tool arguments: host `read` truncates around 150 KB and `bash` around 768 bytes, so large or binary content comes back corrupted. Never paste megabytes into a command.
 
-If your side cannot speak MCP to this endpoint, use the bridge's zero-dependency clients instead of writing your own: `scripts/mcp-call.py` for single calls, `scripts/a2mcp-proxy.mjs` for a session with file transfer.
+If your side cannot speak MCP to this endpoint, use the bridge's zero-dependency client for single calls — `scripts/mcp-call.py` — and a standard WebDAV client (`curl`, `rclone`) for files. There is no bridge-specific file client to install or fetch.
 ```
 
 ## 跨机转发
@@ -252,23 +256,24 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 ## 传文件
 
-传文件走 **WebDAV**。`xfer_share` 把一条宿主路径交给 [`dufs`](https://github.com/sigoden/dufs)（一个 WebDAV 文件服务器），dufs 在 `127.0.0.1` 上找一个空端口监听，桥再把这个端口挂到自己端点的 `/xfer/` 路由后面。回包给出的是路由（`http://127.0.0.1:<port>/xfer/`）、文件服务器的端口和到期时间，没有第二份凭据。调用 `tools/list` 用的那个 Bearer token 同时给这条路由授权：代理替掉请求里带来的 `Authorization`，换上桥为这次共享生成的 basic-auth 对，回程再删掉文件服务器的 `www-authenticate` 头。所以拿任何能发 `Authorization: Bearer <token>` 的 WebDAV 客户端挂它就行——`rclone`、`curl`，或者你自己写的 HTTP 客户端：GET 下行、PUT 上行、PROPFIND 列目录、Range 续传。浏览器加不了那个头，所以它拿到的与不带 token 的人一样是 401。`DELETE` 和 `MOVE` 回 403，桥只向文件服务器要了上传。共享在 TTL（默认 3600 秒）到期、`xfer_stop`、桥停止时关闭；第二次共享顶掉第一次。`xfer_status` 与 `xfer_stop` 不收参数。这条路由上字节不经过 JSON-RPC。桥不带自己的字节协议——它驱动的是 `dufs` 的 WebDAV；只会发工具调用的客户端在调用方一侧跑下一段那个代理，字节仍走这条路由。
+传文件走 **WebDAV**。`xfer_share` 把一条宿主路径交给 [`dufs`](https://github.com/sigoden/dufs)（一个 WebDAV 文件服务器），dufs 在 `127.0.0.1` 上找一个空端口监听，桥再把这个端口挂到自己端点的 `/xfer/` 路由后面。回包给出的是路由（`http://127.0.0.1:<port>/xfer/`）、文件服务器的端口和到期时间，没有第二份凭据。调用 `tools/list` 用的那个 Bearer token 同时给这条路由授权：代理替掉请求里带来的 `Authorization`，换上桥为这次共享生成的 basic-auth 对，回程再删掉文件服务器的 `www-authenticate` 头。所以拿任何能发 `Authorization: Bearer <token>` 的 WebDAV 客户端挂它就行——`rclone`、`curl`，或者你自己写的 HTTP 客户端：GET 下行、PUT 上行、PROPFIND 列目录、Range 续传。浏览器加不了那个头，所以它拿到的与不带 token 的人一样是 401。`DELETE` 和 `MOVE` 回 403，桥只向文件服务器要了上传。共享在 TTL（默认 3600 秒）到期、`xfer_stop`、桥停止时关闭；第二次共享顶掉第一次。`xfer_status` 与 `xfer_stop` 不收参数。这条路由上字节不经过 JSON-RPC。桥不带自己的字节协议——它驱动的是 `dufs` 的 WebDAV，调用方那侧用现成的 WebDAV 客户端，桥不发自己的文件客户端。
 
 路由开在回环端口上，本机之外一个字节都进不来。公网主机名只有一个来源：操作员跑 `/a2mcp tunnel`。隧道开着时，`xfer_share` 与 `xfer_status` 把它作为 `publicUrl` 回给调用方——同一个 `/xfer/` 路由，换到公网主机名下；隧道没开就是 `publicUrl: null`；要够到这条路由，用 SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。工具只报这条主机名，自己不开隧道。
 
-**只会调工具的客户端，字节仍走 `/xfer/`。** `scripts/a2mcp-proxy.mjs` 是一个零依赖的 MCP 代理（Node 20+ 或 Bun）：客户端用 stdio 起它，它把每个调用原样转给桥，另加两个工具——`a2mcp_upload {localPath, remotePath}` 与 `a2mcp_download {remotePath, localPath}`。一条路径在调用方机器上，一条在宿主上，分块由代理做：缺省每请求 8 MiB（`--chunk-bytes`，4 KiB 到 64 MiB），下载用 Range GET 追加进 `.a2mcp-part`，上传第一块 PUT、之后 `PATCH` 带 `X-Update-Range: append`。文件字节不进会话，也不进模型的上下文。端点把同一个文件放在 `GET /a2mcp/proxy.mjs`（同一个 Bearer token 后面），读不到仓库的调用方也能取到客户端。手边没有 MCP 客户端时，这个脚本可以直接搬一个文件：`node a2mcp-proxy.mjs upload LOCAL_PATH HOST_PATH` 或 `node a2mcp-proxy.mjs download HOST_PATH LOCAL_PATH`——同样的分块、同样的续传、同样的共享规则。
+**用现成的客户端。** 这条路由是标准 WebDAV，`curl`、`rclone` 或任何 WebDAV 客户端都能搬，没有桥自己的文件客户端要装。token 放在 `A2MCP_TOKEN`，基址放在 `ROUTE`——共享报出 `publicUrl` 时用它，否则用调用方配置里的桥地址加 `/xfer/`：
 
-`mcp.json` 里这样写（token 放 `env`，不放命令行——argv 在 `ps` 里可见）：
-
-```json
-{ "mcpServers": { "a2mcp": {
-  "command": "node",
-  "args": ["/path/to/a2mcp/scripts/a2mcp-proxy.mjs"],
-  "env": { "A2MCP_URL": "http://127.0.0.1:<port>/", "A2MCP_TOKEN": "<token>" }
-} } }
+```sh
+# 下载，断点续
+curl -fL -C - -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file" -o LOCAL
+# 上传
+curl -fL -T LOCAL -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file"
+# 列目录
+curl -fL -X PROPFIND -H "Depth: 1" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/"
 ```
 
-代理不在宿主上另开一份权力。已有共享覆盖目标就复用；没有就自己开一份，传完关掉，而且只在它开的那份还在时关。已有共享不覆盖目标时直接拒绝，错误里点名正在服务的路径——不顶掉，也不停别人的。上传永远不覆盖宿主的非空文件，因为 `dufs` 只开了 `--allow-upload`；要重传先在宿主上删掉。断掉的传输可以续：下载看 `.a2mcp-part` 旁边的 sidecar，远程 etag 与大小没变就从断点接；上传看状态文件，本地文件与远端已确认长度都没变才续。代理自己开的共享活默认一小时；更长的传输会中途失去路由，下一次调用接着续。代理是调用方自己的进程，不是桥的工具：它随 npm 包发布，端点也把源码供出来，读不到仓库的调用方仍然拿得到。长传输只占住它自己的文件队列，转发类调用（`ping`、普通工具）照常响应。
+`-C -` 从本地文件末尾发 Range，断掉的下载接着要；`416` 表示本地已经完整。**断掉的上传在标准 WebDAV 客户端里从零重来**。`dufs` 也认 `PATCH` 加 `X-Update-Range: append`，但那个头不是 WebDAV，`curl` 不会发——能发这个头的客户端才能续上传，否则把上传当作一次成或不成。这条路由没有大小上限：桥取消了 128 MB 的请求体上限，因为按调用方猜不到的数字截断，与传出一个坏文件是同一种失败。代价是内存——Bun 会为每个在途上传缓冲一份请求体——而持 token 的人本来就被当作可信。共享只活默认一小时，更长的传输中途会丢路由；重新 `xfer_share` 同一条路径后，下载可以接着续。上传不覆盖非空的远端文件，因为 `dufs` 只开了 `--allow-upload`；要重传先在宿主上删掉。
+
+token 放进环境变量，不要放进命令行：argv 在 `ps` 里可见。
 
 **token 就是一份能力**：拿着它的人，在共享关闭之前能读能写那条路径。共享自己不再往外发凭据：每次生成的那对 basic-auth 只出现在桥代发的请求里，工具回包、审计记录、文档都不写它。
 
@@ -349,10 +354,9 @@ bun install
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
-bun test              # 单测：test/*.test.ts（297 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/代理的路径规则与命令行参数/说明文本与代发的客户端/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
+bun test              # 单测：test/*.test.ts（281 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/说明文本/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
 bun run test:obtain   # 钉死的两个二进制：本机这一行真下载、钉表十个 asset 全 HEAD、Windows 那两行按字节读，41 项（不需要本机 omp；只往它自己那个 /tmp 目录里写）
 bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
-bun run test:proxy    # 客户端 MCP 代理走 stdio 打真 dufs，加上它的 upload / download 命令行，23 项（不需要本机 omp；node 或 bun；不进 CI）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，36 项（需本机 omp）
 bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp）

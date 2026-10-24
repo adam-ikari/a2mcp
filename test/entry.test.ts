@@ -21,7 +21,6 @@ import { AgentRegistry, type ExtensionAPI, type ExtensionContext, MAIN_AGENT_ID 
 import a2mcpExtension from "../extensions/a2mcp.ts";
 import { auditLogPath } from "../src/audit.ts";
 import { configPath } from "../src/config.ts";
-import { CLIENT_ROUTE } from "../src/server.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "a2mcp-entry-"));
 const savedEnv = { ...process.env };
@@ -195,22 +194,6 @@ describe("session_start", () => {
 		expect(await res.text()).toContain("xfer_share");
 		const dark = await fetch(`http://127.0.0.1:${port}/xfer/`);
 		expect(dark.status).toBe(401);
-	});
-
-	test("the caller's proxy is served from the bridge's own port", async () => {
-		// The wiring, not the route: the entry hands the server the copy beside it,
-		// so a caller that cannot read this repository still gets the client that
-		// chunks transfers.
-		const r = newRunner();
-		await r.start();
-		const port = r.advertisedPort() as number;
-		const res = await fetch(`http://127.0.0.1:${port}${CLIENT_ROUTE}`, {
-			headers: { authorization: `Bearer ${TOKEN}` },
-		});
-		expect(res.status).toBe(200);
-		const source = await res.text();
-		expect(source).toContain("a2mcp_upload");
-		expect(source).toContain("upload LOCAL_PATH HOST_PATH");
 	});
 
 	test("announces a token prefix, never the whole token", async () => {
@@ -449,7 +432,9 @@ describe("the a2mcp command", () => {
 		// command or carried in a tool argument.
 		expect(out).toContain("What you run there stays there");
 		expect(out).toContain("Files move over the bridge's own WebDAV route");
-		expect(out).toContain("a2mcp_upload {localPath, remotePath}` and `a2mcp_download {remotePath, localPath}");
+		expect(out).toContain("Use an existing WebDAV client");
+		expect(out).toContain("curl -fL -C -");
+		expect(out).not.toContain("a2mcp-proxy.mjs");
 		expect(out).toContain("One share at a time");
 		// The one exit is the operator's: a tunnel the caller opens itself is not
 		// behind the bridge's token, so the prompt has to say not to.

@@ -42,24 +42,6 @@ function bridgeVersion(): string {
 const BRIDGE_VERSION = bridgeVersion();
 
 /**
- * The caller-side proxy, read once from beside this module.
- *
- * It is served over the endpoint's own port so a remote agent that cannot read
- * this repository can still fetch the client that chunks transfers. Null when the
- * package layout left it out; the route answers 404 rather than an empty script.
- */
-let proxyClientSource: string | null | undefined;
-function proxyClient(): string | null {
-	if (proxyClientSource !== undefined) return proxyClientSource;
-	try {
-		proxyClientSource = readFileSync(join(import.meta.dir, "..", "scripts", "a2mcp-proxy.mjs"), "utf8");
-	} catch {
-		proxyClientSource = null;
-	}
-	return proxyClientSource;
-}
-
-/**
  * The text the operator hands to the remote agent. It is the same constant the
  * server returns as MCP `instructions` on `initialize` — one text, two ways to
  * deliver it: the client can show it to its model directly, and `/a2mcp prompt`
@@ -229,7 +211,6 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 					// the code still answering "0.1.0" and the page agreeing with the
 					// code. Two copies of a version number, and nothing compares them.
 					serverInfo: () => ({ name: "a2mcp", version: BRIDGE_VERSION }),
-					clientScript: proxyClient,
 					takeover: { setEnabled },
 					// The `/xfer` proxy asks this object where the file server is, per request
 					// (src/server.ts). Structurally it is the seam `XferRouteDeps` declares.

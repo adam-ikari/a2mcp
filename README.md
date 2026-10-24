@@ -243,12 +243,16 @@ How to call:
 Files move over the bridge's own WebDAV route, never through tool arguments. `xfer_share` works like this:
 1. `xfer_share {"path": "/absolute/host/path", "ttlSeconds": 3600}` serves one host file or directory and returns compact JSON: `url` is the route on this endpoint, `publicUrl` is the same route behind the operator's tunnel (or `null`), plus `route`, `path`, `port`, `startedAt`, `expiresAt` and `installed`. The share closes itself at `ttlSeconds` (default 3600).
 2. Transfer over HTTP with `Authorization: Bearer <token>` on every request and paths relative to the shared path. GET downloads, and `Range: bytes=start-end` reads a slice or resumes (a range past the end answers 416 with `content-range: bytes */<size>`). PUT creates a file. PATCH with `X-Update-Range: append` continues a partial upload: first chunk PUT, later chunks PATCH. PROPFIND lists a directory. DELETE and MOVE are refused, and an upload never overwrites an existing non-empty file (403) — remove the remote file some other way first.
-3. Use the ready-made client instead of writing one. `scripts/a2mcp-proxy.mjs` (Node 20+ or Bun, no dependencies) is also served by this endpoint at `/a2mcp/proxy.mjs`. If you can change your MCP client config, run it as your MCP server: it forwards every tool here and adds `a2mcp_upload {localPath, remotePath}` and `a2mcp_download {remotePath, localPath}`. If you cannot, fetch it with the token and URL your client already uses (`A2MCP_TOKEN`, `A2MCP_URL`) and drive it from your own shell: `curl -fsSL -H "Authorization: Bearer $A2MCP_TOKEN" "$A2MCP_URL/a2mcp/proxy.mjs" -o a2mcp-proxy.mjs`, then `node a2mcp-proxy.mjs upload LOCAL_PATH HOST_PATH` or `node a2mcp-proxy.mjs download HOST_PATH LOCAL_PATH`. Both forms move 8 MiB chunks (4 KiB–64 MiB, configurable), resume in both directions, reuse a share that already covers the target, open one when none does, close only the share they opened, and never overwrite a non-empty remote file.
+3. Use an existing WebDAV client instead of writing your own. Anything that can send `Authorization: Bearer <token>` works; `curl` covers the common cases:
+   - download: `curl -fL -C - -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file" -o LOCAL`. `-C -` resumes a partial local file with a Range request; a `416` means the local copy is already complete.
+   - upload: `curl -fL -T LOCAL -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file"`.
+   - list: `curl -fL -X PROPFIND -H "Depth: 1" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/"`.
+   `$ROUTE` is the share's `publicUrl` when it is not `null`; otherwise it is the bridge URL your client already uses, with `/xfer/` appended — not the loopback `url` in the reply, which is the host's own address. `rclone` and other WebDAV clients mount the same route. Interrupted downloads resume from where they stopped. Standard WebDAV clients restart an interrupted upload; `dufs` also accepts `PATCH` with `X-Update-Range: append`, so a client that can send that header resumes instead. Keep the token in an environment variable rather than pasting its value into a command line.
 4. One share at a time: a second `xfer_share` replaces the first and says `replaced: true`. `xfer_status` reports the current share; `xfer_stop` closes it. Close the share you opened when the transfer is done; do not stop a share you did not open.
 5. Reach the route through `publicUrl` when it is not `null`. When it is `null`, ask the operator to run `/a2mcp tunnel` or forward the bridge port over SSH. Do not start your own tunnel or second file server: a hostname you open is not behind this bridge's token, so whatever it serves is public.
 6. Never move file bytes through `read`, `bash` or tool arguments: host `read` truncates around 150 KB and `bash` around 768 bytes, so large or binary content comes back corrupted. Never paste megabytes into a command.
 
-If your side cannot speak MCP to this endpoint, use the bridge's zero-dependency clients instead of writing your own: `scripts/mcp-call.py` for single calls, `scripts/a2mcp-proxy.mjs` for a session with file transfer.
+If your side cannot speak MCP to this endpoint, use the bridge's zero-dependency client for single calls — `scripts/mcp-call.py` — and a standard WebDAV client (`curl`, `rclone`) for files. There is no bridge-specific file client to install or fetch.
 ```
 
 ## Cross-machine forwarding
@@ -289,17 +293,20 @@ Files move over **WebDAV**. `xfer_share` hands a host path to [`dufs`](https://g
 
 Nothing leaves the machine on its own: the route is loopback, and the only public hostname is the one the operator opens with `/a2mcp tunnel`. While that tunnel is up, `xfer_share` and `xfer_status` return it as `publicUrl` — the same `/xfer/` route under the public hostname. While it is down, `publicUrl` is `null`; reach the route over an SSH port forward to the bridge port, or ask the operator to run `/a2mcp tunnel`. The tool reports that hostname; it never opens one.
 
-**A client that can only call tools still moves bytes over `/xfer/`.** `scripts/a2mcp-proxy.mjs` is a zero-dependency MCP proxy (Node 20+ or Bun) that sits between an MCP client and the bridge: the client spawns it over stdio, it forwards every call verbatim, and it adds two tools of its own — `a2mcp_upload {localPath, remotePath}` and `a2mcp_download {remotePath, localPath}`. One path is on the caller's machine, the other on the host, and the proxy does the chunking: 8 MiB per request by default (`--chunk-bytes`, 4 KiB to 64 MiB), Range GETs appended to a `.a2mcp-part` file for a download, a first PUT and then `PATCH` with `X-Update-Range: append` for an upload. No file byte enters the session or the model's context. The endpoint serves the same file at `GET /a2mcp/proxy.mjs` behind the same Bearer token, so a caller that cannot read this repository can still fetch the client. With no MCP client in reach, the script moves one file directly: `node a2mcp-proxy.mjs upload LOCAL_PATH HOST_PATH` or `node a2mcp-proxy.mjs download HOST_PATH LOCAL_PATH` — same chunks, same resume, same share rules.
+**Use a client that already exists.** The route is plain WebDAV, so `curl`, `rclone`, or any WebDAV client moves the bytes; there is no bridge-specific file client to install. With the token in `A2MCP_TOKEN` and the base in `ROUTE` — the share's `publicUrl` when it reports one, otherwise your bridge URL plus `/xfer/`:
 
-```json
-{ "mcpServers": { "a2mcp": {
-  "command": "node",
-  "args": ["/path/to/a2mcp/scripts/a2mcp-proxy.mjs"],
-  "env": { "A2MCP_URL": "http://127.0.0.1:<port>/", "A2MCP_TOKEN": "<token>" }
-} } }
+```sh
+# download, resuming a partial file
+curl -fL -C - -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file" -o LOCAL
+# upload
+curl -fL -T LOCAL -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file"
+# list
+curl -fL -X PROPFIND -H "Depth: 1" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/"
 ```
 
-The token goes in `env`, not in the command line: argv is visible in `ps`, and the proxy never prints it. On the host the proxy opens no second authority. It reuses the share that is already serving when that share covers the target; if none is, it opens one and closes it after the transfer, and only if the share it finds is still the one it opened. An open share that does not cover the target is a refusal that names the served path — the proxy neither replaces nor stops someone else's share. An upload never overwrites a non-empty remote file, because `dufs` runs with `--allow-upload` only; remove the remote file on the host first. Interrupted transfers resume: a download from its `.a2mcp-part` sidecar when the remote etag and size still match, an upload from its state file when the local file and the confirmed remote length still match. A share the proxy opens lives for the default hour; a longer transfer loses the route mid-way, and the next attempt resumes. The proxy is the caller's own process, not a bridge tool: it ships in the npm tarball, and the endpoint serves its source so a caller with no repository can still get it. A long transfer holds its own file queue while forwarded calls (`ping`, ordinary tools) stay responsive.
+`-C -` asks for the bytes after the local file's end, so an interrupted download continues where it stopped; a `416` means the local copy is already complete. An interrupted **upload** restarts from zero in a standard WebDAV client. `dufs` also accepts `PATCH` with `X-Update-Range: append`, but that header is not WebDAV and `curl` does not send it, so plan an upload as all-or-nothing unless the client can append. There is no size limit on the route: the bridge removed its 128 MB request-body cap, because a `PUT` that stops at a size the caller cannot predict is the same failure as a truncated file. The cost is memory — Bun buffers one request body per in-flight upload — and the token holder is already trusted with the host's shell. A share lives for the default hour; a longer transfer loses the route mid-way, and reopening the share lets a download resume. An upload never overwrites a non-empty remote file, because `dufs` runs with `--allow-upload` only; remove the remote file on the host first.
+
+Keep the token in an environment variable rather than in the command line: argv is visible in `ps`.
 
 **The token is the capability**: whoever holds it can read and write that path until the share closes. The share adds no credential of its own to hand out — the per-share basic-auth pair stays inside the bridge's proxied requests, out of every tool result, audit record and doc.
 
@@ -381,10 +388,9 @@ bun install
 bun run typecheck     # type check
 bun run lint          # lint + format check (Biome; fix with bunx biome check --write .)
 bun run test:tree     # repo shape: no symlink points off this machine, 3 checks, no deps, no local omp (runs before bun test on purpose)
-bun test              # unit tests: test/*.test.ts (297: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/proxy path rules and CLI arguments/instructions and the served client/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
+bun test              # unit tests: test/*.test.ts (281: protocol/auth/config/exposure gate/host hand-off/entrypoint lifecycle/audit/version guard/takeover shapes/arming transaction/host-llm route/xfer/instructions/obtain shapes incl. the win32 ones/placeholder model/the two bootstrap scripts)
 bun run test:obtain   # the pinned binaries: fetches both for this platform, HEADs all ten asset URLs, reads the two Windows rows as bytes, 41 checks (needs no local omp; writes only inside its own /tmp directory)
 bun run test:registry # drive the takeover against the host's real model registry, 28 checks, seconds (needs no local omp, no credentials)
-bun run test:proxy    # the client MCP proxy over stdio against a real dufs, plus its upload/download command line, 23 checks (needs no local omp; node or bun; not in CI)
 bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 36 items (needs a local omp)
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
