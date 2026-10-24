@@ -428,11 +428,13 @@ describe("the a2mcp command", () => {
 		expect(out).toContain("You are connected over MCP to a live agent session on another machine.");
 		expect(out).toContain("Give every call a timeout of your own.");
 		// The two things a first caller gets wrong: the machine is real, so what it
-		// ran stays there; and a file moves either over the route or in chunks, never
-		// as megabytes pasted into a command.
+		// ran stays there; and file bytes move only over /xfer, never pasted into a
+		// command or carried in a tool argument.
 		expect(out).toContain("What you run there stays there");
-		expect(out).toContain("Files move two ways.");
-		expect(out).toContain("xfer_get` and `xfer_put`");
+		expect(out).toContain("Files move over the bridge's WebDAV route");
+		expect(out).toContain("a2mcp_upload` and `a2mcp_download");
+		expect(out).not.toContain("xfer_get");
+		expect(out).not.toContain("xfer_put");
 		expect(out).toContain("Never paste megabytes into a command.");
 		// And it carries no credential: a token inside a prompt would put it in a
 		// model's context, which is a wider place than a config file.

@@ -204,6 +204,27 @@ describe("/xfer proxy — what reaches the file server", () => {
 		expect(s.headers["content-length"]).toBe(String(Buffer.byteLength(payload)));
 	});
 
+	test("an append PATCH reaches the file server as itself, header and body intact", async () => {
+		// The client proxy uploads its first chunk with PUT and every later chunk with
+		// PATCH + X-Update-Range: append. If the route rewrote either half, dufs would
+		// truncate the file or refuse the write, so this is pinned here.
+		reset();
+		table["PATCH /xfer/up.txt"] = () => new Response(null, { status: 204 });
+		const payload = "appended after the first PUT\n";
+		const res = await via("xfer/up.txt", {
+			method: "PATCH",
+			headers: { "x-update-range": "append", "content-type": "application/octet-stream" },
+			body: payload,
+		});
+		expect(res.status).toBe(204);
+		const s = last();
+		expect(s.method).toBe("PATCH");
+		expect(s.headers["x-update-range"]).toBe("append");
+		expect(s.headers["content-type"]).toBe("application/octet-stream");
+		expect(s.body).toBe(payload);
+		expect(s.headers["content-length"]).toBe(String(Buffer.byteLength(payload)));
+	});
+
 	test("PUT/MOVE/PROPFIND are not gated by the MCP method list", async () => {
 		reset();
 		table["PROPFIND /xfer/"] = () =>

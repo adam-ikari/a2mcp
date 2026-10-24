@@ -6,10 +6,10 @@
  * ## What it checks
  *
  * That a client on the far end of one origin — the public hostname a tunnel fronts —
- * can move a file two ways and get the same bytes: over `/xfer/` with the Bearer token
- * (GET, Range, PUT), and over MCP itself with `xfer_get`/`xfer_put` in base64 chunks.
- * The address it uses is never typed here: it is the `publicUrl` the share's own reply
- * named, so the check is that the address handed out is the address that serves.
+ * can move a file over `/xfer/` with the Bearer token: GET, Range, PUT, and the
+ * `PATCH X-Update-Range: append` the client proxy uses for later chunks. The address
+ * it uses is never typed here: it is the `publicUrl` the share's own reply named, so
+ * the check is that the address handed out is the address that serves.
  *
  * The origin is an edge in this process, not cloudflared: a `Bun.serve` that forwards
  * path, method, headers and body to the bridge's port, which is the shape a quick
@@ -22,9 +22,10 @@
  *
  * ## Why a probe and not a test
  *
- * It runs the pinned `dufs` and, in section 5, a real `cloudflared`. `bun test` has no
- * egress and no binaries; the unit half of the same code is `test/xfer.test.ts`
- * (chunk arithmetic against a stub) and `test/xfer-route.test.ts` (the proxy).
+ * It runs the pinned `dufs` and, in section 4, a real `cloudflared`. `bun test` has no
+ * egress and no binaries; the unit half of the same code is `test/xfer.test.ts` (share
+ * lifecycle against a stub) and `test/xfer-route.test.ts` (the proxy). File transfer
+ * through the client proxy is `test/proxy-probe.ts`.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -56,6 +57,7 @@ const bytesOf = (n: number, seed = 11): Buffer =>
 	Buffer.from(Array.from({ length: n }, (_, i) => (i * 37 + seed) % 256));
 const BIG = bytesOf(300_000);
 const UP = bytesOf(200_000, 91);
+const TAIL = bytesOf(1000, 7);
 await writeFile(join(shared, "routed.bin"), BIG);
 
 /** The operator's tunnel origin, as this probe stands it in. */
@@ -148,8 +150,8 @@ const names = ((listed.body as { result?: { tools?: Array<{ name: string }> } })
 	(t) => t.name,
 );
 check(
-	["xfer_share", "xfer_get", "xfer_put", "xfer_status", "xfer_stop"].every((n) => names.includes(n)),
-	"the five transfer tools are on the origin's catalog",
+	["xfer_share", "xfer_status", "xfer_stop"].every((n) => names.includes(n)),
+	"the three transfer tools are on the origin's catalog",
 	names.join(","),
 );
 
@@ -200,88 +202,23 @@ check(
 	"a PUT through the same origin lands on the host's disk byte-exact",
 	`HTTP ${uploaded.status}, ${uploadedOnDisk.length} bytes`,
 );
-
-// --- 3. the same file over MCP, in chunks, on the same origin ----------------------
-interface Chunk {
-	name: string;
-	offset: number;
-	total: number | null;
-	bytes: number;
-	next: number | null;
-	encoding: string;
-	data: string;
-}
-const getChunk = async (name: string, offset: number, maxBytes?: number): Promise<Chunk> => {
-	const r = await rpc(
-		"tools/call",
-		{ name: "xfer_get", arguments: { name, offset, ...(maxBytes ? { maxBytes } : {}) } },
-		sid,
-	);
-	return JSON.parse(textOf((r.body as { result: ToolReply }).result)) as Chunk;
-};
-
-const pieces: Buffer[] = [];
-let offset = 0;
-let reads = 0;
-for (;;) {
-	const c = await getChunk("routed.bin", offset, 65_536);
-	reads++;
-	if (c.offset !== offset || c.encoding !== "base64") {
-		check(false, "a chunk answers the offset it was asked for", `${c.offset} vs ${offset}`);
-		break;
-	}
-	pieces.push(Buffer.from(c.data, "base64"));
-	if (c.next === null) break;
-	offset = c.next;
-	if (reads > 20) break;
-}
-const viaChunks = Buffer.concat(pieces);
+const appended = await fetch(`${share.publicUrl}uploaded.bin`, {
+	method: "PATCH",
+	headers: { ...auth, "x-update-range": "append" },
+	body: new Uint8Array(TAIL),
+});
+const appendedOnDisk = await readFile(join(shared, "uploaded.bin")).catch(() => Buffer.alloc(0));
 check(
-	reads === 5 && sha(viaChunks) === sha(BIG),
-	"xfer_get walks the file in chunks and the pieces are the file",
-	`${reads} calls, ${viaChunks.length} bytes, ${sha(viaChunks).slice(0, 12)}`,
+	appended.status < 300 && sha(appendedOnDisk) === sha(Buffer.concat([UP, TAIL])),
+	"a PATCH append through the same origin continues the file byte-exact",
+	`HTTP ${appended.status}, ${appendedOnDisk.length} bytes`,
 );
-check(viaChunks.equals(routedBytes), "the chunked read and the route agree byte-for-byte");
-
-const putChunk = async (args: Record<string, unknown>): Promise<Record<string, unknown>> => {
-	const r = await rpc("tools/call", { name: "xfer_put", arguments: args }, sid);
-	return JSON.parse(textOf((r.body as { result: ToolReply }).result)) as Record<string, unknown>;
-};
-let sent = 0;
-let writes = 0;
-let done = false;
-while (sent < UP.length) {
-	const piece = UP.subarray(sent, sent + 65_536);
-	sent += piece.length;
-	writes++;
-	const reply = await putChunk({
-		name: "byChunks.bin",
-		data: piece.toString("base64"),
-		offset: sent - piece.length,
-		total: UP.length,
-	});
-	done = reply.done === true;
-}
-const chunkedOnDisk = await readFile(join(shared, "byChunks.bin")).catch(() => Buffer.alloc(0));
-check(
-	writes === 4 && done && sha(chunkedOnDisk) === sha(UP),
-	"xfer_put reassembles the upload and the last call is the one that writes",
-	`${writes} calls, ${chunkedOnDisk.length} bytes, done=${done}`,
-);
-check(chunkedOnDisk.equals(uploadedOnDisk), "the chunked upload and the route's PUT agree byte-for-byte");
-
-// --- 4. closing the share closes both surfaces ------------------------------------
+// --- 3. closing the share closes the route ----------------------------------------
 await rpc("tools/call", { name: "xfer_stop", arguments: {} }, sid);
 const afterStop = await fetch(`${share.publicUrl}routed.bin`, { headers: auth });
-const afterStopChunk = await rpc("tools/call", { name: "xfer_get", arguments: { name: "routed.bin" } }, sid);
 check(afterStop.status === 404, "xfer_stop takes the route down on the origin too", `HTTP ${afterStop.status}`);
-check(
-	(afterStopChunk.body as { result: ToolReply }).result?.isError === true &&
-		textOf((afterStopChunk.body as { result: ToolReply }).result).includes("call xfer_share first"),
-	"and the chunk tool says what to call first",
-);
 
-// --- 5. a real tunnel, and the one thing about it that is local -------------------
+// --- 4. a real tunnel, and the one thing about it that is local -------------------
 //
 // The publish is measurable here; the fetch-back is not (this network re-signs TLS for
 // proxied hostnames), and `test:obtain` reports that half. What is asserted is the

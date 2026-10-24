@@ -50,7 +50,7 @@ graph TB
 
 - 扩展在 `session_start` 时启动 `Bun.serve`，实现 MCP `2025-11-25` 的 `initialize` / `tools/list` / `tools/call`，响应为纯 JSON（无 SSE）。
 - 端点是**每进程**一个，`session_start` / `session_shutdown` 是**每会话**一个。后来的 `session_start` 复用已起的服务器；`session_shutdown` 只在注册表里没有活的 `Main` 会话时才释放端口，否则任何一次子代理结束都会拆掉还在服务的端口。释放用非强制的 `stop()`：新连接被拒，处理中的那一次照常跑完并落审计。整条生命周期由入口生命周期单测守着（`docs/testing.md`）。
-- 目录、暴露门与执行读同一份注册表：宿主的 `Main` 会话。目录就是这份注册表本身，加上桥自己的 `xfer_*`（现在五个），不增不减（见「安全与边界」）。
+- 目录、暴露门与执行读同一份注册表：宿主的 `Main` 会话。目录就是这份注册表本身，加上桥自己的 `xfer_*`（现在三个），不增不减（见「安全与边界」）。
 - 桥自己从不请求模型：一次远程调用就是「收请求 → 跑工具 → 回结果」。但执行落在宿主真实会话里，工具留下的副作用可能唤醒宿主自己的 agent，那次推理花宿主的 token（见「安全与边界」）。宿主能不能自己推理，归接管开关管：见「宿主推理接管」。
 
 ## 安装
@@ -206,9 +206,9 @@ Give every call a timeout of your own. A call can hang: a permission prompt on t
 
 What you run there stays there: nothing on that machine is rolled back for you.
 
-Files move two ways. `xfer_share` opens a WebDAV route on the bridge's own origin (`/xfer/`); if you can send an HTTP request with `Authorization: Bearer <token>`, use it — GET, Range, PUT, one request per file, no base64. If you cannot, `xfer_get` and `xfer_put` carry the same file in base64 chunks over tool calls: each reply gives the `next` offset, and `xfer_put` writes the file when its pieces reach `total`. Never paste megabytes into a command.
+Files move over the bridge's WebDAV route, never through tool arguments: `xfer_share` opens `/xfer/` on a host path, then GET (Range works) downloads and PUT uploads with `Authorization: Bearer <token>`. If your client can read the a2mcp repository, point it at `scripts/a2mcp-proxy.mjs` (Node 20+ or Bun, no dependencies): it wraps this endpoint on stdio and adds `a2mcp_upload` and `a2mcp_download`, each taking a local path on your side and a path on the host, and moves the bytes in chunks with no base64 in the conversation. An upload never overwrites a non-empty file on the host; remove it there first. Never paste megabytes into a command.
 
-If your side cannot speak MCP to this endpoint, the bridge ships a zero-dependency reference client — `scripts/mcp-call.py` in the a2mcp repository. Use it; do not write your own client.
+If your side cannot speak MCP to this endpoint, use the bridge's zero-dependency clients instead of writing your own: `scripts/mcp-call.py` for single calls, `scripts/a2mcp-proxy.mjs` for a session with file transfer.
 ```
 
 ## 跨机转发
@@ -245,11 +245,23 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 ## 传文件
 
-传文件走 **WebDAV**。`xfer_share` 把一条宿主路径交给 [`dufs`](https://github.com/sigoden/dufs)（一个 WebDAV 文件服务器），dufs 在 `127.0.0.1` 上找一个空端口监听，桥再把这个端口挂到自己端点的 `/xfer/` 路由后面。回包给出的是路由（`http://127.0.0.1:<port>/xfer/`）、文件服务器的端口和到期时间，没有第二份凭据。调用 `tools/list` 用的那个 Bearer token 同时给这条路由授权：代理替掉请求里带来的 `Authorization`，换上桥为这次共享生成的 basic-auth 对，回程再删掉文件服务器的 `www-authenticate` 头。所以拿任何能发 `Authorization: Bearer <token>` 的 WebDAV 客户端挂它就行——`rclone`、`curl`，或者你自己写的 HTTP 客户端：GET 下行、PUT 上行、PROPFIND 列目录、Range 续传。浏览器加不了那个头，所以它拿到的与不带 token 的人一样是 401。`DELETE` 和 `MOVE` 回 403，桥只向文件服务器要了上传。共享在 TTL（默认 3600 秒）到期、`xfer_stop`、桥停止时关闭；第二次共享顶掉第一次。`xfer_status` 与 `xfer_stop` 不收参数。这条路由上字节不经过 JSON-RPC。桥不带自己的字节协议——它驱动的是 `dufs` 的 WebDAV；只会发工具调用的客户端用下一段那两个工具，走的还是同一个文件服务器。
+传文件走 **WebDAV**。`xfer_share` 把一条宿主路径交给 [`dufs`](https://github.com/sigoden/dufs)（一个 WebDAV 文件服务器），dufs 在 `127.0.0.1` 上找一个空端口监听，桥再把这个端口挂到自己端点的 `/xfer/` 路由后面。回包给出的是路由（`http://127.0.0.1:<port>/xfer/`）、文件服务器的端口和到期时间，没有第二份凭据。调用 `tools/list` 用的那个 Bearer token 同时给这条路由授权：代理替掉请求里带来的 `Authorization`，换上桥为这次共享生成的 basic-auth 对，回程再删掉文件服务器的 `www-authenticate` 头。所以拿任何能发 `Authorization: Bearer <token>` 的 WebDAV 客户端挂它就行——`rclone`、`curl`，或者你自己写的 HTTP 客户端：GET 下行、PUT 上行、PROPFIND 列目录、Range 续传。浏览器加不了那个头，所以它拿到的与不带 token 的人一样是 401。`DELETE` 和 `MOVE` 回 403，桥只向文件服务器要了上传。共享在 TTL（默认 3600 秒）到期、`xfer_stop`、桥停止时关闭；第二次共享顶掉第一次。`xfer_status` 与 `xfer_stop` 不收参数。这条路由上字节不经过 JSON-RPC。桥不带自己的字节协议——它驱动的是 `dufs` 的 WebDAV；只会发工具调用的客户端在调用方一侧跑下一段那个代理，字节仍走这条路由。
 
-路由开在回环端口上，本机之外一个字节都进不来。公网主机名只有一个来源：操作员跑 `/a2mcp tunnel`。隧道开着时，`xfer_share` 与 `xfer_status` 把它作为 `publicUrl` 回给调用方——同一个 `/xfer/` 路由，换到公网主机名下；隧道没开就是 `publicUrl: null`，`usage.public` 点名两条路：SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。工具只报这条主机名，自己不开隧道。
+路由开在回环端口上，本机之外一个字节都进不来。公网主机名只有一个来源：操作员跑 `/a2mcp tunnel`。隧道开着时，`xfer_share` 与 `xfer_status` 把它作为 `publicUrl` 回给调用方——同一个 `/xfer/` 路由，换到公网主机名下；隧道没开就是 `publicUrl: null`；要够到这条路由，用 SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。工具只报这条主机名，自己不开隧道。
 
-也能一块一块地过 MCP。发不了带 `Authorization` 头的 HTTP 请求、只会调工具的客户端用 `xfer_get` 与 `xfer_put`：同一份共享、同样的路径，base64 分块，一块一次调用。`xfer_get` 一块缺省 256 KB（上限 1 MB），回包带 `total` 与 `next`，`next` 是 `null` 就到底了；`xfer_put` 不带 `offset` 的一次调用写完整个文件，分块时第一块给 `total`、之后照着 `next` 递，累到 `total` 的那一次才落盘，块在那之前留在桥的内存里（上限 16 MB、空闲 10 分钟丢弃）。两者都经文件服务器收发——一次 Range GET，一次 PUT——所以共享根、谁能写、路径怎么解析仍是 `dufs` 的事。代价是实的：base64 多 33%，每块一次调用、占一份上下文。能发 HTTP 的就走 `/xfer/`，那条路一个字节都不经 JSON-RPC。
+**只会调工具的客户端，字节仍走 `/xfer/`。** 仓库里的 `scripts/a2mcp-proxy.mjs` 是一个零依赖的 MCP 代理（Node 20+ 或 Bun）：客户端用 stdio 起它，它把每个调用原样转给桥，另加两个工具——`a2mcp_upload {localPath, remotePath}` 与 `a2mcp_download {remotePath, localPath}`。一条路径在调用方机器上，一条在宿主上，分块由代理做：缺省每请求 8 MiB（`--chunk-bytes`，4 KiB 到 64 MiB），下载用 Range GET 追加进 `.a2mcp-part`，上传第一块 PUT、之后 `PATCH` 带 `X-Update-Range: append`。文件字节不进会话，也不进模型的上下文。
+
+`mcp.json` 里这样写（token 放 `env`，不放命令行——argv 在 `ps` 里可见）：
+
+```json
+{ "mcpServers": { "a2mcp": {
+  "command": "node",
+  "args": ["/path/to/a2mcp/scripts/a2mcp-proxy.mjs"],
+  "env": { "A2MCP_URL": "http://127.0.0.1:<port>/", "A2MCP_TOKEN": "<token>" }
+} } }
+```
+
+代理不在宿主上另开一份权力。已有共享覆盖目标就复用；没有就自己开一份，传完关掉，而且只在它开的那份还在时关。已有共享不覆盖目标时直接拒绝，错误里点名正在服务的路径——不顶掉，也不停别人的。上传永远不覆盖宿主的非空文件，因为 `dufs` 只开了 `--allow-upload`；要重传先在宿主上删掉。断掉的传输可以续：下载看 `.a2mcp-part` 旁边的 sidecar，远程 etag 与大小没变就从断点接；上传看状态文件，本地文件与远端已确认长度都没变才续。代理自己开的共享活默认一小时；更长的传输会中途失去路由，下一次调用接着续。代理是调用方一侧的脚本，不属于桥，也不在 npm 包里。长传输只占住它自己的文件队列，转发类调用（`ping`、普通工具）照常响应。
 
 **token 就是一份能力**：拿着它的人，在共享关闭之前能读能写那条路径。共享自己不再往外发凭据：每次生成的那对 basic-auth 只出现在桥代发的请求里，工具回包、审计记录、文档都不写它。
 
@@ -283,7 +295,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 ## 安全与边界
 
 - **token 即工具执行全权（默认配置下）**：宿主默认 `approvalMode: yolo`，拿到 token 就能在宿主会话里直接执行任意暴露的工具（含 `bash`），不经过审批。配置文件 `0600`，不要进版本库。
-- **桥不做权限决定**：`tools/list` 是宿主 `Main` 会话注册表原样透传，外加桥自己的 `xfer_*`（现在五个）；包含 `hidden` 工具与宿主当前对自己模型禁用的工具——**omp 是什么权限，桥就是什么权限**。要收紧，配宿主，桥没有第二套名单。
+- **桥不做权限决定**：`tools/list` 是宿主 `Main` 会话注册表原样透传，外加桥自己的 `xfer_*`（现在三个）；包含 `hidden` 工具与宿主当前对自己模型禁用的工具——**omp 是什么权限，桥就是什么权限**。要收紧，配宿主，桥没有第二套名单。
 - **执行走宿主原生工具**：桥注入真实的 settings 与 UI，宿主的审批门照常生效。例外是 `xfer_*`：桥自己分派、不过那道门——持 token 的人能把桥可读的任意路径挂到 `/xfer/` 路由上，这一读一写宿主没被问过。拦住它的是同一个 token、回环绑定和每次调用一条审计。
 - **远程调用可能唤醒宿主自己的 agent**：长命令超过宿主超时（实测默认 300 秒）会被转后台，完成通知让宿主会话醒过来推理，花宿主的 token。对策是接管开关，见「宿主推理接管」。
 - **调用与列表同源**：只接受出现在 `tools/list` 里的名字；别名与未注册名字一律拒绝，不区分「被过滤」与「不存在」。
@@ -330,9 +342,10 @@ bun install
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
-bun test              # 单测：test/*.test.ts（279 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
+bun test              # 单测：test/*.test.ts（292 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/代理的路径规则/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
 bun run test:obtain   # 钉死的两个二进制：本机这一行真下载、钉表十个 asset 全 HEAD、Windows 那两行按字节读，41 项（不需要本机 omp；只往它自己那个 /tmp 目录里写）
 bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
+bun run test:proxy    # 客户端 MCP 代理走 stdio 打真 dufs，19 项（不需要本机 omp；node 或 bun；不进 CI）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，36 项（需本机 omp）
 bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp）

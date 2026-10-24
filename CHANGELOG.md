@@ -4,6 +4,19 @@
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
+## 2026-10-24 — 传文件不再过 base64：客户端一侧的 MCP 代理
+
+前一节给桥加了 `xfer_get` / `xfer_put`，让只会调工具的调用方用 base64 分块搬文件。这一版把它们删掉，桥自带工具回到三个。理由不是那两个工具写错了，是位置错了：字节一旦经工具回包，就要多 33% 的编码、每块一次调用、每块一份模型上下文，而调用方缺的只是一条能发 `Authorization` 头的 HTTP 通道。那条通道可以长在调用方自己那一侧，不必长在桥上。
+
+- feat: 新脚本 `scripts/a2mcp-proxy.mjs`，零依赖 ESM，Node 20+ 与 Bun 都能跑。它用 stdio 接 MCP 客户端，把 `initialize` / `tools/list` / `tools/call` 等原样转给桥，再在目录末尾追加 `a2mcp_upload {localPath, remotePath}` 与 `a2mcp_download {remotePath, localPath}`。字节走 `/xfer/`：下载是一串 Range GET 写进 `.a2mcp-part`，上传第一块 PUT、之后 PATCH 带 `X-Update-Range: append`。缺省 8 MiB 一块（4 KiB–64 MiB），对话里不出现 base64。
+- 设计: 共享优先复用。已有共享覆盖目标就借它；没有就自己开，传完只关自己开的那一份（回读 `xfer_status`，`path` 与 `startedAt` 都对得上才关）；已有共享不覆盖目标时直接拒绝，点名正在服务的路径——不顶掉，也不停别人的。上传不覆盖非空远端文件，因为 `dufs` 仍只开 `--allow-upload`；PATCH 不存在的文件是 404，覆盖要 `--allow-delete`，不开。下载的本地目标原子替换。
+- 设计: 两向续传。下载的 sidecar 记 `{etag, size}`，远程没变就从 part 末尾接；上传状态在 `os.tmpdir()/a2mcp-proxy/`，要求本地文件大小与 mtime、远端已确认长度、前缀 sha256 三样都对上才追加。token 只从 `A2MCP_TOKEN` / `--token` 读，日志不打印；推荐 env，因为 argv 会进 `ps`。
+- refactor: 删掉 `src/xfer.ts` 里的 `xfer_get` / `xfer_put`、它们的常量、暂存表与目录项；`XFER_TOOL_NAMES` 剩 `xfer_share` / `xfer_status` / `xfer_stop`。`/xfer` 代理本来就逐字转发方法与正文，这一版补一项 `PATCH` 的测试钉住它。
+- 优化: MCP 回包里花上下文的部分也削了。`xfer_*` 的答复改成紧凑 JSON（不缩进），`xfer_share` 不再附那组带 `<TOKEN>` 占位符的 `curl` 示例，工具描述也压短。回包字段一个没少——`url` / `publicUrl` / `route` / `path` / `port` / `startedAt` / `expiresAt` / `installed` 都还在。
+- test: `bun test` 294 → 292（删掉分块那 15 项，新增代理纯函数 12 项）；`test/xfer-route.test.ts` 20 → 21（PATCH）；`test:tunnel-xfer` 14 → 10（去掉过 MCP 的两段，加 PATCH 追加）；新增 `test:proxy` 19 项（真 `startServer` + 真 dufs + 假宿主工具，node 或 bun 起代理走 stdio，`--chunk-bytes 65536` 强制多块：下载/上传 sha256、覆盖拒绝、共享自开自关与复用、两向续传、不覆盖目标时拒绝且原共享不动）。`test:proxy` 不进 CI。
+- docs: 两份 README 的传文件段改成客户端代理与 `mcp.json` 示例；`docs/protocol.md` 的目录改三个名字、删两个工具契约、补 PATCH 与「代理不是桥的协议面」；`docs/testing.md` 的项数与新增两节；`AGENTS.md` 的 xfer 例外补一句「字节只走路由，代理在调用方一侧」。
+- 版本位: 远程调用方经协议拿到的东西变了（`tools/list` 少两个名字，`xfer_share` 的回包少了 `usage` 并改成紧凑 JSON），按 2026-10-18 判据进 minor，v0.9.0。
+
 ## 2026-10-23 — 一块一块地过 MCP：`xfer_get` / `xfer_put`
 
 传文件原先只有一条路：`xfer_share` 把路径交给 `dufs`，桥把这个端口挂在自己端点的 `/xfer/` 后面，调用方拿 Bearer token 走 WebDAV。文档把这条写成判据——字节不经过 JSON-RPC，桥不带字节协议。它在「调用方能发带 `Authorization` 头的 HTTP 请求」时成立；只会调工具的调用方一个字节都搬不动，而宿主的 `read` 到 150 KB 截断、`bash` 只要 768 字节，两条都会把二进制读坏。

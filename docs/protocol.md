@@ -159,12 +159,12 @@ providers:
 
 - **无 `nextCursor`**：单页返回全量（宿主 omp 客户端的分页循环在缺省游标时正常终止）。
 - `inputSchema` 为 JSON Schema 2020-12（由宿主工具的 typebox schema 经 `toolWireSchema` 导出）。
-- 内容 = 宿主 `Main` 会话的工具注册表（`AgentSession.getAllToolInfos()`——宿主也正是用它接出 `pi.getAllTools()`），**原样透传不过滤**：含 `hidden` 工具，也含宿主当前对自己模型禁用的工具。**目录 = 宿主注册表逐字 + 桥自己的五个名字（`xfer_share` / `xfer_status` / `xfer_stop` / `xfer_get` / `xfer_put`，见下），没有别的**；桥也不解释权限——语义详见 README「安全与边界」。目录、暴露门与执行读同一份注册表，所以「列出来却调不动」只剩两次读之间工具被注销这一种情形。没有活的 `Main` 时（parked/aborted 到端口释放之间那一段）退回入口那份 `pi` 的视图，而不是报出一份宿主其实并没有的空目录
+- 内容 = 宿主 `Main` 会话的工具注册表（`AgentSession.getAllToolInfos()`——宿主也正是用它接出 `pi.getAllTools()`），**原样透传不过滤**：含 `hidden` 工具，也含宿主当前对自己模型禁用的工具。**目录 = 宿主注册表逐字 + 桥自己的三个名字（`xfer_share` / `xfer_status` / `xfer_stop`，见下），没有别的**；桥也不解释权限——语义详见 README「安全与边界」。目录、暴露门与执行读同一份注册表，所以「列出来却调不动」只剩两次读之间工具被注销这一种情形。没有活的 `Main` 时（parked/aborted 到端口释放之间那一段）退回入口那份 `pi` 的视图，而不是报出一份宿主其实并没有的空目录
 - 请求可带 `params.cursor`，被忽略。
 
 ### 桥自己的工具：`xfer_*`
 
-`tools/list` 里那五个名字不是宿主的工具，是桥自己服务的（`src/xfer.ts`）。**按「`tools/list` 里每个名字都是宿主工具」写死的客户端要改：目录是宿主注册表逐字加恰好这五个。** 五者都由桥分派，不进宿主的 `getToolByName()`，也不过宿主的审批门；每次动作写一条审计，`tool: "xfer"`（`phase: "event"`，`args.action` 为 `share` / `close` / `stop` / `install` / `get` / `put`，`args` 带路径、本地端口、TTL 与路由，不含任何内容——`xfer_put` 的 base64 也只记长度）。**关掉共享的那一条另带 `args.usage`**（`requests` / `bytes` / `uploads`）：代理数这一路上过了多少请求与字节，字节按两个 content-length 计，所以是下限不是测量。它说的是「有多少东西流过」，不是「谁流的」——token 是共享的，字节不带身份。共享开着而没人动过时这个字段整个不在（不是一个 0）。
+`tools/list` 里那三个名字不是宿主的工具，是桥自己服务的（`src/xfer.ts`）。**按「`tools/list` 里每个名字都是宿主工具」写死的客户端要改：目录是宿主注册表逐字加恰好这三个。** 三者都由桥分派，不进宿主的 `getToolByName()`，也不过宿主的审批门；每次动作写一条审计，`tool: "xfer"`（`phase: "event"`，`args.action` 为 `share` / `close` / `stop` / `install`，`args` 带路径、本地端口、TTL 与路由，不含任何内容）。**关掉共享的那一条另带 `args.usage`**（`requests` / `bytes` / `uploads`）：代理数这一路上过了多少请求与字节，字节按两个 content-length 计，所以是下限不是测量。它说的是「有多少东西流过」，不是「谁流的」——token 是共享的，字节不带身份。共享开着而没人动过时这个字段整个不在（不是一个 0）。
 
 **`xfer_share`** — 参数 `{ path, ttlSeconds? }`。`path` 必填，是文件或目录（`~` 与 `~/x` 展开到宿主家目录，相对路径按宿主的 working directory 解析）；`ttlSeconds` 缺省 3600。成功时 `result.content[0].text` 是一段 JSON：
 
@@ -174,18 +174,15 @@ providers:
   "route": "/xfer/",
   "path": "<绝对路径>", "port": 52137, "replaced": false,
   "startedAt": "2026-10-16T04:35:23.000Z", "expiresAt": "2026-10-16T05:35:23.000Z",
-  "usage": { "download": "curl -H 'Authorization: Bearer <TOKEN>' -O http://127.0.0.1:44347/xfer/<name>",
-             "upload": "curl -H 'Authorization: Bearer <TOKEN>' -T <local> http://127.0.0.1:44347/xfer/<name>",
-             "public": "curl -H 'Authorization: Bearer <TOKEN>' -O https://calm-river-xyz.trycloudflare.com/xfer/<name>" },
   "installed": { "dufs": null } }
 ```
 
-- 共享不再有公网那一半：桥把 `dufs` 反向下代理到自己端点的 `/xfer/` 路由上，`url` 就是那条路由，`port` 是 `dufs` 自己听的回环端口。`usage` 里的 `<TOKEN>` 是占位符，桥不回自己的 token——拿着 token 的人配置里读得到，回包里不需要再抄一份。
-- `publicUrl` 是同一个 `/xfer/` 路由在操作员那条隧道上的地址，`null` 表示隧道没开。**它读的是现成状态，不新增暴露面**：隧道是 `/a2mcp tunnel` 开的，工具既不开也不关它；主机名本来就不是秘密（隧道那节的审计里就写着它）。读的是调用那一刻的状态——隧道在共享期间开或关，`xfer_status` 立刻跟着变。隧道没开时 `usage.public` 不给地址，改成点名两条路：SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`（那一行的原文是 `no public address — \`/a2mcp tunnel\` is closed; use an SSH port forward to the bridge port, or ask the operator to run \`/a2mcp tunnel\``）。远端调用方拿到回包就能拼出文件地址，不必自己再起一条隧道。
+- 共享不再有公网那一半：桥把 `dufs` 反向下代理到自己端点的 `/xfer/` 路由上，`url` 就是那条路由，`port` 是 `dufs` 自己听的回环端口。回包是一行紧凑 JSON：不缩进，也不附 `curl` 用法——它是给模型读的，缩进与拿不到 token 的示例命令都只是在花上下文。
+- `publicUrl` 是同一个 `/xfer/` 路由在操作员那条隧道上的地址，`null` 表示隧道没开。**它读的是现成状态，不新增暴露面**：隧道是 `/a2mcp tunnel` 开的，工具既不开也不关它；主机名本来就不是秘密（隧道那节的审计里就写着它）。读的是调用那一刻的状态——隧道在共享期间开或关，`xfer_status` 立刻跟着变。隧道没开时 `publicUrl` 就是 `null`；要够到路由，用 SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。
 - 回包里如果还出现 `user` / `secret` / `host` 三个字段，那不是调用方自己起的隧道，是宿主还跑着 0.6.0 之前的版本（那版每次共享自带一条 cloudflared）：判据是 `initialize` 回的 `serverInfo.version`。
-- 代理的契约（`src/server.ts` 的 `proxyXfer`）：`/xfer` 前缀之后的路径**逐字转发**，query 带上（`?json` 可用）；`Authorization` 一律换成桥为这次共享生成的 basic-auth 对，调用方带什么都不影响；逐跳头两边都删，回包额外删 `www-authenticate`；`Accept-Encoding` 改写为 `identity`，避免上游压缩后桥再压缩一遍；`redirect: "manual"`，上游的 3xx 原样报给调用方而不是由桥跟着跑。`dufs` 起不来或共享已经关掉，回 `502`，端口号只进宿主 stderr。
+- 代理的契约（`src/server.ts` 的 `proxyXfer`）：`/xfer` 前缀之后的路径、方法、query 与正文**逐字转发**（`?json` 可用，单请求上限 128 MB）；`Authorization` 一律换成桥为这次共享生成的 basic-auth 对，调用方带什么都不影响；逐跳头两边都删，回包额外删 `www-authenticate`；`Accept-Encoding` 改写为 `identity`，避免上游压缩后桥再压缩一遍；`redirect: "manual"`，上游的 3xx 原样报给调用方而不是由桥跟着跑。`dufs` 起不来或共享已经关掉，回 `502`，端口号只进宿主 stderr。
 - 路径逐字转发靠的是 `dufs --path-prefix /xfer`：目录列表里的绝对引用、`?json` 的 `uri_prefix`、WebDAV 的 `D:href` 都带着前缀，跟着一个链接不会掉出路由。不加这个旗标时它们写成根绝对路径（`/__dufs_v0.46.0__/index.css`、`/up.txt`），代理剥掉前缀就全指错地方——这一条是 0.46.0 真机量出来的，`test:obtain` 与 `test:install` 每轮各验一次。
-- 桥只向文件服务器要了上传（`--allow-upload`），`DELETE` 与 `MOVE` 回 403；`MKCOL`、`PROPFIND`、Range 与目录列表是 `dufs` 自带的能力。**那条路由说的是 WebDAV**——在 HTTP 上搬文件的标准协议，桥不自带字节协议，只是把一个现成的 WebDAV 服务器挂在自己端口后面：任何能发 `Authorization: Bearer <token>` 的 WebDAV 客户端（`rclone`、`curl`、自己写的 HTTP 客户端）都能挂它，GET 下行、PUT 上行、PROPFIND 列目录、Range 续传。浏览器加不了那个头，所以它拿到的与不带 token 的人一样是 401。
+- 桥只向文件服务器要了上传（`--allow-upload`），`DELETE` 与 `MOVE` 回 403；`MKCOL`、`PROPFIND`、Range 与目录列表是 `dufs` 自带的能力。上传的分块写法也是 `dufs` 的：第一块 `PUT` 建文件，之后每块 `PATCH` 带 `X-Update-Range: append` 追加；PATCH 一个不存在的文件是 404，覆盖一个已存在且非空的文件需要 `--allow-delete`，桥不开，所以那条路是 403。**那条路由说的是 WebDAV**——在 HTTP 上搬文件的标准协议，桥不自带字节协议，只是把一个现成的 WebDAV 服务器挂在自己端口后面：任何能发 `Authorization: Bearer <token>` 的 WebDAV 客户端（`rclone`、`curl`、自己写的 HTTP 客户端）都能挂它，GET 下行、PUT 上行、PROPFIND 列目录、Range 续传。浏览器加不了那个头，所以它拿到的与不带 token 的人一样是 401。
 - 同一时刻只有一个共享：第二次 `xfer_share` 先关掉前一个，回包 `replaced: true`。
 - 文件服务器由桥自己找（`src/obtain.ts`）。配置里的值带 `/` 或 `\` 就按那条路径用，缺了也不下载，这是「这台机器不许下载」的写法；不带分隔符就扫本机 `PATH`（Windows 中按 `PATHEXT` 的后缀逐个试），其次复用桥自己装过的那一份（登记在 `<agentDir>/a2mcp.installs.json`），都没有才去下载：版本与 asset 名是代码里的字面量，字节回来先比对同一处钉住的 sha256，再取出要的那一个文件——`.tar.gz` 交给 `tar` 解到临时目录并检查条目没跑出目录之外，`.zip` 在本仓库自己的读取器里展开那一个条目、一个字节都不落盘，裸 `.exe` 直接就是它——最后以 `0755` 原子写入安装目录（Windows 上文件名带 `.exe`，目录是 `%LOCALAPPDATA%\a2mcp\bin`；`0755` 是 POSIX 的位，在那边没有意义）。不请求 `latest`，也不向给字节的那台服务器要校验和；升级是改这个仓库的一次提交。桥不会覆盖一个不是自己装的文件，报它的哈希了事。两条都钉死了 Linux x64/arm64、macOS x64/arm64、Windows x64 五项：`dufs` 0.46.0（Linux 取 musl 静态构建，Windows 是 zip 里的 `dufs.exe`），`cloudflared` 2026.10.1（Linux 是裸 ELF，macOS 是 `.tgz` 里一个 `cloudflared`，Windows 是 `.exe`）。`win32-arm64` 这一行是空的，因为上游不发 `cloudflared` 的那个构建；两张表是共享还要两个二进制那会儿一起钉的，如今 `xfer_share` 只需要 `dufs`，这一行可以单补文件服务器，目前没补。下载过三道门：64 MB 的体积上限、30 秒的无字节空闲窗、10 分钟的总期限。空闲窗在请求发出前就武装、每来一块字节就重新计时，连接死了 30 秒内就报，不会拖满总时长；还在进字节的慢流可以一路跑到总期限。这个形状是 2026-10-20 一次真机读数换来的：此前是一道 120 秒的墙上时钟管全身，慢连接与死连接拿的是同一句 `The operation timed out.`，Windows 主机上 52.7 MB 的 `.exe` 在它里面取不完（450 KB/s 起步的门槛）。超时之外还有一种失败：哈希与钉值不符则拒绝安装，说的是字节本身。两条超时都点名逃生门——把二进制放上 `PATH`，或在配置 `xfer.<name>` 写它的绝对路径，桥就按原样用、不再下载。`bun run test:obtain` 每轮把钉表里十个 asset 的 URL 全部 `HEAD` 一遍，本机这一行真下、真跑，Windows 那两行真下、只到字节为止（zip 解出 `dufs.exe`、`.exe` 认出 PE 头），跑不了。
 - 失败一律 `200` + `isError: true`，text 就是原因：缺 `path` 为 `xfer_share needs a 'path' — the file or directory to serve`；路径 `stat` 失败为 `cannot serve <path>: <原因>`；文件服务器起不来为子进程的错误原文。获取二进制失败的另外写一条 `install` 审计，带上是哪个 asset、钉的是哪个哈希；成功的那条同样在 `spawn` 之前落盘。
@@ -194,11 +191,14 @@ providers:
 
 **`xfer_stop`** — 无参数。有共享：`{"stopped": true, "path"}`；没有：`{"stopped": false, "note": "nothing was shared"}`，没共享也不报错。
 
-**`xfer_get`** — 参数 `{ name, offset?, maxBytes? }`。`name` 是共享根下的路径（前导 `/` 当共享根，反斜杠当分隔符，`..` 直接拒），`offset` 缺省 0，`maxBytes` 缺省 262144、上限 1048576。回包 `{ name, offset, total, bytes, next, encoding: "base64", data }`：`total` 是文件大小，`next` 是下一次该传的 `offset`，读到末尾是 `null`。它向共享根发一次 Range GET，读的是文件服务器而不是磁盘，所以共享根、什么存在、什么算文件仍由 `dufs` 决定。`dufs` 对终点越过文件末尾的 Range 回 416，工具拿那条 `content-range` 换一个刚好到末尾的区间重试——最后一块不是 chunk 的整数倍时走的就是这条。目录读不了（`dufs` 对目录上的 Range 回 404），回包里点名列目录用宿主自己的工具。
+### 调用方一侧的代理：`scripts/a2mcp-proxy.mjs`
 
-**`xfer_put`** — 参数 `{ name, data, offset?, total? }`（`name` 同上）。不带 `offset` 的一次调用就是整份文件；分块时第一块带上 `total`，之后每块的 `offset` 用上一块回包的 `next`，累到 `total` 的那一次才写盘。回包未完成 `{ name, received, total, next, done: false }`，完成 `{ name, bytes, done: true }`。块在桥的内存里攒着：上限 16 MB，空闲 10 分钟丢弃，同时在飞最多四份，`offset: 0` 重新开始。超过上限直接拒，点名走 `/xfer/`；某一块长过已宣告的 `total` 也拒，点名 `offset: 0` 重来。写盘还是文件服务器做——一次 PUT 把组装好的字节交过去，路径与权限仍归它。
+协议面上没有更多工具。只会调工具、发不了带 `Authorization` 的 HTTP 请求的客户端，在**自己这一侧**跑仓库里的零依赖代理（Node 20+ 或 Bun；按 raw URL 分发，和 `scripts/mcp-call.py` 同一类交付）：客户端用 stdio 起它，它把 `initialize` / `tools/list` / `tools/call` 等逐字转给桥，再往目录末尾追加两个本地工具：
 
-这两个工具是给「只能发工具调用、发不了带 header 的 HTTP 请求」的调用方兜底的：base64 多 33%，一块一次调用、一块占一份上下文。能发 HTTP 的就走 `/xfer/`，那边一个字节都不经 JSON-RPC、一次一个 Range 或 PUT。
+- `a2mcp_upload { localPath, remotePath }`
+- `a2mcp_download { remotePath, localPath }`
+
+字节仍走 `/xfer/`：下载是一串 Range GET，写进 `<localPath>.a2mcp-part`，远程 etag 与大小没变就从断点续；上传第一块 `PUT` 建文件，之后每块 `PATCH` 带 `X-Update-Range: append`。缺省 8 MiB 一块（4 KiB 到 64 MiB），文件字节不进 JSON-RPC，也不进任何一方的上下文。共享优先复用：已有一份覆盖目标就借它；没有就自己开，传完只关自己开的那一份；已有共享不覆盖目标时直接拒绝，点名正在服务的路径，不顶掉也不停掉。上传不覆盖非空远端文件——这是 `--allow-upload` 的边界，覆盖要先在宿主上删。下载的本地目标用 rename 原子替换。代理不进 npm 包，也不是桥的协议面；它给桥带来的只是与任何 WebDAV 客户端相同的读请求。
 
 **关闭时机**：TTL 到期、`xfer_stop`、或桥停止（宿主退出）。到期与顶替走同一条关闭路径——`dufs` 收 `SIGTERM`，等它真的退出（监听先注册再发信号，`exit` 只发一次）——并写一条 `xfer` 审计（`args.why` 为 `replaced` / `ttl expired` / `bridge stopped`）。关完之后 `/xfer/` 回 404。
 

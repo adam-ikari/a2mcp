@@ -330,28 +330,24 @@ describe("xfer_share lifecycle", () => {
 			route: string;
 			port: number;
 			expiresAt: string;
-			usage: Record<string, string>;
 			user?: string;
 			secret?: string;
 			host?: string;
 		};
 		expect(body.url).toBe(`${BRIDGE_ORIGIN}${XFER_ROUTE}/`);
-		// No tunnel in this test: the field is present and null, and the usage line
-		// names the two routes left instead of leaving the caller to guess one.
+		// No tunnel in this test: the field is present and null. The reply carries no
+		// curl recipes either — a model reads it, and the token placeholder in them
+		// was never usable from that side.
 		expect(body.publicUrl).toBeNull();
-		expect(body.usage.public).toContain("no public address");
-		expect(body.usage.public).toContain("SSH port forward");
-		expect(body.usage.public).toContain("/a2mcp tunnel");
 		expect(body.route).toBe(`${XFER_ROUTE}/`);
 		expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
+		// Compact JSON: indentation costs tokens in every reply a model reads.
+		expect(textOf(r)).not.toContain("\n");
 		// The fields the tunnel era returned are gone rather than emptied: a caller
 		// reading `user`/`secret` would go looking for credentials that no longer exist.
 		expect(body.user).toBeUndefined();
 		expect(body.secret).toBeUndefined();
 		expect(body.host).toBeUndefined();
-		expect(Object.keys(body.usage).sort()).toEqual(["download", "public", "upload"]);
-		expect(body.usage.download).toContain("Bearer <TOKEN>");
-		expect(body.usage.download).toContain(`${BRIDGE_ORIGIN}${XFER_ROUTE}/<name>`);
 
 		// The proxy's seam is the loopback origin and the internal credential, and the
 		// stub checks exactly those on the port the module picked.
@@ -434,11 +430,8 @@ describe("xfer_share lifecycle", () => {
 
 		const started = JSON.parse(textOf(await x.call("xfer_share", { path: dir }, "sid-5"))) as {
 			publicUrl: string | null;
-			usage: Record<string, string>;
 		};
 		expect(started.publicUrl).toBe(`${PUBLIC_ORIGIN}${XFER_ROUTE}/`);
-		expect(started.usage.public).toContain("Bearer <TOKEN>");
-		expect(started.usage.public).toContain(`${PUBLIC_ORIGIN}${XFER_ROUTE}/<name>`);
 
 		const open = JSON.parse(textOf(await x.call("xfer_status", {}, "sid-5"))) as { publicUrl: string | null };
 		expect(open.publicUrl).toBe(`${PUBLIC_ORIGIN}${XFER_ROUTE}/`);
@@ -534,312 +527,5 @@ describe("xfer_share lifecycle", () => {
 		expect(expired).toContain("ttl expired");
 		expect(x.target()).toBeNull();
 		expect(portIsFree(started.port)).toBe(true);
-	});
-});
-
-/**
- * `xfer_get` / `xfer_put`: the same file carried in base64 chunks for a caller that
- * can make a tool call but cannot send an HTTP request with a header.
- *
- * The stub above answers Range the way `dufs` 0.46.0 does (206 with a content-range,
- * 416 with the total, 404 for a directory), because both tools read and write through
- * it: what is being tested here is the arithmetic around those answers — where a chunk
- * ends, what `next` means, when a file is complete — and the refusals that keep a name
- * inside the share.
- */
-describe("the chunk tools", () => {
-	const shareDir = () => {
-		const d = mkdtempSync(join(dir, "chunks-"));
-		mkdirSync(d, { recursive: true });
-		return d;
-	};
-	/** Bytes that survive a round trip only if nothing treats them as text. */
-	const bytesOf = (n: number) => Buffer.from(Array.from({ length: n }, (_, i) => (i * 37 + 11) % 256));
-	const openShare = async (x: Xfer, path: string) => {
-		const r = await x.call("xfer_share", { path, ttlSeconds: 60 }, "sid-chunk");
-		if (r.isError) throw new Error(textOf(r));
-	};
-
-	interface Chunk {
-		name: string;
-		offset: number;
-		total: number | null;
-		bytes: number;
-		next: number | null;
-		encoding: string;
-		data: string;
-	}
-
-	test("a chunk read walks a file to its end, and the pieces reassemble it byte-exact", async () => {
-		const d = shareDir();
-		const original = bytesOf(1000);
-		writeFileSync(join(d, "blob.bin"), original);
-		const x = makeXfer();
-		await openShare(x, d);
-
-		const pieces: Buffer[] = [];
-		let offset = 0;
-		let total: number | null = null;
-		let calls = 0;
-		for (;;) {
-			const r = JSON.parse(
-				textOf(await x.call("xfer_get", { name: "blob.bin", offset, maxBytes: 137 }, "sid-chunk")),
-			) as Chunk;
-			calls++;
-			expect(r.encoding).toBe("base64");
-			expect(r.offset).toBe(offset);
-			total ??= r.total;
-			expect(r.total).toBe(original.length);
-			pieces.push(Buffer.from(r.data, "base64"));
-			if (r.next === null) break;
-			expect(r.next).toBe(offset + r.bytes);
-			offset = r.next;
-			expect(calls).toBeLessThan(20);
-		}
-		// 1000 bytes in 137-byte pieces: eight calls, the last one partial.
-		expect(calls).toBe(8);
-		expect(Buffer.concat(pieces).equals(original)).toBe(true);
-		expect(total).toBe(1000);
-	});
-
-	test("the chunk is 256 KB unless asked otherwise, and a single call is capped at 1 MB", async () => {
-		const d = shareDir();
-		writeFileSync(join(d, "big.bin"), bytesOf(1_500_000));
-		const x = makeXfer();
-		await openShare(x, d);
-
-		const plain = JSON.parse(textOf(await x.call("xfer_get", { name: "big.bin" }, "sid-chunk"))) as Chunk;
-		expect(plain.bytes).toBe(256 * 1024);
-		expect(Buffer.from(plain.data, "base64").length).toBe(256 * 1024);
-
-		const greedy = JSON.parse(
-			textOf(await x.call("xfer_get", { name: "big.bin", offset: 0, maxBytes: 8 * 1024 * 1024 }, "sid-chunk")),
-		) as Chunk;
-		expect(greedy.bytes).toBe(1024 * 1024);
-
-		// A fraction under one byte is one byte, not an empty range: `bytes=0--1` is
-		// not a request any server accepts.
-		const tiny = JSON.parse(textOf(await x.call("xfer_get", { name: "big.bin", maxBytes: 0.5 }, "sid-chunk"))) as Chunk;
-		expect(tiny.bytes).toBe(1);
-
-		// And the tail of the file is where the cap stops mattering.
-		const tail = JSON.parse(
-			textOf(await x.call("xfer_get", { name: "big.bin", offset: 1_450_000, maxBytes: 1024 * 1024 }, "sid-chunk")),
-		) as Chunk;
-		expect(tail.bytes).toBe(50_000);
-		expect(tail.next).toBeNull();
-	});
-
-	test("a range at or past the end answers done with no bytes, and an empty file is one such call", async () => {
-		const d = shareDir();
-		writeFileSync(join(d, "ten.txt"), "0123456789");
-		writeFileSync(join(d, "empty.txt"), "");
-		const x = makeXfer();
-		await openShare(x, d);
-
-		const past = JSON.parse(textOf(await x.call("xfer_get", { name: "ten.txt", offset: 10 }, "sid-chunk"))) as Chunk;
-		expect(past).toMatchObject({ offset: 10, total: 10, bytes: 0, next: null, data: "" });
-
-		const empty = JSON.parse(textOf(await x.call("xfer_get", { name: "empty.txt" }, "sid-chunk"))) as Chunk;
-		expect(empty).toMatchObject({ total: 0, bytes: 0, next: null, data: "" });
-	});
-
-	test("a name never leaves the share, and a directory is not read in chunks", async () => {
-		const d = shareDir();
-		mkdirSync(join(d, "sub"));
-		writeFileSync(join(dir, "outside.txt"), "not yours");
-		const x = makeXfer();
-		await openShare(x, d);
-
-		const up = await x.call("xfer_get", { name: "../outside.txt" }, "sid-chunk");
-		expect(up.isError).toBe(true);
-		expect(textOf(up)).toContain("leaves the share");
-
-		// A leading slash means the share root — not the host's — so this is a miss
-		// inside the share, never the host's own /etc/passwd.
-		const absolute = await x.call("xfer_get", { name: "/etc/passwd" }, "sid-chunk");
-		expect(absolute.isError).toBe(true);
-		expect(textOf(absolute)).toContain("no file named 'etc/passwd'");
-
-		const dirOut = await x.call("xfer_get", { name: "sub" }, "sid-chunk");
-		expect(dirOut.isError).toBe(true);
-		expect(textOf(dirOut)).toContain("a directory is listed with the host's own tools");
-	});
-
-	test("both tools say what to call first when nothing is shared", async () => {
-		const x = makeXfer();
-		for (const tool of ["xfer_get", "xfer_put"]) {
-			const r = await x.call(tool, tool === "xfer_get" ? { name: "a" } : { name: "a", data: "YQ==" }, "sid-none");
-			expect(r.isError).toBe(true);
-			expect(textOf(r)).toContain("call xfer_share first");
-		}
-	});
-
-	test("a chunked upload lands byte-exact, and only the last call writes", async () => {
-		const d = shareDir();
-		const original = bytesOf(900);
-		const x = makeXfer();
-		await openShare(x, d);
-
-		const first = JSON.parse(
-			textOf(
-				await x.call(
-					"xfer_put",
-					{ name: "up.bin", data: original.subarray(0, 300).toString("base64"), offset: 0, total: 900 },
-					"sid-chunk",
-				),
-			),
-		) as { received: number; total: number; next: number; done: boolean };
-		expect(first).toMatchObject({ received: 300, total: 900, next: 300, done: false });
-		expect(existsSync(join(d, "up.bin"))).toBe(false);
-
-		await x.call(
-			"xfer_put",
-			{ name: "up.bin", data: original.subarray(300, 600).toString("base64"), offset: 300 },
-			"sid-chunk",
-		);
-		expect(existsSync(join(d, "up.bin"))).toBe(false);
-
-		const last = JSON.parse(
-			textOf(
-				await x.call(
-					"xfer_put",
-					{ name: "up.bin", data: original.subarray(600).toString("base64"), offset: 600, total: 900 },
-					"sid-chunk",
-				),
-			),
-		) as { bytes: number; done: boolean };
-		expect(last).toMatchObject({ bytes: 900, done: true });
-		expect(readFileSync(join(d, "up.bin")).equals(original)).toBe(true);
-	});
-
-	test("one call with no offset writes the whole file, and url-safe base64 is read as itself", async () => {
-		const d = shareDir();
-		const x = makeXfer();
-		await openShare(x, d);
-		// 0xfb 0xff encodes to `+/8=`, which is `-_8=` in the url-safe alphabet.
-		const raw = Buffer.from([0xfb, 0xff, 0x00]);
-		const urlSafe = raw.toString("base64url");
-		const r = JSON.parse(textOf(await x.call("xfer_put", { name: "one.bin", data: urlSafe }, "sid-chunk"))) as {
-			bytes: number;
-			done: boolean;
-		};
-		expect(r).toMatchObject({ bytes: 3, done: true });
-		expect(readFileSync(join(d, "one.bin")).equals(raw)).toBe(true);
-	});
-
-	test("an out-of-order chunk is refused, and the staged pieces are still there", async () => {
-		const d = shareDir();
-		const x = makeXfer();
-		await openShare(x, d);
-		await x.call("xfer_put", { name: "seq.bin", data: "AAAA", offset: 0, total: 9 }, "sid-chunk");
-
-		const wrong = await x.call("xfer_put", { name: "seq.bin", data: "AAAA", offset: 6 }, "sid-chunk");
-		expect(wrong.isError).toBe(true);
-		expect(textOf(wrong)).toContain("expected offset 3");
-
-		// The right offset still completes it: a refused piece loses nothing.
-		const done = JSON.parse(
-			textOf(await x.call("xfer_put", { name: "seq.bin", data: "AAAAAAAA", offset: 3, total: 9 }, "sid-chunk")),
-		) as { bytes: number; done: boolean };
-		expect(done).toMatchObject({ bytes: 9, done: true });
-		expect(readFileSync(join(d, "seq.bin")).toString("base64")).toBe("AAAAAAAAAAAA");
-	});
-
-	test("a file over the cap is refused before anything is buffered", async () => {
-		const d = shareDir();
-		const x = makeXfer();
-		await openShare(x, d);
-		const r = await x.call(
-			"xfer_put",
-			{ name: "huge.bin", data: "AAAA", offset: 0, total: 17 * 1024 * 1024 },
-			"sid-chunk",
-		);
-		expect(r.isError).toBe(true);
-		expect(textOf(r)).toContain("belongs on the /xfer/ route");
-		expect(existsSync(join(d, "huge.bin"))).toBe(false);
-	});
-
-	test("a half-sent upload is dropped with the share it was aimed at", async () => {
-		const d = shareDir();
-		const x = makeXfer();
-		await openShare(x, d);
-		await x.call("xfer_put", { name: "later.bin", data: "AAAA", offset: 0, total: 9 }, "sid-chunk");
-
-		// The next share serves a different path; a piece arriving against it would be
-		// written into a file the caller never named.
-		await x.call("xfer_stop", {}, "sid-chunk");
-		await openShare(x, d);
-		const r = await x.call("xfer_put", { name: "later.bin", data: "AAAA", offset: 3, total: 9 }, "sid-chunk");
-		expect(r.isError).toBe(true);
-		expect(textOf(r)).toContain("start again with offset 0");
-	});
-
-	test("an upload nobody finished is forgotten after ten minutes", async () => {
-		const d = shareDir();
-		let clock = 1_000_000;
-		const x = createXfer(
-			{ dufs: stub, cloudflared: "cloudflared-not-used-here" },
-			{ now: () => clock, bridgeUrl: () => BRIDGE_ORIGIN },
-		);
-		opened.push(x);
-		await openShare(x, d);
-		await x.call("xfer_put", { name: "idle.bin", data: "AAAA", offset: 0, total: 9 }, "sid-chunk");
-
-		clock += 10 * 60 * 1000 + 1;
-		const late = await x.call("xfer_put", { name: "idle.bin", data: "AAAA", offset: 3, total: 9 }, "sid-chunk");
-		expect(late.isError).toBe(true);
-		expect(textOf(late)).toContain("start again with offset 0");
-	});
-
-	test("a name with spaces and a hash travels as itself in both directions", async () => {
-		const d = shareDir();
-		const x = makeXfer();
-		await openShare(x, d);
-		await x.call("xfer_put", { name: "a b#c.txt", data: Buffer.from("odd name").toString("base64") }, "sid-chunk");
-		expect(readFileSync(join(d, "a b#c.txt"), "utf8")).toBe("odd name");
-
-		const back = JSON.parse(textOf(await x.call("xfer_get", { name: "a b#c.txt" }, "sid-chunk"))) as Chunk;
-		expect(Buffer.from(back.data, "base64").toString()).toBe("odd name");
-	});
-
-	test("a chunk that runs past the announced total is refused, and nothing is written", async () => {
-		const d = shareDir();
-		const x = makeXfer();
-		await openShare(x, d);
-		const r = await x.call(
-			"xfer_put",
-			{ name: "liar.bin", data: Buffer.alloc(6).toString("base64"), offset: 0, total: 3 },
-			"sid-chunk",
-		);
-		expect(r.isError).toBe(true);
-		expect(textOf(r)).toContain("runs to 6 bytes");
-		expect(existsSync(join(d, "liar.bin"))).toBe(false);
-	});
-
-	test("a backslash reads as a separator, the way a Windows caller writes a path", async () => {
-		const d = shareDir();
-		mkdirSync(join(d, "sub"), { recursive: true });
-		writeFileSync(join(d, "sub", "nested.txt"), "deep");
-		const x = makeXfer();
-		await openShare(x, d);
-		const r = JSON.parse(textOf(await x.call("xfer_get", { name: "sub\\nested.txt" }, "sid-chunk"))) as Chunk;
-		expect(Buffer.from(r.data, "base64").toString()).toBe("deep");
-	});
-
-	test("each chunk is one record, and the payload is not in it", async () => {
-		const d = shareDir();
-		const x = makeXfer();
-		await openShare(x, d);
-		await x.call("xfer_put", { name: "audited.bin", data: Buffer.from(bytesOf(64)).toString("base64") }, "sid-chunk");
-		await x.call("xfer_get", { name: "audited.bin" }, "sid-chunk");
-
-		const recs = (await recordsFor("audited.bin")).map(
-			(l) => JSON.parse(l) as { args?: string; isError?: boolean; tool?: string },
-		);
-		const actions = recs.map((r) => (JSON.parse(r.args ?? "{}") as { action?: string }).action);
-		expect(actions).toContain("put");
-		expect(actions).toContain("get");
-		for (const r of recs) expect(JSON.stringify(r)).not.toContain("AAEC");
 	});
 });

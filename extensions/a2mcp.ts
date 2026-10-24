@@ -68,9 +68,9 @@ Give every call a timeout of your own. A call can hang: a permission prompt on t
 
 What you run there stays there: nothing on that machine is rolled back for you.
 
-Files move two ways. \`xfer_share\` opens a WebDAV route on the bridge's own origin (\`/xfer/\`); if you can send an HTTP request with \`Authorization: Bearer <token>\`, use it — GET, Range, PUT, one request per file, no base64. If you cannot, \`xfer_get\` and \`xfer_put\` carry the same file in base64 chunks over tool calls: each reply gives the \`next\` offset, and \`xfer_put\` writes the file when its pieces reach \`total\`. Never paste megabytes into a command.
+Files move over the bridge's WebDAV route, never through tool arguments: \`xfer_share\` opens \`/xfer/\` on a host path, then GET (Range works) downloads and PUT uploads with \`Authorization: Bearer <token>\`. If your client can read the a2mcp repository, point it at \`scripts/a2mcp-proxy.mjs\` (Node 20+ or Bun, no dependencies): it wraps this endpoint on stdio and adds \`a2mcp_upload\` and \`a2mcp_download\`, each taking a local path on your side and a path on the host, and moves the bytes in chunks with no base64 in the conversation. An upload never overwrites a non-empty file on the host; remove it there first. Never paste megabytes into a command.
 
-If your side cannot speak MCP to this endpoint, the bridge ships a zero-dependency reference client — \`scripts/mcp-call.py\` in the a2mcp repository. Use it; do not write your own client.`;
+If your side cannot speak MCP to this endpoint, use the bridge's zero-dependency clients instead of writing your own: \`scripts/mcp-call.py\` for single calls, \`scripts/a2mcp-proxy.mjs\` for a session with file transfer.`;
 
 let server: { port: number; fellBack: boolean; stop(): void } | null = null;
 let cfg: BridgeConfig | null = null;

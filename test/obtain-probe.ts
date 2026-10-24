@@ -181,7 +181,6 @@ const share = JSON.parse(bodyText) as {
 	url: string;
 	route: string;
 	port: number;
-	usage: Record<string, string>;
 	installed: { dufs: string | null };
 	user?: string;
 	secret?: string;
@@ -201,9 +200,9 @@ check(
 	share.url,
 );
 check(
-	share.usage.download.includes("Bearer <TOKEN>"),
-	"usage asks for the bridge token, not a password",
-	share.usage.download,
+	!bodyText.includes("\n") && !("usage" in share),
+	"the reply is one compact line and carries no curl recipes",
+	`${bodyText.length} bytes`,
 );
 
 const target2 = xfer.target();
