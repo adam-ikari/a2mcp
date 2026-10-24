@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-24T12:52:50"
+updated: "2026-10-24T15:18:13"
 ---
 
 <!-- compiled_truth -->
@@ -1205,4 +1205,22 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   kind: reversal
   summary: "2026-10-24：反转 2026-10-23 的 xfer_get / xfer_put（base64 分块进 tools/call）。理由是字节走 JSON-RPC 的代价（+33%、一块一次调用与一份上下文）买不到 /xfer 原本没有的能力，且桥自带工具绕过宿主审批门；分块改由调用方一侧的 scripts/a2mcp-proxy.mjs 承担，桥恢复三个 xfer_* 工具，文件字节不过 MCP。证据：bun test 292、test:proxy 19、test:tunnel-xfer 10 全绿。"
   source: "2026-10-24 操作者要求：文件传输不使用 base64，改由客户端 MCP 代理自动分块"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-24T14:58:03
+  kind: decision
+  summary: "文件出口只有桥给的地址：共享回的 publicUrl，或操作员开的 /a2mcp tunnel，没有时用 SSH 转发。远程提示词明确禁止调用方自己起隧道或第二个文件服务器——那条主机名不在桥的 token 后面，等于把文件放到公网上。起因是一台机器上出现了一条不属于桥的 quick tunnel（cloudflared 指向 python3 -m http.server），而桥当天的审计里 tool: tunnel 是零条。工具自己仍然从不开隧道。"
+  source: "session 2026-10-24; extensions/a2mcp.ts REMOTE_PROMPT; README.md/README_ZN.md 提示词段; docs/protocol.md publicUrl"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-24T15:03:26
+  kind: decision
+  summary: "MCP initialize 现在回 instructions：一份给远端 agent 的完整用法说明，原文在 src/instructions.ts，/a2mcp prompt 打印同一段。之前 initialize 只有 protocolVersion/capabilities/serverInfo，客户端模型只看得到工具签名；操作员不贴提示词，agent 就不知道文件怎么搬、更不知道不许自己起隧道。说明覆盖调用方式与 xfer 全流程（xfer_share 字段、GET/Range、PUT+PATCH append、PROPFIND、403 边界、代理分块与续传、共享复用与只关自己开的、publicUrl 与隧道边界、不要用 read/bash 搬字节），不带 URL 与 token。客户端显示 instructions 时操作员不必再贴；不显示时仍用 /a2mcp prompt。"
+  source: "session 2026-10-24; src/instructions.ts; src/server.ts initialize; extensions/a2mcp.ts REMOTE_PROMPT"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-24T15:18:13
+  kind: decision
+  summary: "调用方代理随桥一起发：GET /a2mcp/proxy.mjs 回 scripts/a2mcp-proxy.mjs 的源码（同一 Bearer、不建会话、不写审计、包内缺失回 404），代理同时加 upload/download 两个命令行子命令，给拿得到 shell 却改不了 MCP 客户端配置的一侧用。位置不变——代理仍在调用方一侧，不是桥的协议面；变的只是它现在可被取到，agent 不必照说明重写分块客户端，更不必为传文件自己起隧道或第二个文件服务器。package.json 的 files 加了这个脚本；instructions 第 3 步把 stdio 与命令行两条路都点名。"
+  source: "session 2026-10-24; src/server.ts CLIENT_ROUTE; scripts/a2mcp-proxy.mjs; src/instructions.ts; package.json"
   affects: [a2a-mcp-bridge]
