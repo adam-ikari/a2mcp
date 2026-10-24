@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-23T09:49:10"
+updated: "2026-10-24T12:52:50"
 ---
 
 <!-- compiled_truth -->
@@ -147,7 +147,7 @@ node_modules 漂移同一未知机制再次复发（宿主已到 18.4.4，pin �
 
 ## 传文件的两个外部二进制：从「只命名」改为「缺的自己按钉值拉」（2026-10-17 修订，2026-10-19 补上 win32）
 
-`xfer_share` / `xfer_status` / `xfer_stop`（`src/xfer.ts`）由桥自己服务，追加在宿主注册表之后，因此绕过宿主审批门；字节走普通 HTTP——dufs 在 `127.0.0.1` 上以随机端口和随机 basic auth 起服务，cloudflared quick tunnel 给它一个公网主机名。
+`xfer_share` / `xfer_status` / `xfer_stop`（`src/xfer.ts`）由桥自己服务，追加在宿主注册表之后，因此绕过宿主审批门；字节只走这条路由，不过 MCP——dufs 在 `127.0.0.1` 上以随机端口和随机 basic auth 起服务，cloudflared quick tunnel 给它一个公网主机名。
 
 这条 2026-10-17 翻了面：原先的契约是「二进制只命名、不内置、也不下载」，现在是**缺的那一个由桥自己拉进它自己的安装目录**：POSIX 是 `~/.local/bin`，Windows 是 `%LOCALAPPDATA%\a2mcp\bin`。unix 那一支一个字没改，因为它是文档写死的位置、也是 `test:obtain` 断言的一部分；Windows 选 `LOCALAPPDATA` 而不是 `USERPROFILE\.local\bin`，因为那才是 Windows 上放东西的地方，而且与官方安装器写宿主的 `%LOCALAPPDATA%\omp` 同处。（操作者定死，dufs 与 cloudflared 都要，触发点是首次 `xfer_share`）。解析顺序四步：配置里的值含 `/` **或 `\`** 就原样用且**绝不下载**（这是「这台机器永远不许下载」的唯一出口，裸写 `"dufs"` 不是出口；只认 `/` 的那一版会把 `C:\tools\dufs.exe` 当裸名字送去查 PATH，等于把一句「不许下载」读成「去下载」）→ 在 `PATH` 上逐段找可执行文件（不起 shell、不 `which`，机器有就别抢；Windows 按 `PATHEXT` 的后缀逐个试，取不到就用 `.EXE;.CMD;.BAT;.COM`）→ 安装目录里那个文件（Windows 上叫 `<name>.exe`）已存在、且它自己的 sha256 等于登记里桥为这一条写下的那一行，就复用 → 下载。
 
@@ -173,6 +173,20 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
 判据与落点：**工具不自己开隧道**这条不变（持 token 的调用方不能绕过操作员把宿主文件发布出去），但**读一个已经存在的状态**不新增暴露面——隧道是操作员开的，主机名本来就不是秘密（`docs/protocol.md` 的隧道审计里就写着它）。所以 `src/xfer.ts` 的 `XferDeps` 多一个 `publicUrl` getter，`extensions/a2mcp.ts` 把它接到 `mcpTunnel?.url ?? null`；`xfer_share` 与 `xfer_status` 的回包多一个 `publicUrl`（`https://<随机>.trycloudflare.com/xfer/`，隧道没开是 `null`），读的是调用那一刻的状态——隧道在共享期间开或关，`xfer_status` 立刻跟着变。隧道没开时 `usage.public` 不给地址，改成点名两条路：SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。工具描述也按这个改口：隧道开着时 `publicUrl` 就是同一路由在那条主机名下的地址。
 
 **教训与既有那条同源**：一条「不自己开隧道」的边界容易被读成「工具不提隧道」。前者是**不制造新的暴露面**，后者是**不告诉调用方已经存在的暴露面**——后者恰恰让远端 agent 自己去造了一条。回包里少了什么，比多写了什么更容易被当成漏洞。
+
+## 字节不过 MCP：分块在调用方一侧的代理里（2026-10-24 决定）
+
+2026-10-23 曾给桥加了 `xfer_get` / `xfer_put`（base64 分块），照顾「只会发工具调用、发不了带 `Authorization` 头的 HTTP 请求」的调用方。一天后删掉。字节一旦走工具调用，base64 多 33%，一块一次调用、一块占一份模型上下文；这些成本买不到桥原本没有的东西——`/xfer/` 已经能读、能写、能续传，缺的只是调用方那一侧的客户端。桥自带工具还绕过宿主审批门，把字节搬进 `tools/call` 等于再开一条越门路径。
+
+现在桥的传输工具仍是三个（`xfer_share` / `xfer_status` / `xfer_stop`），一个文件字节都不经过 MCP。需要分块的调用方用 `scripts/a2mcp-proxy.mjs`：零依赖 ESM、stdio 上的 MCP 服务，原样转发宿主工具，另加两个本地工具 `a2mcp_upload {localPath, remotePath}` 与 `a2mcp_download {remotePath, localPath}`。它从 `A2MCP_URL` / `A2MCP_TOKEN` 两个环境变量取地址与 token——token 不进命令行参数，也不进模型上下文。
+
+代理的形状：下载按 Range GET 一块块写进 `<localPath>.a2mcp-part`，旁边一个 `{etag,size}` sidecar，远端没变就从中断处续；上传第一块 `PUT` 建文件，之后每块 `PATCH` 带 `X-Update-Range: append`。续传状态放在 `os.tmpdir()/a2mcp-proxy/`，键是 `sha256(baseUrl + "\n" + remotePath)`，并核对源文件的 size/mtime 与已发前缀的 sha256。默认块 8 MiB（4 KiB–64 MiB）。
+
+共享不归代理所有：目标落在已开的共享下就复用，否则自己开一个、传完关掉；关之前重读 `xfer_status`，只关 `path` 与 `startedAt` 都对得上的那一个。dufs 仍只开 `--allow-upload`，覆盖已存在的非空文件会 403，代理照实拒绝而不是先删；`DELETE` / `MOVE` 仍 403。单请求 128 MB 上限不变。
+
+代价：代理不在 npm 包里（`files` 不含 `scripts/`），不是协议的一部分，也不进桥的目录——它住在调用方机器上，和 `scripts/mcp-call.py` 同类。桥侧为省 context 改了三处：回包是单行紧凑 JSON、`xfer_share` 不再带 curl 示例、工具描述收短；回包字段一个没少。
+
+证据：`bun test` 292（`test/proxy-lib.test.ts` 12 项、`test/xfer-route.test.ts` 21 项、`test/xfer.test.ts` 20 项），`test:proxy` 19 项跑真 dufs——下载字节一致、上传先 PUT 后 PATCH、两个方向都续传、复用与不碰无关共享、覆盖被拒；`test:tunnel-xfer` 10 项仍过真 cloudflared。
 
 
 ## Timeline
@@ -1179,4 +1193,16 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   kind: reversal
   summary: "2026-10-23 桥不再说「字节永不经过 JSON-RPC」。xfer_share 那条 WebDAV 路由照旧是首选（一次 Range GET / 一次 PUT，不经 base64），但只会发工具调用、发不了带 Authorization 头的 HTTP 请求的调用方原先一个字节都搬不动（宿主的 read 到 150 KB 截断、bash 768 字节）。新增两个桥自己服务的工具：xfer_get 一次一块读（base64，offset 缺省 0，maxBytes 缺省 256 KB / 上限 1 MB，回包 total 与 next），xfer_put 整份或分块写（offset: 0 重来、第一块给 total、累到 total 那次落盘，块暂存桥内存：上限 16 MB、空闲 10 分钟丢、同时在飞四份、共享关闭一起丢）。两者都经 dufs 收发（Range GET、组装后一次 PUT），路径解析、共享根与权限仍是文件服务器的事，桥里没有第二份路径解析器；这就是不引入第二个权威的做法。实测 dufs 0.46.0 对终点越界的 Range 回 416 带 totals（10 字节文件 8-20 → 416、8-9 → 206），所以非整数倍的末块靠 416 的 content-range 换一个刚好到末尾的区间重试一次。代价写在文档里：base64 多 33%、一块一次调用与一份上下文。证据：bun test 292（test/xfer.test.ts 33 项，假 dufs 补 416 行为否则重试路径不可达）、新探针 test:tunnel-xfer 14 项（一条 origin 上 /xfer/ 与 MCP 两条路的字节逐字节相等，真 cloudflared 只断言 publicUrl 的本地接线）、变异两处（next 恒非 null → 读循环 6 趟红；publicRouteUrl 少拼 /xfer/ → 3 项红）。"
   source: "src/xfer.ts, docs/protocol.md, CHANGELOG 2026-10-23, test/tunnel-xfer-probe.ts"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-24T12:52:47
+  kind: decision
+  summary: "compiled_truth 改口：删掉 2026-10-23 的 xfer_get/xfer_put（base64 分块），桥恢复三个 xfer_* 工具且文件字节不过 MCP；分块交给调用方一侧的 scripts/a2mcp-proxy.mjs（Range GET / PUT+PATCH append、双向续传、复用共享、不覆盖非空文件），并记下回包紧凑化的省 token 改动与证据"
+  source: "2026-10-24 操作者要求：文件传输不使用 base64，改由客户端 MCP 代理自动分块"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-24T12:52:50
+  kind: reversal
+  summary: "2026-10-24：反转 2026-10-23 的 xfer_get / xfer_put（base64 分块进 tools/call）。理由是字节走 JSON-RPC 的代价（+33%、一块一次调用与一份上下文）买不到 /xfer 原本没有的能力，且桥自带工具绕过宿主审批门；分块改由调用方一侧的 scripts/a2mcp-proxy.mjs 承担，桥恢复三个 xfer_* 工具，文件字节不过 MCP。证据：bun test 292、test:proxy 19、test:tunnel-xfer 10 全绿。"
+  source: "2026-10-24 操作者要求：文件传输不使用 base64，改由客户端 MCP 代理自动分块"
   affects: [a2a-mcp-bridge]
