@@ -14,6 +14,14 @@
  *   {"command": "node", "args": ["/path/to/a2mcp-proxy.mjs"],
  *    "env": {"A2MCP_URL": "http://127.0.0.1:8787/", "A2MCP_TOKEN": "..."}}
  *
+ * With no MCP client in reach it also moves a single file from the command line:
+ *
+ *   node a2mcp-proxy.mjs upload LOCAL_PATH HOST_PATH
+ *   node a2mcp-proxy.mjs download HOST_PATH LOCAL_PATH
+ *
+ * That path runs the same chunked, resumable transfer and the same share rules;
+ * it exists so an agent with a shell does not have to write its own client.
+ *
  * The token is read from the environment by preference: a token in argv is
  * visible in `ps`. It is never printed.
  *
@@ -897,6 +905,8 @@ export function parseArgs(argv, env = process.env) {
 		token: env.A2MCP_TOKEN ?? "",
 		chunkBytes: clampChunkBytes(env.A2MCP_CHUNK_BYTES ?? DEFAULT_CHUNK_BYTES),
 		help: false,
+		command: null,
+		operands: [],
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
@@ -914,7 +924,16 @@ export function parseArgs(argv, env = process.env) {
 		else if (flag === "--url") out.url = value();
 		else if (flag === "--token") out.token = value();
 		else if (flag === "--chunk-bytes") out.chunkBytes = clampChunkBytes(value());
+		else if ((arg === "upload" || arg === "download") && out.command === null) out.command = arg;
+		else if (!arg.startsWith("-") && out.command !== null && out.operands.length < 2) out.operands.push(arg);
 		else throw new Error(`unknown argument '${arg}'`);
+	}
+	if (out.command !== null && out.operands.length !== 2) {
+		throw new Error(
+			out.command === "upload"
+				? "upload needs a local path and a host path"
+				: "download needs a host path and a local path",
+		);
 	}
 	return out;
 }
@@ -923,6 +942,8 @@ const USAGE = `a2mcp-proxy — a stdio MCP proxy for the a2mcp bridge, with chun
 
 Usage:
   node a2mcp-proxy.mjs [--url URL] [--token TOKEN] [--chunk-bytes N]
+  node a2mcp-proxy.mjs upload LOCAL_PATH HOST_PATH
+  node a2mcp-proxy.mjs download HOST_PATH LOCAL_PATH
 
   --url          bridge URL, or A2MCP_URL
   --token        Bearer token, or A2MCP_TOKEN (preferred: argv is visible in ps)
@@ -933,7 +954,11 @@ MCP client configuration:
    "env": {"A2MCP_URL": "http://127.0.0.1:8787/", "A2MCP_TOKEN": "..."}}
 
 Adds two tools: a2mcp_upload {localPath, remotePath}, a2mcp_download {remotePath, localPath}.
-File bytes travel over the bridge's /xfer route; they never enter the conversation.`;
+File bytes travel over the bridge's /xfer route; they never enter the conversation.
+
+upload / download move one file and exit, for a shell with no MCP client: same
+chunks, same resume, same share rules (reuse a covering share, open one when none
+does, close only the one it opened). They print a compact JSON result.`;
 
 async function run(opts) {
 	const bridge = new Bridge(opts.url, opts.token);
@@ -1062,7 +1087,26 @@ async function main() {
 		process.stderr.write(`a2mcp-proxy: --token (or A2MCP_TOKEN) is required\n`);
 		process.exit(2);
 	}
+	if (opts.command !== null) {
+		await runCommand(opts);
+		return;
+	}
 	await run(opts);
+}
+
+/** One file, then exit. The same transfer the MCP tools run, without the stdio half. */
+async function runCommand(opts) {
+	const bridge = new Bridge(opts.url, opts.token);
+	const [first, second] = opts.operands;
+	try {
+		const outcome =
+			opts.command === "upload"
+				? await uploadFile(bridge, first, second, opts.chunkBytes)
+				: await downloadFile(bridge, first, second, opts.chunkBytes);
+		process.stdout.write(`${JSON.stringify(outcome)}\n`);
+	} finally {
+		await bridge.close();
+	}
 }
 
 const invokedDirectly = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

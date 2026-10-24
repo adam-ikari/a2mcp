@@ -5,11 +5,11 @@
 | 命令 | 类型 | 需要本机 omp | 预期输出 |
 | --- | --- | --- | --- |
 | `bun run test:tree` | 仓库形状核验，3 项，无依赖 | 否 | `tree-probe: repo shape OK` |
-| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 292 pass / 0 fail（19 文件） |
+| `bun test` | 单测（自动发现 `test/*.test.ts`） | 否 | 297 pass / 0 fail（19 文件） |
 | `bun run test:registry` | 真实模型注册表核验，28 项，秒级 | 否 | `registry probe: all assertions met` |
 | `bun run test:obtain` | 外部二进制获取核验，41 项，dufs 与 cloudflared 真下载 | 否 | `PASS — target <平台>, dufs <钉值>, cloudflared <钉值>` |
 | `bun run test:tunnel-xfer` | 文件传输 × 隧道，10 项（同一条 origin 上：`/xfer/` 路由、PUT + PATCH 追加、真 cloudflared 的公告），约 10 秒，第 4 节等 cloudflared announce 时更久 | 否 | `PASS — tunnel + file transfer, one origin` |
-| `bun run test:proxy` | 客户端 MCP 代理端到端核验，19 项，真 dufs + 真 stdio，约 5 秒 | 否 | `PASS — client MCP proxy, chunked file transfer` |
+| `bun run test:proxy` | 客户端 MCP 代理端到端核验，23 项，真 dufs + 真 stdio + 两条命令行，约 5 秒 | 否 | `PASS — client MCP proxy, chunked file transfer` |
 | `bun run test:smoke` | 真实宿主 E2E | 是 | `SMOKE OK` |
 | `bun run test:hardening` | 真实宿主加固核验，36 项 | 是 | `HARDEN OK` |
 | `cd website && bun run check` | 站点渲染与 SEO 核验，215 项 | 否 | `render-check: all pages OK` |
@@ -213,11 +213,13 @@ origin 是本进程里的一只 `Bun.serve`，不是 cloudflared：它把 path�
 
 要在探针里做而不是单测：这里跑的是钉住的真 `dufs`，第 4 节还起真 `cloudflared`；`bun test` 没有出口也没有这两个二进制。变异跑过两处：`publicRouteUrl` 少拼 `/xfer/`，`publicUrl` 那条红，连带取字节的断言一起红（405，因为请求打到了 MCP 端点本身）；代理不转发 `X-Update-Range`，PATCH 那条红。
 
-## 客户端 MCP 代理（`test/proxy-lib.test.ts` 12 项 / `test/proxy-probe.ts` 19 项）
+## 客户端 MCP 代理（`test/proxy-lib.test.ts` 13 项 / `test/proxy-probe.ts` 23 项）
 
-纯函数那一半在 `bun test` 里：路径归一化把 POSIX、盘符、UNC 与 `~` 收成一种写法，`..`、相对路径与 NUL 拒绝，`covers` 在 Windows 上不分大小写、在 POSIX 上分，`relativeName` 对「目标就是共享的那个文件」回空串并按段编码，`xferUrl` 只拼一次 `/xfer/`，块大小夹在 4 KiB 到 64 MiB，下载续传要求 sidecar 的 etag 与大小都对上，上传续传要求本地文件、已确认长度与前缀 sha256 三样都对上，参数解析认 env 与 argv。
+纯函数那一半在 `bun test` 里：路径归一化把 POSIX、盘符、UNC 与 `~` 收成一种写法，`..`、相对路径与 NUL 拒绝，`covers` 在 Windows 上不分大小写、在 POSIX 上分，`relativeName` 对「目标就是共享的那个文件」回空串并按段编码，`xferUrl` 只拼一次 `/xfer/`，块大小夹在 4 KiB 到 64 MiB，下载续传要求 sidecar 的 etag 与大小都对上，上传续传要求本地文件、已确认长度与前缀 sha256 三样都对上，参数解析认 env 与 argv，`upload` / `download` 两个子命令按打印出来的顺序收两条路径、少一条就报错。
 
-端到端那一半是 `test:proxy`，不进 CI：真 `startServer` + 真 `createXfer`（真 dufs）+ 一个假宿主工具，用 `node`（没有就用当前 runtime）起代理走 stdio，`--chunk-bytes 65536` 强制多块。19 项：`initialize` 与宿主工具调用透传；目录 = 宿主工具 + 三个 `xfer_*` + 两个代理工具，且本地工具只出现一次；300 KB 下载逐字节一致且代理关掉了自己开的共享；200 KB 上传逐字节一致（第一块 PUT、之后 PATCH 追加），再传一次被拒且远端字节不变；手工开的共享被复用且传完仍开着；上传与下载各自从断点续；一个不覆盖目标的共享让下载直接拒绝，原共享既没被顶掉也没被停。
+端到端那一半是 `test:proxy`，不进 CI：真 `startServer` + 真 `createXfer`（真 dufs）+ 一个假宿主工具，用 `node`（没有就用当前 runtime）起代理走 stdio，`--chunk-bytes 65536` 强制多块。23 项：`initialize` 与宿主工具调用透传；目录 = 宿主工具 + 三个 `xfer_*` + 两个代理工具，且本地工具只出现一次；300 KB 下载逐字节一致且代理关掉了自己开的共享；200 KB 上传逐字节一致（第一块 PUT、之后 PATCH 追加），再传一次被拒且远端字节不变；手工开的共享被复用且传完仍开着；上传与下载各自从断点续；一个不覆盖目标的共享让下载直接拒绝，原共享既没被顶掉也没被停；同样的下载与上传各走一遍命令行的 `download` / `upload`，回包点名用了哪份共享、字节一致、自己开的共享已关，且回包与 stderr 都不含 token。
+
+命令行那两项用异步 `spawn` 等子进程，不能用 `spawnSync`：桥就在本进程里，同步等待会停住父进程的事件循环，子进程的 HTTP 请求没人应答，传输停在中途（实测 60 秒后超时）。这是这套夹具的硬约束，不是风格。
 
 它必须是探针而不是单测：真 dufs、真子进程、真 stdio 三样都在 `bun test` 之外。`test/proxy-probe.ts` 找不到 `dufs` 时打一行 `info:` 退 0，与其余探针同一条纪律。
 

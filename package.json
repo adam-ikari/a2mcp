@@ -28,7 +28,8 @@
   },
   "files": [
     "extensions/",
-    "src/"
+    "src/",
+    "scripts/a2mcp-proxy.mjs"
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

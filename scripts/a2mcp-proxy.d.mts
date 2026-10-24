@@ -39,4 +39,11 @@ export function planUploadResume(
 export function parseArgs(
 	argv: string[],
 	env?: Record<string, string | undefined>,
-): { url: string; token: string; chunkBytes: number; help: boolean };
+): {
+	url: string;
+	token: string;
+	chunkBytes: number;
+	help: boolean;
+	command: "upload" | "download" | null;
+	operands: string[];
+};

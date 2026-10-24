@@ -12,8 +12,9 @@
  * What it pins: the forwarded catalog and calls, a 300 KB download and a 200 KB upload
  * byte-for-byte through 64 KB chunks, a refused overwrite that leaves the remote bytes
  * alone, a share opened and closed by the proxy, a share reused and left open, an
- * unrelated share refusing the transfer, and resume of both directions from a
- * half-finished local state.
+ * unrelated share refusing the transfer, resume of both directions from a
+ * half-finished local state, and the same transfers from the command line — the path
+ * for an agent that has a shell but cannot change its MCP client config.
  *
  * Not in `bun test` and not in CI: it needs the pinned `dufs` and a Node or Bun
  * runtime to spawn the proxy. Without `dufs` it says so and exits 0, the way the other
@@ -176,6 +177,38 @@ async function callTool(
 async function shareStatus(): Promise<Record<string, unknown>> {
 	const r = await callTool("xfer_status", {});
 	return (r.value ?? {}) as Record<string, unknown>;
+}
+
+/**
+ * The same script, run for one file and exit — no stdio MCP client attached.
+ * Asynchronous on purpose: the bridge this child talks to lives in this process, so
+ * a blocking wait on the child would stop the parent's event loop and deadlock the
+ * transfer halfway (measured: 60s timeout, then SIGTERM).
+ */
+function runCli(args: string[]): Promise<{ code: number; out: string; err: string }> {
+	return new Promise((resolve) => {
+		const child = spawn(runtime, [script, ...args], {
+			env: { ...process.env, A2MCP_URL: base, A2MCP_TOKEN: token, A2MCP_CHUNK_BYTES: "65536" },
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let out = "";
+		let err = "";
+		child.stdout.on("data", (c: Buffer) => {
+			out += c.toString();
+		});
+		child.stderr.on("data", (c: Buffer) => {
+			err += c.toString();
+		});
+		const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
+		child.once("error", (e) => {
+			clearTimeout(timer);
+			resolve({ code: -1, out, err: `${err} [spawn error: ${e.message}]` });
+		});
+		child.once("exit", (code, signal) => {
+			clearTimeout(timer);
+			resolve({ code: code ?? -1, out, err: `${err}${signal ? ` [signal: ${signal}]` : ""}` });
+		});
+	});
 }
 
 try {
@@ -345,6 +378,32 @@ try {
 		String(statusOther.path),
 	);
 	await callTool("xfer_stop", {});
+
+	// --- 8. the same client from a shell -------------------------------------------
+	const cliDownPath = join(outDir, "cli-down.bin");
+	const cliDown = await runCli(["download", join(shareDir, "remote.bin"), cliDownPath]);
+	const cliDownBytes = await readFile(cliDownPath).catch(() => Buffer.alloc(0));
+	check(
+		cliDown.code === 0 && sha(cliDownBytes) === sha(BIG),
+		"the CLI download is byte-exact",
+		`exit ${cliDown.code}${cliDown.err ? `, stderr: ${cliDown.err.trim().slice(0, 120)}` : ""}`,
+	);
+	check(
+		cliDown.out.includes('"share":"opened"') && !cliDown.out.includes(token) && !cliDown.err.includes(token),
+		"the CLI prints the share it used, and never the token",
+		cliDown.out.trim().slice(0, 120),
+	);
+	check((await shareStatus()).serving === false, "the CLI closed the share it opened");
+
+	const cliUp = bytesOf(120_000, 5);
+	await writeFile(join(outDir, "cli-up.bin"), cliUp);
+	const cliUpRun = await runCli(["upload", join(outDir, "cli-up.bin"), join(shareDir, "cli-up.bin")]);
+	const cliUpBytes = await readFile(join(shareDir, "cli-up.bin")).catch(() => Buffer.alloc(0));
+	check(
+		cliUpRun.code === 0 && sha(cliUpBytes) === sha(cliUp),
+		"the CLI upload lands byte-exact",
+		`${cliUpBytes.length} bytes${cliUpRun.err ? `, stderr: ${cliUpRun.err.trim().slice(0, 120)}` : ""}`,
+	);
 } catch (e) {
 	check(false, "the probe itself failed", `${(e as Error)?.message ?? e}\n${stderr.slice(0, 500)}`);
 } finally {

@@ -16,6 +16,11 @@
 - test: `bun test` 294 → 292（删掉分块那 15 项，新增代理纯函数 12 项）；`test/xfer-route.test.ts` 20 → 21（PATCH）；`test:tunnel-xfer` 14 → 10（去掉过 MCP 的两段，加 PATCH 追加）；新增 `test:proxy` 19 项（真 `startServer` + 真 dufs + 假宿主工具，node 或 bun 起代理走 stdio，`--chunk-bytes 65536` 强制多块：下载/上传 sha256、覆盖拒绝、共享自开自关与复用、两向续传、不覆盖目标时拒绝且原共享不动）。`test:proxy` 不进 CI。
 - docs: 两份 README 的传文件段改成客户端代理与 `mcp.json` 示例；`docs/protocol.md` 的目录改三个名字、删两个工具契约、补 PATCH 与「代理不是桥的协议面」；`docs/testing.md` 的项数与新增两节；`AGENTS.md` 的 xfer 例外补一句「字节只走路由，代理在调用方一侧」。
 - 版本位: 远程调用方经协议拿到的东西变了（`tools/list` 少两个名字，`xfer_share` 的回包少了 `usage` 并改成紧凑 JSON），按 2026-10-18 判据进 minor，v0.9.0。
+- feat: `initialize` 现在回 `instructions`——给远端 agent 的完整用法说明（`src/instructions.ts`）。会显示 instructions 的客户端直接把说明交给模型，操作员不用再贴提示词；`/a2mcp prompt` 打印的是同一段，两处不会各写一份。说明里没有 URL、没有 token。`bun test` 292 → 293（新增 `initialize` 带说明且不含 token 那一条）。内容是：调用方式（一次一件事、绝对路径、自带超时、副作用留痕、token 不进命令），以及文件传输的完整步骤（`xfer_share` 的入参与回包字段、GET/Range、PUT 加 PATCH append、PROPFIND、403 边界、代理的分块与续传、共享复用与只关自己开的那份、`publicUrl` 的取法、不要自己起隧道、不要用 `read`/`bash` 搬字节）。
+- docs: 提示词补一条禁令。文件的出口只有两条：共享回的 `publicUrl`（隧道开着时），或请操作员开 `/a2mcp tunnel`（`publicUrl` 为 `null` 时，另一条是 SSH 转发）。**不要自己起隧道或第二个文件服务器**——那条主机名不在桥的 token 后面，拿到地址的人就能取。两份 README 里逐字贴的那段同步改了。起因：这台机器上出现一条不属于桥的 quick tunnel（`cloudflared` 指向一个 `python3 -m http.server`），而桥当天的审计里 `tool: "tunnel"` 是零条。
+- feat: 桥开始把调用方的代理一起发出去。`GET /a2mcp/proxy.mjs` 回 `scripts/a2mcp-proxy.mjs` 的源码：与 MCP 端点同一个 Bearer，`text/javascript` + `no-store`，不建会话，也不写审计（值得记的事件是传输，而共享关闭时已经记过）。拿不到仓库的一侧用 `mcp.json` 里已有的 URL 与 token 就能取下来，不必照着说明重写分块客户端。包里没带这个文件时回 404，不发一份空脚本；`package.json` 的 `files` 因此加上 `scripts/a2mcp-proxy.mjs`。
+- feat: 代理多了 `upload LOCAL_PATH HOST_PATH` 与 `download HOST_PATH LOCAL_PATH`。给「有 shell、改不了 MCP 客户端配置」的一侧：同一套 8 MiB 分块、两向续传与共享归属规则（覆盖就复用、没有才开、只关自己开的），跑完打一行紧凑 JSON 就退出。`initialize` 的 `instructions` 第 3 步把两条路都点名——能改配置就当 stdio 代理起，改不了就 `curl` 取脚本走命令行。
+- test: `bun test` 293 → 297：代发脚本的源码与未带脚本时的 404、入口侧同一条路由、命令行两条路径的顺序与缺参，各一项。`test:proxy` 19 → 23：命令行的下载与上传各一遍，字节一致、共享自开自关、回包与 stderr 都不含 token；`test:install` 的包内文件清单加上 `scripts/a2mcp-proxy.mjs`。命令行那两项用异步 `spawn`，不用 `spawnSync`——桥就在本进程里，同步等待会停住父进程的事件循环，子进程的请求没人应答，传输停在中途（实测要等到 60 秒超时才露出来）。这条约束写进了 `docs/testing.md`。
 
 ## 2026-10-23 — 一块一块地过 MCP：`xfer_get` / `xfer_put`
 

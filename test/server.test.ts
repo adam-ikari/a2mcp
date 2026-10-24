@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import type { BridgeDeps } from "../src/server.ts";
-import { MAX_SESSIONS, SESSION_TTL_MS, startServer } from "../src/server.ts";
+import { CLIENT_ROUTE, MAX_SESSIONS, SESSION_TTL_MS, startServer } from "../src/server.ts";
 
 const root = join(import.meta.dir, "..");
 const JSON_HDR = { "content-type": "application/json" };
@@ -69,7 +69,7 @@ async function init(base: string, params: Record<string, unknown> = {}): Promise
 }
 
 /** Run `fn` against a fresh server so session-map tests cannot cross-contaminate. */
-async function withServer(fn: (base: string) => Promise<void>): Promise<void> {
+async function withServer(fn: (base: string) => Promise<void>, extra: Partial<BridgeDeps> = {}): Promise<void> {
 	const s = await startServer(
 		{
 			port: 0,
@@ -78,7 +78,7 @@ async function withServer(fn: (base: string) => Promise<void>): Promise<void> {
 			host_llm: "allow",
 			xfer: { dufs: "dufs", cloudflared: "cloudflared" },
 		},
-		makeDeps(),
+		{ ...makeDeps(), ...extra },
 	);
 	try {
 		await fn(`http://127.0.0.1:${s.port}/`);
@@ -125,6 +125,51 @@ describe("server protocol", () => {
 			expect(body.result.protocolVersion).toBe("2025-11-25");
 			expect(body.result.serverInfo.name).toBe("stub-server");
 			expect(res.headers.get("mcp-session-id")).not.toBeNull();
+		});
+	});
+
+	test("the caller's proxy is served as source, behind the token", async () => {
+		// A remote agent with no repository needs the client that chunks transfers;
+		// the endpoint it already talks to is the one place it can always get it.
+		const script = "// a2mcp-proxy source\n";
+		await withServer(
+			async (base) => {
+				const url = new URL(CLIENT_ROUTE, base);
+				const denied = await fetch(url);
+				expect(denied.status).toBe(401);
+				const res = await fetch(url, { headers: AUTH });
+				expect(res.status).toBe(200);
+				expect(res.headers.get("content-type")).toContain("text/javascript");
+				expect(res.headers.get("cache-control")).toBe("no-store");
+				expect(await res.text()).toBe(script);
+				const post = await fetch(url, { method: "POST", headers: AUTH });
+				expect(post.status).toBe(405);
+			},
+			{ clientScript: () => script },
+		);
+	});
+
+	test("a bridge that did not ship the client answers 404, not an empty script", async () => {
+		await withServer(async (base) => {
+			const res = await fetch(new URL(CLIENT_ROUTE, base), { headers: AUTH });
+			expect(res.status).toBe(404);
+		});
+	});
+
+	test("initialize carries the usage guide, and it holds no credential", async () => {
+		// A client can show `instructions` to its model before the first call. That
+		// makes this the one place every client learns how the transfer route works,
+		// without the operator pasting anything.
+		await withServer(async (base) => {
+			const res = await post(base, { jsonrpc: "2.0", id: 1, method: "initialize", params: {} }, AUTH);
+			const body = (await res.json()) as { result: { instructions?: string } };
+			const guide = body.result.instructions ?? "";
+			expect(guide).toContain("xfer_share");
+			expect(guide).toContain("a2mcp-proxy.mjs");
+			expect(guide).toContain("Do not start your own tunnel or second file server");
+			expect(guide).not.toContain(TOKEN);
+			// English: the reader is the model on the other side.
+			expect(guide).not.toMatch(/\p{Script=Han}/u);
 		});
 	});
 

@@ -173,6 +173,10 @@ const shipped = [
 		.filter((f) => f.endsWith(".ts"))
 		.sort()
 		.map((f) => `src/${f}`),
+	// Read at runtime by the entry (not imported) and served at /a2mcp/proxy.mjs,
+	// so the import-graph walk below cannot reach it: a tarball without it would
+	// install, run, and answer 404 to every caller that asked for the client.
+	"scripts/a2mcp-proxy.mjs",
 ];
 for (const rel of shipped) {
 	check(existsSync(join(pkgRoot, rel)), `tarball ships ${rel}`);

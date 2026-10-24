@@ -125,15 +125,39 @@ describe("chunk and resume decisions", () => {
 describe("command line", () => {
 	test("flags override the environment, and the environment is the default", () => {
 		const env = { A2MCP_URL: "http://env/", A2MCP_TOKEN: "env-token", A2MCP_CHUNK_BYTES: "8192" };
-		expect(parseArgs([], env)).toEqual({ url: "http://env/", token: "env-token", chunkBytes: 8192, help: false });
+		expect(parseArgs([], env)).toEqual({
+			url: "http://env/",
+			token: "env-token",
+			chunkBytes: 8192,
+			help: false,
+			command: null,
+			operands: [],
+		});
 		expect(parseArgs(["--url", "http://argv/", "--token=t", "--chunk-bytes", "16384"], env)).toEqual({
 			url: "http://argv/",
 			token: "t",
 			chunkBytes: 16384,
 			help: false,
+			command: null,
+			operands: [],
 		});
 		expect(parseArgs(["--help"], env).help).toBe(true);
 		expect(() => parseArgs(["--nope"], env)).toThrow("unknown argument");
+	});
+
+	test("upload / download take both paths, in the order they are printed", () => {
+		const env = { A2MCP_URL: "http://env/", A2MCP_TOKEN: "t" };
+		expect(parseArgs(["upload", "./a.bin", "/data/a.bin"], env)).toMatchObject({
+			command: "upload",
+			operands: ["./a.bin", "/data/a.bin"],
+		});
+		expect(parseArgs(["download", "/data/a.bin", "./a.bin", "--chunk-bytes", "4096"], env)).toMatchObject({
+			command: "download",
+			operands: ["/data/a.bin", "./a.bin"],
+			chunkBytes: 4096,
+		});
+		expect(() => parseArgs(["upload", "./a.bin"], env)).toThrow("upload needs a local path and a host path");
+		expect(() => parseArgs(["download"], env)).toThrow("download needs a host path and a local path");
 	});
 
 	test("the two local tools name both machines, and say bytes stay out of the conversation", () => {

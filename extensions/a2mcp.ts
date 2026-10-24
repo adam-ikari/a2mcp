@@ -6,6 +6,7 @@ import { ensurePlaceholderOnMainSession } from "../src/auto-model.ts";
 import { buildCallTool, buildToolCatalog, hasMainSession } from "../src/bridge.ts";
 import type { BridgeConfig } from "../src/config.ts";
 import { configPath, generateToken, loadConfig, saveConfig } from "../src/config.ts";
+import { BRIDGE_INSTRUCTIONS } from "../src/instructions.ts";
 import { resolveBinary } from "../src/obtain.ts";
 import { startServer } from "../src/server.ts";
 import { hostLlmState, rearmMainSession, setEnabled } from "../src/takeover.ts";
@@ -41,36 +42,30 @@ function bridgeVersion(): string {
 const BRIDGE_VERSION = bridgeVersion();
 
 /**
- * The text the operator hands to the remote agent.
+ * The caller-side proxy, read once from beside this module.
  *
- * English on purpose: it is read by a model on the other side, not by the
- * operator — the operator reads this repo's own prose. It says what the endpoint
- * is, how to work against it, and the things that bite a first caller.
- *
- * It carries no URL and no token. Those go into the remote client's `mcp.json`,
- * where the credential belongs; a token inside a prompt would put it in a model's
- * context, which is a different and much wider place than a config file.
- *
- * It also repeats nothing the tool descriptions already say — the host's own
- * `read`/`bash`/`edit` descriptions are in `tools/list`, right there. What the
- * catalog cannot say is where those tools run, that the results are the machine's
- * own words, and that a call can hang on a gate nobody is watching.
- *
- * And it names the wheel: an agent that cannot speak MCP to this endpoint has a
- * ready-made client (the repo's `scripts/mcp-call.py`) instead of writing one —
- * the prompt is the one place the remote side is certain to read.
+ * It is served over the endpoint's own port so a remote agent that cannot read
+ * this repository can still fetch the client that chunks transfers. Null when the
+ * package layout left it out; the route answers 404 rather than an empty script.
  */
-const REMOTE_PROMPT = `You are connected over MCP to a live agent session on another machine. The tools in \`tools/list\` are that machine's own: \`bash\` runs commands in its shell, \`read\`/\`write\`/\`edit\` work on its files, and the results come back verbatim — errors included, in the tool's own words. Nothing is reasoned about on that side: you decide what runs, that machine only executes.
+let proxyClientSource: string | null | undefined;
+function proxyClient(): string | null {
+	if (proxyClientSource !== undefined) return proxyClientSource;
+	try {
+		proxyClientSource = readFileSync(join(import.meta.dir, "..", "scripts", "a2mcp-proxy.mjs"), "utf8");
+	} catch {
+		proxyClientSource = null;
+	}
+	return proxyClientSource;
+}
 
-Work one fact at a time: call a tool, read its result, then decide the next call. Use absolute paths; do not assume a working directory. The machine is often a device lab — \`adb\`, flashing tools and serial ports are reached through \`bash\`.
-
-Give every call a timeout of your own. A call can hang: a permission prompt on the other side may have nobody to answer it, and your timeout is the only way out.
-
-What you run there stays there: nothing on that machine is rolled back for you.
-
-Files move over the bridge's WebDAV route, never through tool arguments: \`xfer_share\` opens \`/xfer/\` on a host path, then GET (Range works) downloads and PUT uploads with \`Authorization: Bearer <token>\`. If your client can read the a2mcp repository, point it at \`scripts/a2mcp-proxy.mjs\` (Node 20+ or Bun, no dependencies): it wraps this endpoint on stdio and adds \`a2mcp_upload\` and \`a2mcp_download\`, each taking a local path on your side and a path on the host, and moves the bytes in chunks with no base64 in the conversation. An upload never overwrites a non-empty file on the host; remove it there first. Never paste megabytes into a command.
-
-If your side cannot speak MCP to this endpoint, use the bridge's zero-dependency clients instead of writing your own: \`scripts/mcp-call.py\` for single calls, \`scripts/a2mcp-proxy.mjs\` for a session with file transfer.`;
+/**
+ * The text the operator hands to the remote agent. It is the same constant the
+ * server returns as MCP `instructions` on `initialize` — one text, two ways to
+ * deliver it: the client can show it to its model directly, and `/a2mcp prompt`
+ * prints it for an operator whose client ignores `instructions`.
+ */
+const REMOTE_PROMPT = BRIDGE_INSTRUCTIONS;
 
 let server: { port: number; fellBack: boolean; stop(): void } | null = null;
 let cfg: BridgeConfig | null = null;
@@ -234,6 +229,7 @@ export default function a2mcpExtension(pi: ExtensionAPI): void {
 					// the code still answering "0.1.0" and the page agreeing with the
 					// code. Two copies of a version number, and nothing compares them.
 					serverInfo: () => ({ name: "a2mcp", version: BRIDGE_VERSION }),
+					clientScript: proxyClient,
 					takeover: { setEnabled },
 					// The `/xfer` proxy asks this object where the file server is, per request
 					// (src/server.ts). Structurally it is the seam `XferRouteDeps` declares.

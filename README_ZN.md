@@ -195,18 +195,25 @@ python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> call bash '{"
 
 远程 agent 会拿宿主的工具当自己熟悉的同名工具来调，而 `tools/list` 回的是宿主注册表逐字——这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），不是 `oldString`/`newString`，猜错换来的是 `File not found`。
 
-下面这段就是 `/a2mcp prompt` 打印的那段文字。它不带 URL 也不带 token——这两样进远程客户端的 `mcp.json`，不进口提示词。把这段放进 agent 的会话或系统提示里。
+下面这段就是 `/a2mcp prompt` 打印的那段文字，也是端点 `initialize` 回的 MCP `instructions`——会显示 instructions 的客户端直接把它交给模型，操作员不用再贴。它不带 URL 也不带 token——这两样进远程客户端的 `mcp.json`，不进提示词。
 
 ```text
 You are connected over MCP to a live agent session on another machine. The tools in `tools/list` are that machine's own: `bash` runs commands in its shell, `read`/`write`/`edit` work on its files, and the results come back verbatim — errors included, in the tool's own words. Nothing is reasoned about on that side: you decide what runs, that machine only executes.
 
-Work one fact at a time: call a tool, read its result, then decide the next call. Use absolute paths; do not assume a working directory. The machine is often a device lab — `adb`, flashing tools and serial ports are reached through `bash`.
+How to call:
+- Work one fact at a time: call a tool, read its result, then decide the next call.
+- Use absolute paths; no working directory is implied. The machine is often a device lab — `adb`, flashing tools and serial ports are reached through `bash`.
+- Give every call a timeout of your own. A call can hang: a permission prompt on the other side may have nobody to answer it, and your timeout is the only way out.
+- What you run there stays there: nothing on that machine is rolled back for you.
+- The token in your client config is the only gate to that machine. Do not echo it into commands, files, or messages.
 
-Give every call a timeout of your own. A call can hang: a permission prompt on the other side may have nobody to answer it, and your timeout is the only way out.
-
-What you run there stays there: nothing on that machine is rolled back for you.
-
-Files move over the bridge's WebDAV route, never through tool arguments: `xfer_share` opens `/xfer/` on a host path, then GET (Range works) downloads and PUT uploads with `Authorization: Bearer <token>`. If your client can read the a2mcp repository, point it at `scripts/a2mcp-proxy.mjs` (Node 20+ or Bun, no dependencies): it wraps this endpoint on stdio and adds `a2mcp_upload` and `a2mcp_download`, each taking a local path on your side and a path on the host, and moves the bytes in chunks with no base64 in the conversation. An upload never overwrites a non-empty file on the host; remove it there first. Never paste megabytes into a command.
+Files move over the bridge's own WebDAV route, never through tool arguments. `xfer_share` works like this:
+1. `xfer_share {"path": "/absolute/host/path", "ttlSeconds": 3600}` serves one host file or directory and returns compact JSON: `url` is the route on this endpoint, `publicUrl` is the same route behind the operator's tunnel (or `null`), plus `route`, `path`, `port`, `startedAt`, `expiresAt` and `installed`. The share closes itself at `ttlSeconds` (default 3600).
+2. Transfer over HTTP with `Authorization: Bearer <token>` on every request and paths relative to the shared path. GET downloads, and `Range: bytes=start-end` reads a slice or resumes (a range past the end answers 416 with `content-range: bytes */<size>`). PUT creates a file. PATCH with `X-Update-Range: append` continues a partial upload: first chunk PUT, later chunks PATCH. PROPFIND lists a directory. DELETE and MOVE are refused, and an upload never overwrites an existing non-empty file (403) — remove the remote file some other way first.
+3. Use the ready-made client instead of writing one. `scripts/a2mcp-proxy.mjs` (Node 20+ or Bun, no dependencies) is also served by this endpoint at `/a2mcp/proxy.mjs`. If you can change your MCP client config, run it as your MCP server: it forwards every tool here and adds `a2mcp_upload {localPath, remotePath}` and `a2mcp_download {remotePath, localPath}`. If you cannot, fetch it with the token and URL your client already uses (`A2MCP_TOKEN`, `A2MCP_URL`) and drive it from your own shell: `curl -fsSL -H "Authorization: Bearer $A2MCP_TOKEN" "$A2MCP_URL/a2mcp/proxy.mjs" -o a2mcp-proxy.mjs`, then `node a2mcp-proxy.mjs upload LOCAL_PATH HOST_PATH` or `node a2mcp-proxy.mjs download HOST_PATH LOCAL_PATH`. Both forms move 8 MiB chunks (4 KiB–64 MiB, configurable), resume in both directions, reuse a share that already covers the target, open one when none does, close only the share they opened, and never overwrite a non-empty remote file.
+4. One share at a time: a second `xfer_share` replaces the first and says `replaced: true`. `xfer_status` reports the current share; `xfer_stop` closes it. Close the share you opened when the transfer is done; do not stop a share you did not open.
+5. Reach the route through `publicUrl` when it is not `null`. When it is `null`, ask the operator to run `/a2mcp tunnel` or forward the bridge port over SSH. Do not start your own tunnel or second file server: a hostname you open is not behind this bridge's token, so whatever it serves is public.
+6. Never move file bytes through `read`, `bash` or tool arguments: host `read` truncates around 150 KB and `bash` around 768 bytes, so large or binary content comes back corrupted. Never paste megabytes into a command.
 
 If your side cannot speak MCP to this endpoint, use the bridge's zero-dependency clients instead of writing your own: `scripts/mcp-call.py` for single calls, `scripts/a2mcp-proxy.mjs` for a session with file transfer.
 ```
@@ -249,7 +256,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 
 路由开在回环端口上，本机之外一个字节都进不来。公网主机名只有一个来源：操作员跑 `/a2mcp tunnel`。隧道开着时，`xfer_share` 与 `xfer_status` 把它作为 `publicUrl` 回给调用方——同一个 `/xfer/` 路由，换到公网主机名下；隧道没开就是 `publicUrl: null`；要够到这条路由，用 SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。工具只报这条主机名，自己不开隧道。
 
-**只会调工具的客户端，字节仍走 `/xfer/`。** 仓库里的 `scripts/a2mcp-proxy.mjs` 是一个零依赖的 MCP 代理（Node 20+ 或 Bun）：客户端用 stdio 起它，它把每个调用原样转给桥，另加两个工具——`a2mcp_upload {localPath, remotePath}` 与 `a2mcp_download {remotePath, localPath}`。一条路径在调用方机器上，一条在宿主上，分块由代理做：缺省每请求 8 MiB（`--chunk-bytes`，4 KiB 到 64 MiB），下载用 Range GET 追加进 `.a2mcp-part`，上传第一块 PUT、之后 `PATCH` 带 `X-Update-Range: append`。文件字节不进会话，也不进模型的上下文。
+**只会调工具的客户端，字节仍走 `/xfer/`。** `scripts/a2mcp-proxy.mjs` 是一个零依赖的 MCP 代理（Node 20+ 或 Bun）：客户端用 stdio 起它，它把每个调用原样转给桥，另加两个工具——`a2mcp_upload {localPath, remotePath}` 与 `a2mcp_download {remotePath, localPath}`。一条路径在调用方机器上，一条在宿主上，分块由代理做：缺省每请求 8 MiB（`--chunk-bytes`，4 KiB 到 64 MiB），下载用 Range GET 追加进 `.a2mcp-part`，上传第一块 PUT、之后 `PATCH` 带 `X-Update-Range: append`。文件字节不进会话，也不进模型的上下文。端点把同一个文件放在 `GET /a2mcp/proxy.mjs`（同一个 Bearer token 后面），读不到仓库的调用方也能取到客户端。手边没有 MCP 客户端时，这个脚本可以直接搬一个文件：`node a2mcp-proxy.mjs upload LOCAL_PATH HOST_PATH` 或 `node a2mcp-proxy.mjs download HOST_PATH LOCAL_PATH`——同样的分块、同样的续传、同样的共享规则。
 
 `mcp.json` 里这样写（token 放 `env`，不放命令行——argv 在 `ps` 里可见）：
 
@@ -261,7 +268,7 @@ ssh -L <localport>:127.0.0.1:<port> user@host
 } } }
 ```
 
-代理不在宿主上另开一份权力。已有共享覆盖目标就复用；没有就自己开一份，传完关掉，而且只在它开的那份还在时关。已有共享不覆盖目标时直接拒绝，错误里点名正在服务的路径——不顶掉，也不停别人的。上传永远不覆盖宿主的非空文件，因为 `dufs` 只开了 `--allow-upload`；要重传先在宿主上删掉。断掉的传输可以续：下载看 `.a2mcp-part` 旁边的 sidecar，远程 etag 与大小没变就从断点接；上传看状态文件，本地文件与远端已确认长度都没变才续。代理自己开的共享活默认一小时；更长的传输会中途失去路由，下一次调用接着续。代理是调用方一侧的脚本，不属于桥，也不在 npm 包里。长传输只占住它自己的文件队列，转发类调用（`ping`、普通工具）照常响应。
+代理不在宿主上另开一份权力。已有共享覆盖目标就复用；没有就自己开一份，传完关掉，而且只在它开的那份还在时关。已有共享不覆盖目标时直接拒绝，错误里点名正在服务的路径——不顶掉，也不停别人的。上传永远不覆盖宿主的非空文件，因为 `dufs` 只开了 `--allow-upload`；要重传先在宿主上删掉。断掉的传输可以续：下载看 `.a2mcp-part` 旁边的 sidecar，远程 etag 与大小没变就从断点接；上传看状态文件，本地文件与远端已确认长度都没变才续。代理自己开的共享活默认一小时；更长的传输会中途失去路由，下一次调用接着续。代理是调用方自己的进程，不是桥的工具：它随 npm 包发布，端点也把源码供出来，读不到仓库的调用方仍然拿得到。长传输只占住它自己的文件队列，转发类调用（`ping`、普通工具）照常响应。
 
 **token 就是一份能力**：拿着它的人，在共享关闭之前能读能写那条路径。共享自己不再往外发凭据：每次生成的那对 basic-auth 只出现在桥代发的请求里，工具回包、审计记录、文档都不写它。
 
@@ -342,10 +349,10 @@ bun install
 bun run typecheck     # 类型检查
 bun run lint          # lint + 格式检查（Biome；修复用 bunx biome check --write .）
 bun run test:tree     # 仓库形状：没有符号链接指向本机之外，3 项，无依赖、无需本机 omp（排在 bun test 之前是故意的）
-bun test              # 单测：test/*.test.ts（292 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/代理的路径规则/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
+bun test              # 单测：test/*.test.ts（297 项：协议/鉴权/配置/暴露门/宿主交接/入口生命周期/审计/版本守卫/takeover 形状/装配事务/host-llm 路由/xfer/代理的路径规则与命令行参数/说明文本与代发的客户端/obtain 的形状含 win32 那几处/占位模型/两份引导脚本对不对得上）
 bun run test:obtain   # 钉死的两个二进制：本机这一行真下载、钉表十个 asset 全 HEAD、Windows 那两行按字节读，41 项（不需要本机 omp；只往它自己那个 /tmp 目录里写）
 bun run test:registry # 真实模型注册表上驱动接管，28 项，秒级（不需要本机 omp，也不需要凭据）
-bun run test:proxy    # 客户端 MCP 代理走 stdio 打真 dufs，19 项（不需要本机 omp；node 或 bun；不进 CI）
+bun run test:proxy    # 客户端 MCP 代理走 stdio 打真 dufs，加上它的 upload / download 命令行，23 项（不需要本机 omp；node 或 bun；不进 CI）
 bun run test:smoke    # 真实 E2E（需本机 omp；不需要模型凭据）
 bun run test:hardening # 真实宿主加固核验，36 项（需本机 omp）
 bun run test:approval  # 审批边界判别核验，约 95 秒（需本机 omp）

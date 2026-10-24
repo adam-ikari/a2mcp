@@ -140,11 +140,13 @@ providers:
   "result": {
     "protocolVersion": "2025-11-25",
     "capabilities": { "tools": {} },
-    "serverInfo": { "name": "a2mcp", "version": "<package.json 的 version>" }
+    "serverInfo": { "name": "a2mcp", "version": "<package.json 的 version>" },
+    "instructions": "You are connected over MCP to a live agent session on another machine. …"
   }
 }
 ```
 
+- `instructions` 是给远端 agent 的完整用法说明，原文在 `src/instructions.ts`，每次 `initialize` 原样返回；`/a2mcp prompt` 打印的是同一段，两处不会各写一份。客户端把 instructions 交给模型，操作员就不必再贴提示词；不显示它的客户端照旧可以用 `/a2mcp prompt`。这段不带 URL 也不带 token——那两样进远程客户端的 `mcp.json`。
 - `protocolVersion` **恒为** `2025-11-25`：服务器只说一个版本，不回显请求值（请求 `1999-01-01` 也得到 `2025-11-25`）。
 - `params` 其余内容被忽略。
 - 响应头 `mcp-session-id` 即新会话 id。
@@ -178,7 +180,7 @@ providers:
 ```
 
 - 共享不再有公网那一半：桥把 `dufs` 反向下代理到自己端点的 `/xfer/` 路由上，`url` 就是那条路由，`port` 是 `dufs` 自己听的回环端口。回包是一行紧凑 JSON：不缩进，也不附 `curl` 用法——它是给模型读的，缩进与拿不到 token 的示例命令都只是在花上下文。
-- `publicUrl` 是同一个 `/xfer/` 路由在操作员那条隧道上的地址，`null` 表示隧道没开。**它读的是现成状态，不新增暴露面**：隧道是 `/a2mcp tunnel` 开的，工具既不开也不关它；主机名本来就不是秘密（隧道那节的审计里就写着它）。读的是调用那一刻的状态——隧道在共享期间开或关，`xfer_status` 立刻跟着变。隧道没开时 `publicUrl` 就是 `null`；要够到路由，用 SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。
+- `publicUrl` 是同一个 `/xfer/` 路由在操作员那条隧道上的地址，`null` 表示隧道没开。**它读的是现成状态，不新增暴露面**：隧道是 `/a2mcp tunnel` 开的，工具既不开也不关它；主机名本来就不是秘密（隧道那节的审计里就写着它）。读的是调用那一刻的状态——隧道在共享期间开或关，`xfer_status` 立刻跟着变。隧道没开时 `publicUrl` 就是 `null`；要够到路由，用 SSH 端口转发到桥端口，或者请操作员跑 `/a2mcp tunnel`。调用方不该为此自己起一条隧道或第二个文件服务器：那条主机名不在这份 token 后面，等于把文件放到公网上——提示词里写明了这一条。
 - 回包里如果还出现 `user` / `secret` / `host` 三个字段，那不是调用方自己起的隧道，是宿主还跑着 0.6.0 之前的版本（那版每次共享自带一条 cloudflared）：判据是 `initialize` 回的 `serverInfo.version`。
 - 代理的契约（`src/server.ts` 的 `proxyXfer`）：`/xfer` 前缀之后的路径、方法、query 与正文**逐字转发**（`?json` 可用，单请求上限 128 MB）；`Authorization` 一律换成桥为这次共享生成的 basic-auth 对，调用方带什么都不影响；逐跳头两边都删，回包额外删 `www-authenticate`；`Accept-Encoding` 改写为 `identity`，避免上游压缩后桥再压缩一遍；`redirect: "manual"`，上游的 3xx 原样报给调用方而不是由桥跟着跑。`dufs` 起不来或共享已经关掉，回 `502`，端口号只进宿主 stderr。
 - 路径逐字转发靠的是 `dufs --path-prefix /xfer`：目录列表里的绝对引用、`?json` 的 `uri_prefix`、WebDAV 的 `D:href` 都带着前缀，跟着一个链接不会掉出路由。不加这个旗标时它们写成根绝对路径（`/__dufs_v0.46.0__/index.css`、`/up.txt`），代理剥掉前缀就全指错地方——这一条是 0.46.0 真机量出来的，`test:obtain` 与 `test:install` 每轮各验一次。
@@ -193,12 +195,16 @@ providers:
 
 ### 调用方一侧的代理：`scripts/a2mcp-proxy.mjs`
 
-协议面上没有更多工具。只会调工具、发不了带 `Authorization` 的 HTTP 请求的客户端，在**自己这一侧**跑仓库里的零依赖代理（Node 20+ 或 Bun；按 raw URL 分发，和 `scripts/mcp-call.py` 同一类交付）：客户端用 stdio 起它，它把 `initialize` / `tools/list` / `tools/call` 等逐字转给桥，再往目录末尾追加两个本地工具：
+协议面上没有更多工具。只会调工具、发不了带 `Authorization` 的 HTTP 请求的客户端，在**自己这一侧**跑零依赖代理（Node 20+ 或 Bun）：客户端用 stdio 起它，它把 `initialize` / `tools/list` / `tools/call` 等逐字转给桥，再往目录末尾追加两个本地工具：
 
 - `a2mcp_upload { localPath, remotePath }`
 - `a2mcp_download { remotePath, localPath }`
 
-字节仍走 `/xfer/`：下载是一串 Range GET，写进 `<localPath>.a2mcp-part`，远程 etag 与大小没变就从断点续；上传第一块 `PUT` 建文件，之后每块 `PATCH` 带 `X-Update-Range: append`。缺省 8 MiB 一块（4 KiB 到 64 MiB），文件字节不进 JSON-RPC，也不进任何一方的上下文。共享优先复用：已有一份覆盖目标就借它；没有就自己开，传完只关自己开的那一份；已有共享不覆盖目标时直接拒绝，点名正在服务的路径，不顶掉也不停掉。上传不覆盖非空远端文件——这是 `--allow-upload` 的边界，覆盖要先在宿主上删。下载的本地目标用 rename 原子替换。代理不进 npm 包，也不是桥的协议面；它给桥带来的只是与任何 WebDAV 客户端相同的读请求。
+字节仍走 `/xfer/`：下载是一串 Range GET，写进 `<localPath>.a2mcp-part`，远程 etag 与大小没变就从断点续；上传第一块 `PUT` 建文件，之后每块 `PATCH` 带 `X-Update-Range: append`。缺省 8 MiB 一块（4 KiB 到 64 MiB），文件字节不进 JSON-RPC，也不进任何一方的上下文。共享优先复用：已有一份覆盖目标就借它；没有就自己开，传完只关自己开的那一份；已有共享不覆盖目标时直接拒绝，点名正在服务的路径，不顶掉也不停掉。上传不覆盖非空远端文件——这是 `--allow-upload` 的边界，覆盖要先在宿主上删。下载的本地目标用 rename 原子替换。代理不是桥的协议面，它给桥带来的只是与任何 WebDAV 客户端相同的读请求；但它随 npm 包发布，桥也把这份源码放在自己端点上，读不到仓库的调用方仍拿得到。
+
+**取客户端**：`GET /a2mcp/proxy.mjs`，与其他路由同一个 Bearer token，回 `text/javascript; charset=utf-8`、`cache-control: no-store`；包里没有这个文件时回 404，不是空文件。它发生在任何会话之前，因此不带 `Mcp-Session-Id`。这不进 `tools/list`，也不写审计——它只是一份静态源码；真正的传输由共享的关闭统计记录。
+
+**没有 MCP 客户端也能搬**：`node a2mcp-proxy.mjs upload LOCAL_PATH HOST_PATH` 与 `node a2mcp-proxy.mjs download HOST_PATH LOCAL_PATH` 跑同一套分块、续传与共享规则，成功后往 stdout 打一行紧凑 JSON（`localPath` / `remotePath` / `bytes` / `sha256` / `resumedFrom` / `share`），失败走 stderr 且退出码非零。它存在的理由就是不让拿得到 shell 的 agent 自己写隧道或文件服务器。
 
 **关闭时机**：TTL 到期、`xfer_stop`、或桥停止（宿主退出）。到期与顶替走同一条关闭路径——`dufs` 收 `SIGTERM`，等它真的退出（监听先注册再发信号，`exit` 只发一次）——并写一条 `xfer` 审计（`args.why` 为 `replaced` / `ttl expired` / `bridge stopped`）。关完之后 `/xfer/` 回 404。
 
