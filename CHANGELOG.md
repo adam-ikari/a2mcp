@@ -1,6 +1,6 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.8.0`（2026-10-23，`tools/list` 多两个桥自己服务的名字 `xfer_get` / `xfer_put`——只会发工具调用、发不了带 header 的 HTTP 请求的客户端也能把文件搬进去搬出来，分块经 `dufs` 收发，见那节）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.9.0`（2026-10-24，传文件离开 MCP 通道：2026-10-23 的 `xfer_get` / `xfer_put` 删掉，桥自带工具回到三个，分块交给调用方一侧的 `scripts/a2mcp-proxy.mjs`，见那节）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
@@ -428,6 +428,15 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.9.0 — 传文件离开 MCP 通道，分块交给调用方一侧的代理
+
+**这一版把 2026-10-23 的两个工具收回去了：`tools/list` 里桥自己的名字从五个回到三个（`xfer_share` / `xfer_status` / `xfer_stop`），文件字节一个都不再经过 MCP。** 需要分块的调用方改用 `scripts/a2mcp-proxy.mjs`：零依赖 ESM 的 stdio 代理，原样转发宿主工具，另加 `a2mcp_upload {localPath, remotePath}` 与 `a2mcp_download {remotePath, localPath}`，字节走 `/xfer/`——下载是一串 Range GET，上传先 PUT 再 PATCH 带 `X-Update-Range: append`，两个方向都能续传。代理复用覆盖目标的现有共享，没有才自己开、传完只关自己那份；上传不覆盖非空远端文件。协议面其余没动：MCP Streamable HTTP `2025-11-25`、单 Bearer token、`initialize` 与会话形状、`xfer_share` / `xfer_status` / `xfer_stop` 的名字与字段；回包字段也一个没少，只是改成单行紧凑 JSON、去掉了 `usage` 里的 curl 示例。远程 `mcp.json` 不用改；要用代理的把它指向 `scripts/a2mcp-proxy.mjs`，token 走 `A2MCP_TOKEN`。按 2026-10-18 判据（调用方经协议拿到的东西变了进 minor）进 v0.9.0。
+
+- 内容: 见上 2026-10-24 的「传文件不再过 base64：客户端一侧的 MCP 代理」一节（代理的线格式、共享归属、两向续传、覆盖边界、`bun test` 294→292、新增 `test:proxy` 19 项、`test:tunnel-xfer` 10 项、站点与提示词改口）。
+- 边界: 代理不在发布 tarball 里（`files` 仍只有 `extensions/` 与 `src/`），它是调用方脚本，不进桥的目录、协议与权限。覆盖已存在的非空远端文件始终 403，这是 `dufs` 只开 `--allow-upload` 的边界；下载的本地目标会被原子替换。分块缺省 8 MiB（4 KiB–64 MiB），长传输占住代理的一条文件队列，转发类调用不受影响。共享仍是全局单例：别的客户端可以在代理传输中把共享换掉，`startedAt` 守卫只保证代理不会关掉别人的共享。
+- 升级: `omp install https://github.com/adam-ikari/a2mcp.git` 重装并重启宿主会话；token 与端口不动。仍在用 `xfer_get` / `xfer_put` 的远程客户端要改成 HTTP 或改用代理——这两个名字这一版起不存在。代理要单独从仓库取（`scripts/a2mcp-proxy.mjs`），装插件不会把它放到 PATH 上。
+- 回归（发版前这一遍，2026-10-24，宿主 omp 18.12.1）: `bun test` 292 项 905 断言全绿；`lint` / `tsc` 干净；`tree` 3 项、`registry` 5497 行、`SMOKE OK`（22 个工具）、`HARDEN OK` 36 项、`SCENARIOS: 85 steps, 0 failed`、`takeover` 62.5 秒（inference POST=1、元数据非 POST=1）、审批 `VERDICT: B`（≥90002 ms 挂起、start=1 done=0）、`MCP-CALL OK`、`BOOTSTRAP OK`、`test:proxy` PASS 19 项、`test:tunnel-xfer` PASS 10 项、`test:install` `PACKAGE OK`；站点 `build` + `check` 全过。`test:obtain` 这一遍没跑完：pinned `cloudflared` 从 GitHub 下载四次都停在 30 秒无字节（其中两次分别收到 6.4 MB 与 9.2 MB，dufs 那半每次通过）——本机已有 `cloudflared 2026.9.1`，卡住的是取回，不是安装或校验逻辑。
 
 ## v0.8.0 — 只会调工具的调用方也能搬文件：`xfer_get` / `xfer_put`
 
