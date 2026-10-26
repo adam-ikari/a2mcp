@@ -430,6 +430,10 @@ describe("the a2mcp command", () => {
 		// The known first-call failure: the host's `edit` is not oldString/newString.
 		expect(out).toContain("takes a hashline patch");
 		expect(out).toContain("File not found");
+		// The reference client is not in the installed package; the prompt has to
+		// say where to get it, because the prompt is all the caller sees.
+		expect(out).toContain("https://github.com/adam-ikari/a2mcp");
+		expect(out).toContain("not in the installed package");
 		// General-purpose host: the prompt must not steer the model toward a device
 		// toolchain it may not have.
 		expect(out).not.toContain("device lab");

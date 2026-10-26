@@ -8,7 +8,7 @@
 
 远端 agent 第一次调宿主的 `edit`，照常见形态传 `oldString` / `newString`，回来是 `File not found`：宿主的 `edit` 收的是 hashline patch（`*** Begin Patch`、`[PATH#TAG]`、`PUT N.=M:`），`TAG` 取最近一次 `read` 的快照。原来的提示词把传文件写了六步，这一条却不在里面；提示词越长，最先被读到的越是用不上的部分。
 
-- docs: `initialize.instructions` 重排并压短（3772 字符），两份 README 的提示词块仍逐字同步。第一句改成调工具前先读 `tools/list` 里的入参 schema，紧接着点名 `edit` 的 hashline 形态与 `File not found`；调用规则（一次一件事、绝对路径、自带超时、副作用留痕、token 不进命令）接在后面；传文件从六步压到五步，`curl`、416、`PATCH` append、100 MB 边缘与切片拼接都在。
+- docs: `initialize.instructions` 重排并压短（3772 → 3005 字符），两份 README 的提示词块仍逐字同步。第一句改成调工具前先读 `tools/list` 里的入参 schema，紧接着点名 `edit` 的 hashline 形态与 `File not found`；调用规则（一次一件事、绝对路径、自带超时、副作用留痕、token 不进命令）接在后面；传文件从六步压到五步，`curl`、416、`PATCH` append、100 MB 边缘与切片拼接都在。最后一句补上参考客户端的取得方式：自行 `git clone https://github.com/adam-ikari/a2mcp` 再跑 `scripts/mcp-call.py`——它不在安装包里，原来的提示词只给路径，远端 agent 拿不到。
 - 反转: 提示词不再假定宿主是设备实验室。删掉「`adb`、烧录工具、串口走 `bash`」，改成「宿主是通用机器：命令在它自己的 `PATH` 上跑，别假设它的环境」。两份 README、站点「设备」页/导航/首页卡片与 OG 图同步改成「本机命令与挂载工具」；页面路径 `/devices` → `/commands`，示例 `adb devices` → `uname -a`。
 - site: 首页多一个「变更日志」按钮；传文件卡片补上 Cloudflare 100 MB 限制；单测数 281，场景探针 11 个叙事 / 85 步。
 - test: `bun test` 281 项 / 853 expect。`test/entry.test.ts` 与 `test/server.test.ts` 各加 hashline 与通用机器的断言，并钉住提示词里没有 `adb` / `device lab`。

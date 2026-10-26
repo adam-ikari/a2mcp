@@ -139,6 +139,7 @@ describe("server protocol", () => {
 			expect(guide).toContain("xfer_share");
 			expect(guide).toContain("curl");
 			expect(guide).toContain("takes a hashline patch");
+			expect(guide).toContain("https://github.com/adam-ikari/a2mcp");
 			expect(guide).not.toContain("adb");
 			expect(guide).toContain("Do not start your own tunnel or second file server");
 			expect(guide).not.toContain(TOKEN);
