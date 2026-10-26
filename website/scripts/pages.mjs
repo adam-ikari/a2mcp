@@ -90,15 +90,15 @@ export const PAGES = [
 		sections: ["传文件"],
 	},
 	{
-		path: "devices",
-		nav: "设备",
-		title: "设备：工具链与挂载设备",
+		path: "commands",
+		nav: "本机命令",
+		title: "本机命令与挂载工具：bash 与 xd:// 路径",
 		description:
-			"远程 agent 怎么用本机的 adb、idf.py 与串口工具：工具链走 bash，挂载设备走 read/write 的 xd:// 路径，不进 tools/list。",
+			"远程 agent 怎么用本机 PATH 上的命令与宿主挂载的工具：命令走 bash，挂载工具走 read/write 的 xd:// 路径，不进 tools/list；桥不假设这台机器上有什么。",
 		group: "用起来",
 		source: "README_ZN.md",
-		h1: "设备",
-		sections: ["设备"],
+		h1: "本机命令与挂载工具",
+		sections: ["本机命令与挂载工具"],
 	},
 	{
 		path: "reach",
@@ -156,7 +156,7 @@ export const PAGES = [
 		nav: "测试与核验",
 		title: "测试与核验：单测、真机探针与审批边界",
 		description:
-			"a2mcp 的核验矩阵：279 项单测、真实模型注册表、加固探针、发布包端到端、外部二进制获取、宿主推理 deny/restore、端到端场景与审批边界，附判据与实测数字。",
+			"a2mcp 的核验矩阵：281 项单测、真实模型注册表、加固探针、发布包端到端、外部二进制获取、宿主推理 deny/restore、端到端场景与审批边界，附判据与实测数字。",
 		group: "核验与历史",
 		source: "docs/testing.md",
 	},
@@ -165,7 +165,7 @@ export const PAGES = [
 		nav: "开发",
 		title: "开发：命令、文件布局与依赖钉",
 		description:
-			"a2mcp 仓库自己的开发命令：单测与七个真机探针、文件布局表、@oh-my-pi 依赖为什么钉死到宿主版本，以及版本守卫的判据。",
+			"a2mcp 仓库自己的开发命令：单测与十二个探针（七个起真宿主）、文件布局表、@oh-my-pi 依赖为什么钉死到宿主版本，以及版本守卫的判据。",
 		group: "核验与历史",
 		source: "README_ZN.md",
 		h1: "开发",
@@ -176,7 +176,7 @@ export const PAGES = [
 		nav: "变更日志",
 		title: "变更日志：设计取舍与实测记录",
 		description:
-			"a2mcp 从 v0.1.0 起的改动记录：名字从 a2a 改到 a2mcp、宿主推理开关、传文件面两次重做、安装方式收敛到一条 git URL，每条都带实测数字与代价。",
+			"a2mcp 从 v0.1.0 起的改动记录：名字从 a2a 改到 a2mcp、宿主推理开关、传文件面三次重做、安装方式收敛到一条 git URL，每条都带实测数字与代价。",
 		group: "核验与历史",
 		source: "CHANGELOG.md",
 	},

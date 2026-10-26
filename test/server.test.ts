@@ -138,6 +138,8 @@ describe("server protocol", () => {
 			const guide = body.result.instructions ?? "";
 			expect(guide).toContain("xfer_share");
 			expect(guide).toContain("curl");
+			expect(guide).toContain("takes a hashline patch");
+			expect(guide).not.toContain("adb");
 			expect(guide).toContain("Do not start your own tunnel or second file server");
 			expect(guide).not.toContain(TOKEN);
 			// English: the reader is the model on the other side.

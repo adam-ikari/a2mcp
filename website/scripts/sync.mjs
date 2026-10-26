@@ -11,7 +11,7 @@
  *
  * The README answers seventeen questions in one file. On the site they are
  * split by task, because a visitor arrives with a task and a search matches a
- * page, not a file: 快速开始 / 传文件 / 设备 / 跨机转发 / 安全与边界 /
+ * page, not a file: 快速开始 / 传文件 / 本机命令 / 跨机转发 / 安全与边界 /
  * 故障排查 / 开发 (see scripts/pages.mjs for the map and why it exists).
  *
  * The split is mechanical — sections are cut out of the README by name — so
@@ -253,6 +253,9 @@ hero:
     - theme: alt
       text: 协议参考
       link: /protocol
+    - theme: alt
+      text: 变更日志
+      link: /changelog
 
 features:
   - title: 装上它
@@ -262,11 +265,11 @@ features:
     details: 会说 MCP 的填 mcp.json；不会的用 scripts/mcp-call.py，别自己写客户端。
     link: /start#两条接入路
   - title: 传文件走 WebDAV
-    details: xfer_share 把一条宿主路径挂在 /xfer/ 路由下，字节不经过 JSON-RPC。
+    details: xfer_share 把一条宿主路径挂在 /xfer/ 路由下，字节不经过 JSON-RPC；公网侧单请求受 Cloudflare 100 MB 限制，更大按片传。
     link: /files
-  - title: 驱动接在本机上的设备
-    details: adb、串口工具都是本机 PATH 上的命令，远程 agent 调 bash 就在这台机器上跑。
-    link: /devices
+  - title: 用本机的整条工具链
+    details: 编译器、包管理器、项目脚本都在本机 PATH 上；远程 agent 调 bash，命令就在这台机器上跑。
+    link: /commands
   - title: 跨机转发
     details: 默认只绑回环；跨机用 SSH 端口转发，要公网主机名就在宿主会话里跑 /a2mcp tunnel。
     link: /reach
@@ -277,7 +280,7 @@ features:
     details: 客户端要实现的全部约定：处理顺序、会话、错误码、xfer_* 工具与 /xfer/ 路由。
     link: /protocol
   - title: 测试与核验
-    details: 279 项单测之外，几个探针大多拉起真实的 omp 跑完整流程。
+    details: 281 项单测之外，几个探针大多拉起真实的 omp 跑完整流程。
     link: /testing
 ---
 

@@ -219,7 +219,7 @@ What separates them is whether your client already speaks MCP.
 curl -fsSL https://raw.githubusercontent.com/adam-ikari/a2mcp/HEAD/scripts/mcp-call.py -o mcp-call.py
 python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> list
 python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> schema read
-python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> call bash '{"command":"adb devices"}'
+python3 mcp-call.py --url http://127.0.0.1:<port>/ --token <token> call bash '{"command":"uname -a"}'
 ```
 
 `list` prints each tool with the first line of its description; `schema <name>` prints that tool's whole catalog entry — name, description, input schema — so you can read what a tool wants without writing a client to ask for it; `call <name> <json>` runs one tool and prints its text output. The exit code is the signal — non-zero on a bad token, a transport error, or a result flagged `isError`. Every call carries a timeout (default 30s, `--timeout` to change), because a tool awaiting approval on a host with no UI hangs instead of erroring. `--url`/`--token` also read `A2MCP_URL`/`A2MCP_TOKEN`. The script is not in the install tarball, only at that raw URL, and it is a reference implementation — adapt it freely rather than treating it as a supported surface.
@@ -231,27 +231,22 @@ A remote agent will call the host's tools as if they were the same-named tools i
 The block below is the text `/a2mcp prompt` prints, and the same text the endpoint returns as MCP `instructions` on `initialize` — a client that shows instructions hands it to its model with nothing for the operator to paste. It carries neither the URL nor the token — those go into the remote client's `mcp.json`, not into the prompt.
 
 ```text
-You are connected over MCP to a live agent session on another machine. The tools in `tools/list` are that machine's own: `bash` runs commands in its shell, `read`/`write`/`edit` work on its files, and the results come back verbatim — errors included, in the tool's own words. Nothing is reasoned about on that side: you decide what runs, that machine only executes.
+You are connected over MCP to a live agent session on another machine. The tools in `tools/list` run there for real: `bash` runs in its shell, `read`/`write`/`edit` act on its files, and results come back verbatim, errors included. Nothing is reasoned about on that side: you decide what runs, that machine only executes.
 
-How to call:
-- Work one fact at a time: call a tool, read its result, then decide the next call.
-- Use absolute paths; no working directory is implied. The machine is often a device lab — `adb`, flashing tools and serial ports are reached through `bash`.
+Before you call a tool:
+- Read its input schema in `tools/list`. A same-named tool can differ here: this host's `edit` takes a hashline patch (`*** Begin Patch`, `[PATH#TAG]`, `PUT N.=M:`, `*** End Patch`), where `TAG` is the 4-hex snapshot from your latest `read` — not `oldString`/`newString`. A guess comes back `File not found`; re-read after each edit.
+- Work one fact at a time: call, read the result, then decide the next call.
+- Use absolute paths; no working directory is implied. The host is a general-purpose machine: commands run through `bash` on whatever `PATH` it has, and nothing else should be assumed about its setup.
 - Give every call a timeout of your own. A call can hang: a permission prompt on the other side may have nobody to answer it, and your timeout is the only way out.
 - What you run there stays there: nothing on that machine is rolled back for you.
 - The token in your client config is the only gate to that machine. Do not echo it into commands, files, or messages.
 
-Files move over the bridge's own WebDAV route, never through tool arguments. `xfer_share` works like this:
-1. `xfer_share {"path": "/absolute/host/path", "ttlSeconds": 3600}` serves one host file or directory and returns compact JSON: `url` is the route on this endpoint, `publicUrl` is the same route behind the operator's tunnel (or `null`), plus `route`, `path`, `port`, `startedAt`, `expiresAt` and `installed`. The share closes itself at `ttlSeconds` (default 3600).
-2. Transfer over HTTP with `Authorization: Bearer <token>` on every request and paths relative to the shared path. GET downloads, and `Range: bytes=start-end` reads a slice or resumes (a range past the end answers 416 with `content-range: bytes */<size>`). PUT creates a file. PATCH with `X-Update-Range: append` continues a partial upload: first chunk PUT, later chunks PATCH. PROPFIND lists a directory. DELETE and MOVE are refused, and an upload never overwrites an existing non-empty file (403) — remove the remote file some other way first.
-3. Use an existing WebDAV client instead of writing your own. Anything that can send `Authorization: Bearer <token>` works; `curl` covers the common cases:
-   - download: `curl -fL -C - -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file" -o LOCAL`. `-C -` resumes a partial local file with a Range request; a `416` means the local copy is already complete.
-   - upload: `curl -fL -T LOCAL -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file"`.
-   - list: `curl -fL -X PROPFIND -H "Depth: 1" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/"`.
-   `$ROUTE` is the share's `publicUrl` when it is not `null`; otherwise it is the bridge URL your client already uses, with `/xfer/` appended — not the loopback `url` in the reply, which is the host's own address. `rclone` and other WebDAV clients mount the same route. Interrupted downloads resume from where they stopped. Standard WebDAV clients restart an interrupted upload; `dufs` also accepts `PATCH` with `X-Update-Range: append`, so a client that can send that header resumes instead. Keep the token in an environment variable rather than pasting its value into a command line.
-   One limit is outside the bridge. When `$ROUTE` is a `publicUrl`, Cloudflare sits in front of it and refuses a request body over 100 MB (Free/Pro; 200 MB Business); response bodies are not capped. Split a larger upload below that edge with `split -b 64m FILE FILE.part.`, PUT every part with `curl -fsS -T "$p" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/$(basename "$p")"`, then join them on the host with its own `bash` tool: `cat /shared/FILE.part.* > /shared/FILE && rm /shared/FILE.part.*`, and check `sha256sum /shared/FILE`. Every part is an ordinary PUT; if one is interrupted, delete that non-empty part on the host and send it again — the others stay. The loopback or SSH-forward route has no edge limit.
-4. One share at a time: a second `xfer_share` replaces the first and says `replaced: true`. `xfer_status` reports the current share; `xfer_stop` closes it. Close the share you opened when the transfer is done; do not stop a share you did not open.
-5. Reach the route through `publicUrl` when it is not `null`. When it is `null`, ask the operator to run `/a2mcp tunnel` or forward the bridge port over SSH. Do not start your own tunnel or second file server: a hostname you open is not behind this bridge's token, so whatever it serves is public.
-6. Never move file bytes through `read`, `bash` or tool arguments: host `read` truncates around 150 KB and `bash` around 768 bytes, so large or binary content comes back corrupted. Never paste megabytes into a command.
+Files move over the bridge's own WebDAV route, never through tool arguments. Use an existing WebDAV client (`curl`, `rclone`); do not write your own. The route is:
+1. `xfer_share {"path": "/absolute/host/path"}` serves one host file or directory and returns the route; it closes after an hour unless you pass `ttlSeconds`. Use `publicUrl` when it is not `null`; otherwise use the bridge URL your client already uses plus `/xfer/` — the loopback `url` in the reply is the host's own address. One share at a time: a second `xfer_share` replaces the first; `xfer_status` reports it, `xfer_stop` closes it, and you close only the share you opened.
+2. Send `Authorization: Bearer <token>` on every request, with paths relative to the shared path, and keep the token in an environment variable rather than in a command line. Download: `curl -fL -C - -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file" -o LOCAL`; `-C -` resumes, and a `416` means the local copy is complete. Upload: `curl -fL -T LOCAL -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file"`. To resume an upload, send the first chunk with PUT and later chunks with PATCH plus `X-Update-Range: append`. List: `curl -fL -X PROPFIND -H "Depth: 1" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/"`. DELETE and MOVE are refused, and an upload never overwrites a non-empty file (403): delete that file on the host first.
+3. Over a `publicUrl`, Cloudflare refuses a request body over 100 MB. Split a larger upload with `split -b 64m FILE FILE.part.`, PUT each part, then join them on the host with `bash` (`cat FILE.part.* > FILE`), check `sha256sum`, and remove the parts. If a part is interrupted, delete that non-empty part on the host and send it again.
+4. Never move file bytes through `read`, `bash` or tool arguments: host `read` truncates around 150 KB and `bash` around 768 bytes, so large or binary content comes back corrupted. Never paste megabytes into a command.
+5. When `publicUrl` is `null`, ask the operator to run `/a2mcp tunnel` or forward the bridge port over SSH. Do not start your own tunnel or second file server: a hostname you open is not behind this bridge's token, so whatever it serves is public.
 
 If your side cannot speak MCP to this endpoint, use the bridge's zero-dependency client for single calls — `scripts/mcp-call.py` — and a standard WebDAV client (`curl`, `rclone`) for files. There is no bridge-specific file client to install or fetch.
 ```
@@ -326,18 +321,18 @@ The bridge finds the file server itself — `PATH` first, and when nothing answe
 
 A share that has to fetch waits for the fetch; the reply's `installed` names the version pulled (`null` when it was already on `PATH`). Every call writes one audit record (`tool: "xfer"`), and each fetch pairs with an `install` record. The record that closes a share also carries a tally of what crossed the route — requests, bytes, uploads — so "the share was open" and "someone moved something over it" are two different questions and only the first one used to be answerable. The bytes are counted from the two content-lengths, so the number is a floor, and they say how much moved, never who: the token is shared.
 
-## Devices
+## Commands and mounted tools
 
-The host exposes devices in two shapes, and the bridge passes both through unchanged.
+The host passes two kinds of things through unchanged, and the bridge assumes nothing about this machine's setup.
 
-**Toolchains (`bash`).** `adb`, `idf.py`, serial tools and flashers are not omp tools — they are commands on this machine. `bash` is in `tools/list`, so a remote client runs them directly; whatever is on `PATH` is reachable:
+**Commands (`bash`).** Compilers, package managers and project scripts are not omp tools — they are commands on this machine. `bash` is in `tools/list`, so a remote client runs them directly; whatever is on `PATH` is reachable. Look before assuming a tool exists:
 
 ```json
 { "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-  "params": { "name": "bash", "arguments": { "command": "adb devices -l" } } }
+  "params": { "name": "bash", "arguments": { "command": "uname -a" } } }
 ```
 
-**Mounted devices (`xd://`).** The host mounts some tools as virtual devices — **they are not in `tools/list`** — driven through the `path` of `read` / `write`:
+**Mounted tools (`xd://`).** The host can mount some tools as virtual devices — **they are not in `tools/list`** — driven through the `path` of `read` / `write`:
 
 ```json
 { "name": "read",  "arguments": { "path": "xd://" } }                    // list mounted devices
@@ -345,7 +340,7 @@ The host exposes devices in two shapes, and the bridge passes both through uncha
 { "name": "write", "arguments": { "path": "xd://debug", "content": { … } } }  // execute
 ```
 
-The listing is decided by the host at runtime. Calling `xd://` directly through `tools/call` is refused (`not exposed`): a device is not a tool name, and only `read` / `write` reach it — that is the host's shape, the bridge does not rewrite it.
+The listing is decided by the host at runtime. Calling `xd://` directly through `tools/call` is refused (`not exposed`): a mount point is not a tool name, and only `read` / `write` reach it — that is the host's shape, the bridge does not rewrite it.
 
 ## Security and boundaries
 
@@ -405,7 +400,7 @@ bun run test:smoke    # real E2E (needs a local omp; no model credentials)
 bun run test:hardening # real-host hardening checks, 36 items (needs a local omp)
 bun run test:approval  # approval-boundary discriminating check, ~95s (needs a local omp)
 bun run test:takeover  # host inference deny/restore against a counting sink, ~60s (needs a local omp)
-bun run test:scenario  # end-to-end scenarios, 8 narratives / 41 steps, ~45s (needs a local omp)
+bun run test:scenario  # end-to-end scenarios, 11 narratives / 85 steps, ~90s (needs a local omp)
 bun run test:install   # published-package self-containment + a real host over MCP, 55 items (needs a local omp; fetches ~6.4 MB from GitHub and once installs the package from the registry — that group info-skips while the package is unpublished)
 bun run test:mcp-call  # the reference client scripts/mcp-call.py against a real host + a fake 404 server, 7 checks (needs a local omp and python3; no python3 → the whole probe info-skips, exit 0)
 bun run test:bootstrap # the one-shot installer's decisions, 47 items, ~9s (everything but the last group runs against a recording stub omp and a fake curl; the last group needs a local omp)

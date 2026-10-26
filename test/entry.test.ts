@@ -427,6 +427,13 @@ describe("the a2mcp command", () => {
 		// The prompt is English: it is read by a model on the other side.
 		expect(out).toContain("You are connected over MCP to a live agent session on another machine.");
 		expect(out).toContain("Give every call a timeout of your own.");
+		// The known first-call failure: the host's `edit` is not oldString/newString.
+		expect(out).toContain("takes a hashline patch");
+		expect(out).toContain("File not found");
+		// General-purpose host: the prompt must not steer the model toward a device
+		// toolchain it may not have.
+		expect(out).not.toContain("device lab");
+		expect(out).not.toContain("adb");
 		// The two things a first caller gets wrong: the machine is real, so what it
 		// ran stays there; and file bytes move only over /xfer, never pasted into a
 		// command or carried in a tool argument.
