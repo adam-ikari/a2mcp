@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-26T09:53:22"
+updated: "2026-10-26T10:05:02"
 ---
 
 <!-- compiled_truth -->
@@ -1259,4 +1259,10 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   kind: decision
   summary: "2026-10-26：真机上仍有调用方另起反向隧道推文件，根因是提示词的两个缺口，不是工具能力。其一，提示词列了 Download / Upload 命令，但没写共享是双向的，读成「xfer_share 只共享宿主文件供我下载」，于是想暴露自己的机器让宿主来取；现在写明 GET 下载、PUT/PATCH 上传走同一个 $ROUTE 与 token，要发给宿主就 PUT 进共享，不要暴露自己的机器。其二，只说 publicUrl 不为 null 时用它、为空时请操作员开隧道，没说 publicUrl 就是操作员已有的那条、MCP 与 /xfer/ 共用同一个主机名，也没说反向隧道不是出口；现在写明复用、为空时请操作员做端口转发（不是反向隧道），原有的「不要自己起隧道或第二个文件服务器」保留。提示词 3005 → 3300 字符；test/entry.test.ts 与 test/server.test.ts 钉住 bidirectional / existing tunnel / reverse tunnel。分辨要点：反向隧道不是第二个文件服务器，旧禁令没有覆盖它。"
   source: "2026-10-26 反向隧道与双向共享"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-26T10:05:02
+  kind: decision
+  summary: "2026-10-26：给远端 agent 的宿主使用边界——只能用 tools/list 里的工具；不装依赖、不建虚拟环境或容器、不编译，只跑本机已有的命令，也不在宿主上执行复杂操作。写进 initialize.instructions、两份 README 的「本机命令与挂载工具」、站点 commands 页描述与首页卡片；原首页「用本机的整条工具链（编译器、包管理器、项目脚本）」与 OG 的「跑构建」同步改掉。边界性质照实：提示词是劝说，桥不拦截这些命令；真正的闸门仍是宿主自己的审批与工具权限。"
+  source: "2026-10-26 宿主使用边界"
   affects: [a2a-mcp-bridge]
