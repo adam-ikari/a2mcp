@@ -202,7 +202,7 @@ You are connected over MCP to a live agent session on another machine. Its tools
 
 Before you call a tool:
 - Read its input schema in `tools/list`. This host's `edit` takes a hashline patch (`*** Begin Patch`, `[PATH#TAG]`, `PUT N.=M:`, `*** End Patch`), where `TAG` is the 4-hex snapshot from your latest `read` — not `oldString`/`newString`. A guess comes back `File not found`; re-read after each edit.
-- Work one fact at a time: call, read the result, then decide. Use absolute paths; assume nothing about the host's `PATH` or setup.
+- Work one fact at a time: call, read the result, then decide. Use only the tools in `tools/list`; absolute paths; assume nothing about the host's `PATH`; do not install packages, create environments, or compile — run only what is already there.
 - Give every call a timeout of your own. A permission prompt there may have nobody to answer it.
 - What you run there stays there. The token is the only gate: never echo it into commands, files, or messages.
 
@@ -291,7 +291,7 @@ token 放进环境变量，不要放进命令行：argv 在 `ps` 里可见。
 
 宿主那边有两类东西，桥都原样透传——桥不假设这台机器上有什么。
 
-**命令（`bash`）**。编译器、包管理器、项目脚本都不是 omp 的工具，是本机命令；`bash` 在 `tools/list` 里，远程直接跑，PATH 上有什么就有什么。先看再跑，不要按别的机器的习惯猜：
+**命令（`bash`）**。本机已有的命令不是 omp 的工具；`bash` 在 `tools/list` 里，远程直接跑，PATH 上有什么就用什么。不要装依赖、建虚拟环境、容器或编译——那是在宿主上造新环境，不是调用已有工具。先看再跑，不要按别的机器的习惯猜：
 
 ```json
 { "jsonrpc": "2.0", "id": 1, "method": "tools/call",

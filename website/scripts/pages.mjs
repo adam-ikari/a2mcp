@@ -94,7 +94,7 @@ export const PAGES = [
 		nav: "本机命令",
 		title: "本机命令与挂载工具：bash 与 xd:// 路径",
 		description:
-			"远程 agent 怎么用本机 PATH 上的命令与宿主挂载的工具：命令走 bash，挂载工具走 read/write 的 xd:// 路径，不进 tools/list；桥不假设这台机器上有什么。",
+			"远程 agent 怎么用本机已有的命令与宿主挂载的工具：命令走 bash，挂载工具走 read/write 的 xd:// 路径，不进 tools/list；不装依赖、不建环境、不编译。",
 		group: "用起来",
 		source: "README_ZN.md",
 		h1: "本机命令与挂载工具",

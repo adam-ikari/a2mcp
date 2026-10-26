@@ -142,6 +142,7 @@ describe("server protocol", () => {
 			expect(guide).toContain("https://github.com/adam-ikari/a2mcp");
 			expect(guide).toContain("The share is bidirectional");
 			expect(guide).toContain("not a reverse tunnel");
+			expect(guide).toContain("do not install packages, create environments, or compile");
 			expect(guide).not.toContain("adb");
 			expect(guide).toContain("Do not start your own tunnel or second file server");
 			expect(guide).not.toContain(TOKEN);

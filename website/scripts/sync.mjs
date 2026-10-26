@@ -267,8 +267,8 @@ features:
   - title: 传文件走 WebDAV
     details: xfer_share 把一条宿主路径挂在 /xfer/ 路由下，字节不经过 JSON-RPC；公网侧单请求受 Cloudflare 100 MB 限制，更大按片传。
     link: /files
-  - title: 用本机的整条工具链
-    details: 编译器、包管理器、项目脚本都在本机 PATH 上；远程 agent 调 bash，命令就在这台机器上跑。
+  - title: 用本机已有的工具
+    details: 远程 agent 调 bash 跑 PATH 上已有的命令；不装依赖、不建环境、不编译。
     link: /commands
   - title: 跨机转发
     details: 默认只绑回环；跨机用 SSH 端口转发，要公网主机名就在宿主会话里跑 /a2mcp tunnel。

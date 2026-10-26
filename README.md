@@ -235,7 +235,7 @@ You are connected over MCP to a live agent session on another machine. Its tools
 
 Before you call a tool:
 - Read its input schema in `tools/list`. This host's `edit` takes a hashline patch (`*** Begin Patch`, `[PATH#TAG]`, `PUT N.=M:`, `*** End Patch`), where `TAG` is the 4-hex snapshot from your latest `read` — not `oldString`/`newString`. A guess comes back `File not found`; re-read after each edit.
-- Work one fact at a time: call, read the result, then decide. Use absolute paths; assume nothing about the host's `PATH` or setup.
+- Work one fact at a time: call, read the result, then decide. Use only the tools in `tools/list`; absolute paths; assume nothing about the host's `PATH`; do not install packages, create environments, or compile — run only what is already there.
 - Give every call a timeout of your own. A permission prompt there may have nobody to answer it.
 - What you run there stays there. The token is the only gate: never echo it into commands, files, or messages.
 
@@ -324,7 +324,7 @@ A share that has to fetch waits for the fetch; the reply's `installed` names the
 
 The host passes two kinds of things through unchanged, and the bridge assumes nothing about this machine's setup.
 
-**Commands (`bash`).** Compilers, package managers and project scripts are not omp tools — they are commands on this machine. `bash` is in `tools/list`, so a remote client runs them directly; whatever is on `PATH` is reachable. Look before assuming a tool exists:
+**Commands (`bash`).** Existing commands on this machine are not omp tools. `bash` is in `tools/list`, so a remote client runs them directly; whatever is on `PATH` is reachable. Do not install packages, create virtualenvs or containers, or compile — that builds a new environment on the host instead of using the tools already there. Look before assuming a tool exists:
 
 ```json
 { "jsonrpc": "2.0", "id": 1, "method": "tools/call",

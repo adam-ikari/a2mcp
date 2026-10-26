@@ -16,7 +16,7 @@ export const BRIDGE_INSTRUCTIONS = `You are connected over MCP to a live agent s
 
 Before you call a tool:
 - Read its input schema in \`tools/list\`. This host's \`edit\` takes a hashline patch (\`*** Begin Patch\`, \`[PATH#TAG]\`, \`PUT N.=M:\`, \`*** End Patch\`), where \`TAG\` is the 4-hex snapshot from your latest \`read\` — not \`oldString\`/\`newString\`. A guess comes back \`File not found\`; re-read after each edit.
-- Work one fact at a time: call, read the result, then decide. Use absolute paths; assume nothing about the host's \`PATH\` or setup.
+- Work one fact at a time: call, read the result, then decide. Use only the tools in \`tools/list\`; absolute paths; assume nothing about the host's \`PATH\`; do not install packages, create environments, or compile — run only what is already there.
 - Give every call a timeout of your own. A permission prompt there may have nobody to answer it.
 - What you run there stays there. The token is the only gate: never echo it into commands, files, or messages.
 

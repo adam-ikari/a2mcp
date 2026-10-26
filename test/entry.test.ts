@@ -435,9 +435,11 @@ describe("the a2mcp command", () => {
 		expect(out).toContain("https://github.com/adam-ikari/a2mcp");
 		expect(out).toContain("not in the installed package");
 		// General-purpose host: the prompt must not steer the model toward a device
-		// toolchain it may not have.
+		// toolchain it may not have, and must not let it build a new environment.
 		expect(out).not.toContain("device lab");
 		expect(out).not.toContain("adb");
+		expect(out).toContain("Use only the tools in `tools/list`");
+		expect(out).toContain("do not install packages, create environments, or compile");
 		// The two things a first caller gets wrong: the machine is real, so what it
 		// ran stays there; and file bytes move only over /xfer, never pasted into a
 		// command or carried in a tool argument.

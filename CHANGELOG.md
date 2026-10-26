@@ -1,6 +1,6 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.10.1`（2026-10-26，只在文档与提示词里补上公网隧道路由的 Cloudflare 边缘请求体上限与大文件切片做法；协议面与 `v0.10.0` 相同），上一版是 `v0.10.0`（2026-10-24，取消请求体上限，删掉调用方代理，传文件交给 `curl` / `rclone` 这样的现成 WebDAV 客户端；`v0.9.0` 的代理只活了一版，见那节）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.10.2`（2026-10-26，提示词按首次调用重写并压短，写明共享双向、隧道复用与参考客户端自行克隆；协议面与 `v0.10.1` 相同），上一版是 `v0.10.1`（2026-10-26，只在文档与提示词里补上公网隧道路由的 Cloudflare 边缘请求体上限与大文件切片做法；协议面与 `v0.10.0` 相同），再上一版是 `v0.10.0`（2026-10-24，取消请求体上限，删掉调用方代理，传文件交给 `curl` / `rclone` 这样的现成 WebDAV 客户端；`v0.9.0` 的代理只活了一版，见那节）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
 
@@ -8,12 +8,13 @@
 
 远端 agent 第一次调宿主的 `edit`，照常见形态传 `oldString` / `newString`，回来是 `File not found`：宿主的 `edit` 收的是 hashline patch（`*** Begin Patch`、`[PATH#TAG]`、`PUT N.=M:`），`TAG` 取最近一次 `read` 的快照。原来的提示词把传文件写了六步，这一条却不在里面；提示词越长，最先被读到的越是用不上的部分。
 
-- docs: `initialize.instructions` 重排并压短（3772 → 3300 字符），两份 README 的提示词块仍逐字同步。第一句改成调工具前先读 `tools/list` 里的入参 schema，紧接着点名 `edit` 的 hashline 形态与 `File not found`；调用规则（一次一件事、绝对路径、自带超时、副作用留痕、token 不进命令）接在后面；传文件从六步压到五步，`curl`、416、`PATCH` append、100 MB 边缘与切片拼接都在。最后一句补上参考客户端的取得方式：自行 `git clone https://github.com/adam-ikari/a2mcp` 再跑 `scripts/mcp-call.py`——它不在安装包里，原来的提示词只给路径，远端 agent 拿不到。
+- docs: `initialize.instructions` 重排并压短（3772 → 3414 字符），两份 README 的提示词块仍逐字同步。第一句改成调工具前先读 `tools/list` 里的入参 schema，紧接着点名 `edit` 的 hashline 形态与 `File not found`；调用规则（一次一件事、绝对路径、自带超时、副作用留痕、token 不进命令）接在后面；传文件从六步压到五步，`curl`、416、`PATCH` append、100 MB 边缘与切片拼接都在。最后一句补上参考客户端的取得方式：自行 `git clone https://github.com/adam-ikari/a2mcp` 再跑 `scripts/mcp-call.py`——它不在安装包里，原来的提示词只给路径，远端 agent 拿不到。
 - 修正: 提示词补两条行为约束，起因是调用方把共享读成只能下载，另起了一条反向隧道推文件。现在写明共享是双向的：GET 下载、PUT/PATCH 上传走同一个 `$ROUTE` 与 token，要发给宿主就 PUT 进共享，不要暴露自己的机器；`publicUrl` 是操作员已有的隧道，MCP 与 `/xfer/` 共用一条，为 `null` 时请操作员做端口转发（不是反向隧道）。
+- 修正: 提示词再补宿主使用边界：只能用 `tools/list` 里的工具；不装依赖、不建虚拟环境或容器、不编译，只跑本机已有的。两份 README 的「本机命令与挂载工具」与站点首页卡片同步，从「整条工具链」改成「本机已有的工具」；OG 图里的「跑构建」也删掉。
 - 反转: 提示词不再假定宿主是设备实验室。删掉「`adb`、烧录工具、串口走 `bash`」，改成「宿主是通用机器：命令在它自己的 `PATH` 上跑，别假设它的环境」。两份 README、站点「设备」页/导航/首页卡片与 OG 图同步改成「本机命令与挂载工具」；页面路径 `/devices` → `/commands`，示例 `adb devices` → `uname -a`。
 - site: 首页多一个「变更日志」按钮；传文件卡片补上 Cloudflare 100 MB 限制；单测数 281，场景探针 11 个叙事 / 85 步。
-- test: `bun test` 281 项 / 862 expect。`test/entry.test.ts` 与 `test/server.test.ts` 各加 hashline、通用机器、clone URL、双向共享与「不是反向隧道」的断言，并钉住提示词里没有 `adb` / `device lab`。
-- 版本位: 工具名、回包字段、路由都没动，变的只是 `initialize.instructions` 的措辞与顺序；按 v0.10.1 的先例进 patch 位，这一笔尚未发版。
+- test: `bun test` 281 项 / 865 expect。`test/entry.test.ts` 与 `test/server.test.ts` 各加 hashline、通用机器、clone URL、双向共享、「不是反向隧道」与「不装环境、不编译」的断言，并钉住提示词里没有 `adb` / `device lab`。
+- 版本位: 工具名、回包字段、路由都没动，变的只是 `initialize.instructions` 的措辞与顺序；按 v0.10.1 的先例进 patch 位，v0.10.2。
 
 ## 2026-10-26 — 公网隧道路由的请求体上限：按边缘切片，宿主侧拼接
 
@@ -464,6 +465,15 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.10.2 — 提示词按首次调用重写：先读 schema，共享写明双向，隧道写明复用
+
+**这一版只动 `initialize.instructions`、两份 README、站点文案与测试断言，协议面（工具名、回包字段、路由）与 v0.10.1 相同。** 远端 agent 第一次调宿主的 `edit` 时按常见形态传 `oldString` / `newString`，回来 `File not found`；提示词现在先让调用方读 `tools/list` 的入参 schema，并写明 hashline patch 的四个记号与每次编辑后重读。宿主不再被写成设备实验室：命令在它自己的 `PATH` 上跑，别假设环境；只用 `tools/list` 里的工具，不装依赖、不建环境、不编译，跑本机已有的。传文件补上两条行为约束，起因是调用方把共享读成只能下载、另起反向隧道推文件：同一共享 GET 下载、PUT/PATCH 上传；`publicUrl` 是操作员已有的隧道，MCP 与 `/xfer/` 共用一条，为 `null` 时请操作员做端口转发（不是反向隧道）。参考客户端 `scripts/mcp-call.py` 不在安装包里，提示词写明自行 `git clone` 取得。全文 3772 → 3414 字符。
+
+- 内容: 见上 2026-10-26 的「提示词按第一次调用会撞上的失败重排」一节。
+- 边界: 提示词是劝说，不是闸门。桥阻止不了调用方在它自己那侧开隧道，也阻止不了它执行装依赖、建环境或编译的命令；闸门仍是宿主自己的审批与工具权限。这次的行为证据是现场那次反向隧道与宿主上的环境操作，不是探针。
+- 升级: `omp install https://github.com/adam-ikari/a2mcp.git` 重装并重启宿主会话即可，token 与端口不动。客户端不用改 `mcp.json`；改的只是会读 `instructions` 的模型所见，以及站点文案。
+- 回归（发版前这一遍，2026-10-26，宿主 omp 18.12.1）: `bun test` 281 项 865 断言全绿（18 文件）；`lint` / `tsc` 干净；`tree` 3 项、`registry` 5497 行、`SMOKE OK`（22 个工具）、`HARDEN OK`、`SCENARIOS: 85 steps, 0 failed`、`takeover` 66.5 秒（inference POST=1、元数据非 POST=1）、审批 `VERDICT: B`（≥90001 ms 挂起、start=1 done=0）、`MCP-CALL OK`、`BOOTSTRAP OK`、`test:tunnel-xfer` PASS、`test:install` `PACKAGE OK`（npm 真装组按 `info:` 跳过）。`test:obtain` 的 `dufs` 半程通过，pinned `cloudflared` 收到 32.1 MB 后停在 30 秒无字节——与 v0.10.1 发版前同一种网络停顿，卡住的是取回；这一项退出码 1。
 
 ## v0.10.1 — 公网隧道侧的上限写进文档：大文件按边缘切片，宿主侧拼接
 
