@@ -444,6 +444,13 @@ describe("the a2mcp command", () => {
 		expect(out).toContain("What you run there stays there");
 		expect(out).toContain("Files move over the bridge's own WebDAV route");
 		expect(out).toContain("Use an existing WebDAV client");
+		// An agent read the share as download-only and opened a reverse tunnel to
+		// push a file. The prompt has to say the share goes both ways, that the
+		// existing tunnel is reused, and that a reverse one is not the exit.
+		expect(out).toContain("The share is bidirectional");
+		expect(out).toContain("do not expose your own machine");
+		expect(out).toContain("the operator's existing tunnel");
+		expect(out).toContain("not a reverse tunnel");
 		expect(out).toContain("curl -fL -C -");
 		// The edge in front of a public URL has its own cap; the prompt has to say so.
 		expect(out).toContain("request body over 100 MB");
