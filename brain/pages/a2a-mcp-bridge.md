@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-26T09:20:24"
+updated: "2026-10-26T09:45:41"
 ---
 
 <!-- compiled_truth -->
@@ -1247,4 +1247,10 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   kind: decision
   summary: "2026-10-26：远端提示词（initialize.instructions，同时也是 /a2mcp prompt 与两份 README 里逐字同步的那段）按第一次调用会撞上的失败重排，并去掉设备实验室预设。排序：先让调用方读 tools/list 的入参 schema，并点名本机 edit 收的是 hashline patch（*** Begin Patch / [PATH#TAG] / PUT N.=M:），TAG 取自最近一次 read，猜 oldString/newString 会回 File not found，每次编辑后重读；再是调用规则（一次一件事、绝对路径、自带超时、副作用留痕、token 不进命令）；最后才是传文件。全文压到 3772 字符——长提示词会被略读，先读到的应该是最能改变首次行为的那条。通用性：删掉 adb/烧录/串口这类设备实验室措辞，改成宿主是通用机器，命令在它自己的 PATH 上跑，不假设环境；两份 README、站点导航/页面（/devices → /commands）、首页卡片与 OG 图同步。代价：提示词是调用方唯一会自动读到的说明，改它等于改首次调用行为；因此 test/entry.test.ts 与 test/server.test.ts 钉住 hashline、File not found、通用机器以及不出现 adb。单测 281 项 / 853 expect。"
   source: "2026-10-26 提示词重写"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-26T09:45:41
+  kind: decision
+  summary: "2026-10-26：远端提示词补上参考客户端的取得方式，并再压到 3005 字符。mcp-call.py 不在安装包（package.json 的 files 只有 extensions/ 与 src/），所以给远端 agent 的说明必须自包含：自行 git clone https://github.com/adam-ikari/a2mcp，再跑 scripts/mcp-call.py；只写路径等于没给。压缩只删解释，不删行为项：先读 schema 与 edit 的 hashline/File not found、绝对路径与超时、副作用留痕、token 不进命令、curl/416/PATCH append/PROPFIND/403、Cloudflare 100 MB 切片拼接、禁止自起隧道或第二个文件服务器，全部保留。两份 README 的提示词块逐字同步；test/entry.test.ts 与 test/server.test.ts 钉住 clone URL 与 not in the installed package。"
+  source: "2026-10-26 提示词补克隆并精简"
   affects: [a2a-mcp-bridge]
