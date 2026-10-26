@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-26T09:45:41"
+updated: "2026-10-26T09:53:22"
 ---
 
 <!-- compiled_truth -->
@@ -1253,4 +1253,10 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   kind: decision
   summary: "2026-10-26：远端提示词补上参考客户端的取得方式，并再压到 3005 字符。mcp-call.py 不在安装包（package.json 的 files 只有 extensions/ 与 src/），所以给远端 agent 的说明必须自包含：自行 git clone https://github.com/adam-ikari/a2mcp，再跑 scripts/mcp-call.py；只写路径等于没给。压缩只删解释，不删行为项：先读 schema 与 edit 的 hashline/File not found、绝对路径与超时、副作用留痕、token 不进命令、curl/416/PATCH append/PROPFIND/403、Cloudflare 100 MB 切片拼接、禁止自起隧道或第二个文件服务器，全部保留。两份 README 的提示词块逐字同步；test/entry.test.ts 与 test/server.test.ts 钉住 clone URL 与 not in the installed package。"
   source: "2026-10-26 提示词补克隆并精简"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-26T09:53:22
+  kind: decision
+  summary: "2026-10-26：真机上仍有调用方另起反向隧道推文件，根因是提示词的两个缺口，不是工具能力。其一，提示词列了 Download / Upload 命令，但没写共享是双向的，读成「xfer_share 只共享宿主文件供我下载」，于是想暴露自己的机器让宿主来取；现在写明 GET 下载、PUT/PATCH 上传走同一个 $ROUTE 与 token，要发给宿主就 PUT 进共享，不要暴露自己的机器。其二，只说 publicUrl 不为 null 时用它、为空时请操作员开隧道，没说 publicUrl 就是操作员已有的那条、MCP 与 /xfer/ 共用同一个主机名，也没说反向隧道不是出口；现在写明复用、为空时请操作员做端口转发（不是反向隧道），原有的「不要自己起隧道或第二个文件服务器」保留。提示词 3005 → 3300 字符；test/entry.test.ts 与 test/server.test.ts 钉住 bidirectional / existing tunnel / reverse tunnel。分辨要点：反向隧道不是第二个文件服务器，旧禁令没有覆盖它。"
+  source: "2026-10-26 反向隧道与双向共享"
   affects: [a2a-mcp-bridge]
