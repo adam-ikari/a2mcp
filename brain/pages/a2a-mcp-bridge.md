@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-24T17:52:57"
+updated: "2026-10-26T08:09:40"
 ---
 
 <!-- compiled_truth -->
@@ -1236,3 +1236,9 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   summary: "取消单次请求体上限：src/server.ts 的 maxRequestBodySize 从 128 MB 改成 Number.POSITIVE_INFINITY。理由：/xfer/ 上的 PUT 就是这个端口上的一个请求体，一个调用方猜不到的数字只会在中途拒掉传输，与传出一个坏文件是同一种失败；桥不该替操作员决定哪一档文件可传。代价照实：Bun 按在途请求缓冲请求体，并发的大上传就是几份大缓冲——持 token 的人本来就被当作可信，这个决定交给操作员。Bun 接受 Infinity（实测）。docs/protocol.md 与两份 README 同步。"
   source: "session 2026-10-24; src/server.ts; docs/protocol.md; README.md; README_ZN.md"
   affects: [xfer, server]
+
+- time: 2026-10-26T08:09:40
+  kind: decision
+  summary: "公网隧道路由的请求体上限在桥外：Cloudflare 边缘对请求体 100 MB（Free/Pro）/ 200 MB（Business），回包不限；桥自己的 maxRequestBodySize 仍是 Infinity。大文件上传按 split -b 64m 切片、逐片普通 PUT、宿主 bash cat 拼接并 sha256sum 校验，断片删残片重发。100/200 MB 取自公开文档，未在公网半程实测。"
+  source: docs/protocol.md
+  affects: [文件传输, 公网隧道]

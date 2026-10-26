@@ -434,6 +434,9 @@ describe("the a2mcp command", () => {
 		expect(out).toContain("Files move over the bridge's own WebDAV route");
 		expect(out).toContain("Use an existing WebDAV client");
 		expect(out).toContain("curl -fL -C -");
+		// The edge in front of a public URL has its own cap; the prompt has to say so.
+		expect(out).toContain("request body over 100 MB");
+		expect(out).toContain("split -b 64m");
 		expect(out).not.toContain("a2mcp-proxy.mjs");
 		expect(out).toContain("One share at a time");
 		// The one exit is the operator's: a tunnel the caller opens itself is not

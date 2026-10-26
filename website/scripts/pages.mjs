@@ -83,7 +83,7 @@ export const PAGES = [
 		nav: "传文件",
 		title: "传文件：把宿主路径开成 HTTP 路由",
 		description:
-			"xfer_share 把宿主路径交给 dufs，桥反代成 /xfer/ 路由：同一个 token 授权，Range 续传；用现成的 WebDAV 客户端（curl、rclone）搬，桥不发自己的文件客户端，也不经 base64。",
+			"xfer_share 把宿主路径交给 dufs，桥反代成 /xfer/ 路由，同一 token 授权，Range 续传；用 curl / rclone 搬，公网侧单请求受 Cloudflare 100 MB 限制。",
 		group: "用起来",
 		source: "README_ZN.md",
 		h1: "传文件",

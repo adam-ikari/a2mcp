@@ -1,8 +1,17 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.10.0`（2026-10-24，取消请求体上限，删掉调用方代理，传文件交给 `curl` / `rclone` 这样的现成 WebDAV 客户端；`v0.9.0` 的代理只活了一版，见那节）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.10.1`（2026-10-26，只在文档与提示词里补上公网隧道路由的 Cloudflare 边缘请求体上限与大文件切片做法；协议面与 `v0.10.0` 相同），上一版是 `v0.10.0`（2026-10-24，取消请求体上限，删掉调用方代理，传文件交给 `curl` / `rclone` 这样的现成 WebDAV 客户端；`v0.9.0` 的代理只活了一版，见那节）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
+
+## 2026-10-26 — 公网隧道路由的请求体上限：按边缘切片，宿主侧拼接
+
+v0.10.0 的「路由没有大小上限」只对桥自己成立。隧道开着时 `$ROUTE` 取的是 `publicUrl`，请求体先过 Cloudflare 边缘：Free/Pro 100 MB、Business 200 MB，超了在边缘就被拒，桥根本看不到这次请求。回包不受这个限，下载多大都不受影响。只有公网隧道可达的机器，大文件上传因此得自己切。
+
+- docs: `initialize` 第 3 步加一段，两份 README 的提示词块逐字同步：`split -b 64m FILE FILE.part.` 切片，逐片 `curl -fsS -T`（每一片都是普通 PUT），再在宿主上用它的 `bash` 工具 `cat /shared/FILE.part.* > /shared/FILE && rm /shared/FILE.part.*`，`sha256sum` 校验。断在哪片就删掉那片非空残片重发，其余不动；回环与 SSH 转发没有这道限制。两份 README 的正文与 `docs/protocol.md` 的调用方一节同样补上边缘限制与切片做法。
+- docs: 「没有大小上限」改成「桥自己这边没有」——桥的 `maxRequestBodySize` 仍是 `Infinity`，变化只在说法。
+- 边界: 100 MB / 200 MB 取自 Cloudflare 的公开上限（Free/Pro 与 Business），不是本机实测；「超了在边缘被拒、桥看不到」也没有在公网半程实测过——隧道那一侧目前只有回环与人工证据（见 `docs/testing.md`）。64 MiB 一片是给 100 MB 留余量，不是卡着上限。
+- 版本位: 只改文档与提示词，协议面、工具名、回包字段都没动；按 2026-10-18 判据（调用方经协议拿到的东西没变）进 patch 位，v0.10.1。
 
 ## 2026-10-24 — 取消单次上限，删掉自建客户端：传文件交给现成的 WebDAV 客户端
 
@@ -444,6 +453,15 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.10.1 — 公网隧道侧的上限写进文档：大文件按边缘切片，宿主侧拼接
+
+**这一版只动文档、提示词与两条测试断言，协议面与 v0.10.0 相同。** v0.10.0 说「路由没有大小上限」，那只对桥自己成立：`$ROUTE` 取 `publicUrl` 时请求体要过 Cloudflare 边缘，Free/Pro 100 MB、Business 200 MB，超了在边缘就被拒；回包不限。只有公网隧道可达的机器，大文件上传要自己切片。`initialize` 的 instructions、两份 README 与 `docs/protocol.md` 一起写明 `split -b 64m` + 逐片 PUT + 宿主 `bash` 拼接 + `sha256sum` 校验，断片删残片重发。桥的 `maxRequestBodySize` 仍是 `Infinity`，`tools/list`、`xfer_*` 的名字与字段、token、会话形状都不变。
+
+- 内容: 见上 2026-10-26 的「公网隧道路由的请求体上限：按边缘切片，宿主侧拼接」一节。
+- 边界: 100 MB / 200 MB 取自 Cloudflare 的公开上限（Free/Pro 与 Business），不是本机实测；「超了在边缘被拒、桥看不到」也没有在公网半程实测过。回环与 SSH 转发路由没有这道限制。
+- 升级: `omp install https://github.com/adam-ikari/a2mcp.git` 重装并重启宿主会话即可，token 与端口不动。已经连上的客户端不用改 `mcp.json`；改的只是会读 `instructions` 的模型所见。
+- 回归（发版前这一遍，2026-10-26，宿主 omp 18.12.1）: `bun test` 281 项 847 断言全绿（18 文件）；`lint` / `tsc` 干净；`tree` 3 项、`registry` 5497 行、`SMOKE OK`（22 个工具）、`HARDEN OK`、`SCENARIOS: 85 steps, 0 failed`、`takeover` 65.0 秒（inference POST=1、元数据非 POST=1）、审批 `VERDICT: B`（≥90002 ms 挂起、start=1 done=0）、`MCP-CALL OK`、`BOOTSTRAP OK`、`test:tunnel-xfer` PASS（真隧道 announce 出了主机名，公网半程仍只有回环与人工证据）、`test:install` `PACKAGE OK`（npm 真装组按 `info:` 跳过）。`test:obtain` 的 `dufs` 半程通过，pinned `cloudflared` 收到 24.4 MB 后停在 30 秒无字节——与 v0.10.0 发版前那一遍同一种网络停顿，卡住的是取回。
 
 ## v0.10.0 — 取消单次上限，传文件交给现成客户端
 

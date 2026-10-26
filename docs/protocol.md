@@ -203,7 +203,18 @@ curl -fL -T LOCAL -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file" 
 curl -fL -X PROPFIND -H "Depth: 1" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/"   # 列目录
 ```
 
-`-C -` 从本地文件末尾发 Range，下载中断后接着要；`416` 表示本地已经完整。**上传的断点在标准 WebDAV 客户端里用不上**：中断后从零重来。`dufs` 自己的 `PATCH` + `X-Update-Range: append` 可以追加续传，但那个头不是 WebDAV，`curl` 不会发；能发这个头的客户端才能续上传。路由本身没有大小上限——桥取消了 128 MB 的请求体上限，因为按一个调用方猜不到的数字截断，与传出一个坏文件是同一种失败；代价是 Bun 会为每个在途上传缓冲一份请求体，而持 token 的人本来就被当作可信。上传不覆盖非空远端文件（`--allow-upload` 的边界），覆盖要先在宿主上删。共享只活默认一小时，更长的传输中途会丢路由；重新 `xfer_share` 同一条路径后，下载可以接着续。
+`-C -` 从本地文件末尾发 Range，下载中断后接着要；`416` 表示本地已经完整。**上传的断点在标准 WebDAV 客户端里用不上**：中断后从零重来。`dufs` 自己的 `PATCH` + `X-Update-Range: append` 可以追加续传，但那个头不是 WebDAV，`curl` 不会发；能发这个头的客户端才能续上传。桥自己这边没有大小上限——它取消了 128 MB 的请求体上限，因为按一个调用方猜不到的数字截断，与传出一个坏文件是同一种失败；代价是 Bun 会为每个在途上传缓冲一份请求体，而持 token 的人本来就被当作可信。上传不覆盖非空远端文件（`--allow-upload` 的边界），覆盖要先在宿主上删。共享只活默认一小时，更长的传输中途会丢路由；重新 `xfer_share` 同一条路径后，下载可以接着续。
+
+上限在桥外面还有一道。`$ROUTE` 取的是 `publicUrl` 时，请求体要过 Cloudflare 边缘，超过 100 MB（Free/Pro；Business 200 MB）就被拒；回包不限，所以下载多大都不受影响。更大的上传按边缘切片，每片都是普通 PUT：
+
+```sh
+split -b 64m FILE FILE.part.
+for p in FILE.part.*; do
+  curl -fsS -T "$p" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/$(basename "$p")"
+done
+```
+
+传完在宿主上用它的 `bash` 拼回去并校验：`cat /shared/FILE.part.* > /shared/FILE && rm /shared/FILE.part.*`，再 `sha256sum /shared/FILE`（`/shared` 换成共享目录）。`split` 的片名按字典序即文件序；断在哪片就删掉那片非空残片重发，其余不动。回环与 SSH 转发路由没有这道边缘限制。
 
 token 放进环境变量，不要放进命令行：argv 在 `ps` 里可见。
 

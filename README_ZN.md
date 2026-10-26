@@ -215,6 +215,7 @@ Files move over the bridge's own WebDAV route, never through tool arguments. `xf
    - upload: `curl -fL -T LOCAL -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file"`.
    - list: `curl -fL -X PROPFIND -H "Depth: 1" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/"`.
    `$ROUTE` is the share's `publicUrl` when it is not `null`; otherwise it is the bridge URL your client already uses, with `/xfer/` appended — not the loopback `url` in the reply, which is the host's own address. `rclone` and other WebDAV clients mount the same route. Interrupted downloads resume from where they stopped. Standard WebDAV clients restart an interrupted upload; `dufs` also accepts `PATCH` with `X-Update-Range: append`, so a client that can send that header resumes instead. Keep the token in an environment variable rather than pasting its value into a command line.
+   One limit is outside the bridge. When `$ROUTE` is a `publicUrl`, Cloudflare sits in front of it and refuses a request body over 100 MB (Free/Pro; 200 MB Business); response bodies are not capped. Split a larger upload below that edge with `split -b 64m FILE FILE.part.`, PUT every part with `curl -fsS -T "$p" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/$(basename "$p")"`, then join them on the host with its own `bash` tool: `cat /shared/FILE.part.* > /shared/FILE && rm /shared/FILE.part.*`, and check `sha256sum /shared/FILE`. Every part is an ordinary PUT; if one is interrupted, delete that non-empty part on the host and send it again — the others stay. The loopback or SSH-forward route has no edge limit.
 4. One share at a time: a second `xfer_share` replaces the first and says `replaced: true`. `xfer_status` reports the current share; `xfer_stop` closes it. Close the share you opened when the transfer is done; do not stop a share you did not open.
 5. Reach the route through `publicUrl` when it is not `null`. When it is `null`, ask the operator to run `/a2mcp tunnel` or forward the bridge port over SSH. Do not start your own tunnel or second file server: a hostname you open is not behind this bridge's token, so whatever it serves is public.
 6. Never move file bytes through `read`, `bash` or tool arguments: host `read` truncates around 150 KB and `bash` around 768 bytes, so large or binary content comes back corrupted. Never paste megabytes into a command.
@@ -271,7 +272,16 @@ curl -fL -T LOCAL -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/path/to/file"
 curl -fL -X PROPFIND -H "Depth: 1" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/"
 ```
 
-`-C -` 从本地文件末尾发 Range，断掉的下载接着要；`416` 表示本地已经完整。**断掉的上传在标准 WebDAV 客户端里从零重来**。`dufs` 也认 `PATCH` 加 `X-Update-Range: append`，但那个头不是 WebDAV，`curl` 不会发——能发这个头的客户端才能续上传，否则把上传当作一次成或不成。这条路由没有大小上限：桥取消了 128 MB 的请求体上限，因为按调用方猜不到的数字截断，与传出一个坏文件是同一种失败。代价是内存——Bun 会为每个在途上传缓冲一份请求体——而持 token 的人本来就被当作可信。共享只活默认一小时，更长的传输中途会丢路由；重新 `xfer_share` 同一条路径后，下载可以接着续。上传不覆盖非空的远端文件，因为 `dufs` 只开了 `--allow-upload`；要重传先在宿主上删掉。
+`-C -` 从本地文件末尾发 Range，断掉的下载接着要；`416` 表示本地已经完整。**断掉的上传在标准 WebDAV 客户端里从零重来**。`dufs` 也认 `PATCH` 加 `X-Update-Range: append`，但那个头不是 WebDAV，`curl` 不会发——能发这个头的客户端才能续上传，否则把上传当作一次成或不成。桥这边不设上限：它取消了 128 MB 的请求体上限，因为按调用方猜不到的数字截断，与传出一个坏文件是同一种失败。代价是内存——Bun 会为每个在途上传缓冲一份请求体——而持 token 的人本来就被当作可信。上限在桥外面还有一道：`$ROUTE` 是 `publicUrl` 时，前面站着 Cloudflare，单请求体超过 100 MB（Free/Pro；Business 200 MB）就被拒。回包不限，所以下载多大都不受影响。更大的上传按边缘限制切片，每一片都是普通 PUT：
+
+```sh
+split -b 64m FILE FILE.part.
+for p in FILE.part.*; do
+  curl -fsS -T "$p" -H "Authorization: Bearer $A2MCP_TOKEN" "$ROUTE/$(basename "$p")"
+done
+```
+
+传完在宿主上用它的 `bash` 拼回去——`cat /shared/FILE.part.* > /shared/FILE && rm /shared/FILE.part.*`，再 `sha256sum /shared/FILE`，其中 `/shared` 换成共享目录。`split` 给的片名按字典序就是文件序。每一片都是普通 PUT，断在哪片就只重发哪片：先在宿主上删掉那片非空残片再发，其余不动。回环与 SSH 转发路由没有这道边缘限制，文件大又够得到时优先走它们。共享只活默认一小时，更长的传输中途会丢路由；重新 `xfer_share` 同一条路径后，下载可以接着续。上传不覆盖非空的远端文件，因为 `dufs` 只开了 `--allow-upload`；要重传先在宿主上删掉。
 
 token 放进环境变量，不要放进命令行：argv 在 `ps` 里可见。
 
