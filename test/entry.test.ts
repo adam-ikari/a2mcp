@@ -426,7 +426,7 @@ describe("the a2mcp command", () => {
 		expect(out).toContain("prompt:");
 		// The prompt is English: it is read by a model on the other side.
 		expect(out).toContain("You are connected over MCP to a live agent session on another machine.");
-		expect(out).toContain("Give every call a timeout of your own.");
+		expect(out).toContain("Set your own timeout on every call");
 		// The known first-call failure: the host's `edit` is not oldString/newString.
 		expect(out).toContain("takes a hashline patch");
 		expect(out).toContain("File not found");
@@ -464,7 +464,7 @@ describe("the a2mcp command", () => {
 		expect(out).toContain("Do not start your own tunnel or second file server");
 		expect(out).not.toContain("xfer_get");
 		expect(out).not.toContain("xfer_put");
-		expect(out).toContain("Never paste megabytes into a command.");
+		expect(out).toContain("never paste megabytes into a command.");
 		// And it carries no credential: a token inside a prompt would put it in a
 		// model's context, which is a wider place than a config file.
 		expect(out.slice(out.indexOf("prompt:"))).not.toContain(TOKEN);
