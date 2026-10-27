@@ -60,12 +60,9 @@ function mermaidSettingsPlugin(): Plugin {
 // a second copy of the page list: a page added to the map appears in both.
 //
 // The order of GROUPS is the site's argument: start here, then use it, then
-// know its limits, then integrate against it, then trust it, then read its
-// history. The historical design drafts sit in their own group at the end —
-// they answer "what we planned in 2026-09", which is nobody's task while
-// reading the current docs, so they stay out of the top bar.
+// know its limits, then integrate against it.
 const pagesIn = (group: string) => PAGES.filter((p) => p.group === group);
-const navItems = GROUPS.filter((g) => g !== "历史").map((group) => {
+const navItems = GROUPS.map((group) => {
 	const pages = pagesIn(group);
 	if (pages.length === 1) return { text: pages[0].nav, link: `/${pages[0].path}` };
 	return { text: group, items: pages.map((p) => ({ text: p.nav, link: `/${p.path}` })) };

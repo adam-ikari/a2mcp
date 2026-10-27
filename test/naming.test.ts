@@ -92,13 +92,6 @@ const ALLOWED: { file: string; text: string; why: string }[] = [
 		why: "the absolute path of the checkout in the story it tells",
 	},
 	{ file: join("docs", "testing.md"), text: "a2a_file_", why: "names the tool prefix that guard defended" },
-	// The two design drafts keep their filenames, so the site's page map names
-	// them by those filenames — and nothing else on a live surface does.
-	{
-		file: join("website", "scripts", "pages.mjs"),
-		text: "a2a-mcp-bridge",
-		why: "the site's page map names the two historical documents by their filename",
-	},
 	// The site's structured data keeps the old package name as an alternate name,
 	// so a search for it still lands here.
 	{

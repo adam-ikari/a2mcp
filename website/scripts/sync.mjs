@@ -2,9 +2,9 @@
  * Sync the repo's source-of-truth markdown into website/content/ (generated,
  * gitignored). VitePress never reads README/CHANGELOG/docs/ directly:
  *
- *   docs/**            -> content/**            (verbatim copy + frontmatter)
+ *   docs/**            -> content/**            (verbatim copy + frontmatter,
+ *                                                minus testing.md and superpowers/)
  *   README_ZN.md       -> content/<page>.md     (one page per task, see below)
- *   CHANGELOG.md       -> content/changelog.md  (frontmatter, H1 re-emitted)
  *   (home)             -> content/index.md      (VitePress home layout)
  *
  * ## The README is one document; the site is several pages
@@ -27,9 +27,9 @@
  * depth; links that only make sense in the git repo are unlinked instead.
  */
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { GUIDE_PAGES, PAGES, REPO_URL, slugify } from "./pages.mjs";
+import { GUIDE_PAGES, OMITTED_SECTIONS, PAGES, REPO_URL, slugify } from "./pages.mjs";
 
 const SITE = dirname(dirname(fileURLToPath(import.meta.url)));
 const REPO = dirname(SITE);
@@ -65,7 +65,16 @@ features: []
 	process.exit(0);
 }
 
-cpSync(join(REPO, "docs"), CONTENT, { recursive: true });
+// Only the docs a user needs on the site. The test matrix and the 2026-09
+// design drafts stay in the repo; copying them would publish pages nothing
+// links to.
+cpSync(join(REPO, "docs"), CONTENT, {
+	recursive: true,
+	filter: (src) => {
+		const rel = relative(join(REPO, "docs"), src).split(sep).join("/");
+		return rel !== "testing.md" && !rel.startsWith("superpowers");
+	},
+});
 // VitePress resolves its public dir to <srcDir>/public = content/public, so
 // copy the tracked website/public assets there as part of generation.
 cpSync(join(SITE, "public"), join(CONTENT, "public"), { recursive: true });
@@ -130,8 +139,10 @@ for (const page of PAGES.filter((p) => Array.isArray(p.sections))) {
 	}
 }
 for (const name of guide.sections.keys()) {
-	if (!claimed.has(name)) {
-		throw new Error(`pages.mjs: the README section 「${name}」 is on no page — add it to the map or the site drops it`);
+	if (!claimed.has(name) && !OMITTED_SECTIONS.includes(name)) {
+		throw new Error(
+			`pages.mjs: the README section 「${name}」 is on no page — add it to the map or to OMITTED_SECTIONS`,
+		);
 	}
 }
 
@@ -153,9 +164,7 @@ for (const page of PAGES.filter((p) => Array.isArray(p.sections))) {
 /** Rewrite the repo-relative links the README carries into site-relative ones. */
 const linkRewrites = [
 	["](docs/protocol.md)", "](./protocol.md)"],
-	["](docs/testing.md)", "](./testing.md)"],
 	["](docs/computer-use.md)", "](./computer-use.md)"],
-	["](CHANGELOG.md)", "](./changelog.md)"],
 	["[LICENSE](LICENSE)", `[LICENSE](${REPO_URL}/blob/master/LICENSE)`],
 ];
 
@@ -218,22 +227,6 @@ writeFileSync(
 		.replace("[README](../README.md)", "[使用指南](./start.md)"),
 );
 
-// CHANGELOG -> changelog.md (H1 replaced, add frontmatter). The link rewrites
-// are the same: entries link to repo files by repo-relative path, which does
-// not resolve from content/changelog.md.
-// Same treatment: keep an H1 and give the page its own description, so the
-// pages do not all ship one string.
-const changelogPage = PAGES.find((p) => p.path === "changelog");
-const changelog = readFileSync(join(REPO, "CHANGELOG.md"), "utf8")
-	.replace(/^# Changelog\n+/, "")
-	.replaceAll("](docs/computer-use.md)", "](./computer-use.md)")
-	.replaceAll("](docs/protocol.md)", "](./protocol.md)")
-	.replaceAll("](docs/testing.md)", "](./testing.md)");
-writeFileSync(
-	join(CONTENT, "changelog.md"),
-	`---\ntitle: ${yaml(changelogPage.title)}\ndescription: ${yaml(changelogPage.description)}\n---\n\n# 变更日志\n\n${changelog}`,
-);
-
 // VitePress home page: hero + features + the README's own opening paragraphs.
 // The site UI lives here, not in the repo docs, so the frontmatter is hard-coded
 // in the sync script; the prose under it is the README's, so "what is this" is
@@ -253,9 +246,6 @@ hero:
     - theme: alt
       text: 协议参考
       link: /protocol
-    - theme: alt
-      text: 变更日志
-      link: /changelog
 
 features:
   - title: 装上它
@@ -279,9 +269,6 @@ features:
   - title: 协议参考
     details: 客户端要实现的全部约定：处理顺序、会话、错误码、xfer_* 工具与 /xfer/ 路由。
     link: /protocol
-  - title: 测试与核验
-    details: 281 项单测之外，几个探针大多拉起真实的 omp 跑完整流程。
-    link: /testing
 ---
 
 ${rewrite(guide.preamble)}

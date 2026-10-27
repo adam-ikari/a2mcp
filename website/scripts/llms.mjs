@@ -4,8 +4,8 @@
  * The site's readers are, in part, agents: a2mcp exists so that a remote agent
  * can drive a local machine, and the people searching for it are the ones
  * wiring one up. A crawler that reads the site's pages in order has to guess
- * which of the fourteen are relevant; this file says what each one is, in one
- * line, with a link. It is the same map the site is built from
+ * which of them are relevant; this file says what each one is, in one line,
+ * with a link. It is the same map the site is built from
  * (scripts/pages.mjs), so it cannot describe a page that does not exist.
  *
  * Format: https://llmstxt.org — an H1, a blockquote summary, then one section

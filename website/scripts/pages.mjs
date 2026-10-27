@@ -35,10 +35,16 @@ export const SITE_DESC =
 
 /**
  * Sidebar and nav groups, in reading order. The order is the site's argument:
- * start here, then use it, then know its limits, then integrate against it,
- * then trust it, then read its history.
+ * start here, then use it, then know its limits, then integrate against it.
+ *
+ * The site keeps the pages a user arrives for. Development notes, the test
+ * matrix, the changelog and the 2026-09 design drafts stay in the repo; they
+ * are for whoever works on the bridge, not for whoever is wiring up a client.
  */
-export const GROUPS = ["起步", "用起来", "边界", "集成", "核验与历史", "历史"];
+export const GROUPS = ["起步", "用起来", "边界", "集成"];
+
+/** README sections the site does not publish. */
+export const OMITTED_SECTIONS = ["开发"];
 
 /**
  * Every page on the site.
@@ -150,53 +156,6 @@ export const PAGES = [
 			"computer use 让模型看屏幕猜坐标点按；a2mcp 让调用方按名字调本机工具，参数由 tools/list 逐条给出，执行走本机工具自己的实现，推理在调用方。",
 		group: "集成",
 		source: "docs/computer-use.md",
-	},
-	{
-		path: "testing",
-		nav: "测试与核验",
-		title: "测试与核验：单测、真机探针与审批边界",
-		description:
-			"a2mcp 的核验矩阵：281 项单测、真实模型注册表、加固探针、发布包端到端、外部二进制获取、宿主推理 deny/restore、端到端场景与审批边界，附判据与实测数字。",
-		group: "核验与历史",
-		source: "docs/testing.md",
-	},
-	{
-		path: "dev",
-		nav: "开发",
-		title: "开发：命令、文件布局与依赖钉",
-		description:
-			"a2mcp 仓库自己的开发命令：单测与十二个探针（七个起真宿主）、文件布局表、@oh-my-pi 依赖为什么钉死到宿主版本，以及版本守卫的判据。",
-		group: "核验与历史",
-		source: "README_ZN.md",
-		h1: "开发",
-		sections: ["开发"],
-	},
-	{
-		path: "changelog",
-		nav: "变更日志",
-		title: "变更日志：设计取舍与实测记录",
-		description:
-			"a2mcp 从 v0.1.0 起的改动记录：名字从 a2a 改到 a2mcp、宿主推理开关、传文件面三次重做、安装方式收敛到一条 git URL，每条都带实测数字与代价。",
-		group: "核验与历史",
-		source: "CHANGELOG.md",
-	},
-	{
-		path: "superpowers/specs/2026-09-10-a2a-mcp-bridge-design",
-		nav: "初始设计稿（2026-09）",
-		title: "初始设计稿（2026-09）：omp 作为 MCP 服务器",
-		description:
-			"2026-09 的初始设计稿：为什么让 omp 当宿主、为什么只做 Streamable HTTP、工具如何暴露与审批，以及当时定下、后来改掉的边界。",
-		group: "历史",
-		source: "docs/superpowers/specs/2026-09-10-a2a-mcp-bridge-design.md",
-	},
-	{
-		path: "superpowers/plans/2026-09-10-a2a-mcp-bridge",
-		nav: "初始实施计划（2026-09）",
-		title: "初始实施计划（2026-09）",
-		description:
-			"2026-09 的初始实施计划：扩展入口、JSON-RPC 服务器、工具转发、审批与配置的分步任务，以及每一步当时的验收方式。",
-		group: "历史",
-		source: "docs/superpowers/plans/2026-09-10-a2a-mcp-bridge.md",
 	},
 ];
 

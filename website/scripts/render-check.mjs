@@ -125,7 +125,7 @@ const PAGES_WITH_DIAGRAM = [
 	{ path: "/protocol", label: "受控端 TUI" },
 ];
 // A page with no diagram: it must load clean and carry no stray diagram.
-const PLAIN = "/testing";
+const PLAIN = "/files";
 
 /** Decode mermaid's numeric entities and pull out CJK label text from the SVG. */
 function diagramText(dom) {
@@ -383,7 +383,7 @@ for (const [label, seen] of [
  * 25x under the regression.
  */
 const PRELOAD_BUDGET_BYTES = 64 * 1024;
-for (const file of ["index.html", "start.html", "files.html", "testing.html"]) {
+for (const file of ["index.html", "start.html", "files.html", "safety.html"]) {
 	const html = readFileSync(join(DIST, file), "utf8");
 	const preloads = [...new Set([...html.matchAll(/<link rel="modulepreload" href="([^"]+)"/g)].map((m) => m[1]))];
 	let total = 0;
