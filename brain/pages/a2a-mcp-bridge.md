@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-26T10:05:02"
+updated: "2026-10-27T08:22:16"
 ---
 
 <!-- compiled_truth -->
@@ -1265,4 +1265,10 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   kind: decision
   summary: "2026-10-26：给远端 agent 的宿主使用边界——只能用 tools/list 里的工具；不装依赖、不建虚拟环境或容器、不编译，只跑本机已有的命令，也不在宿主上执行复杂操作。写进 initialize.instructions、两份 README 的「本机命令与挂载工具」、站点 commands 页描述与首页卡片；原首页「用本机的整条工具链（编译器、包管理器、项目脚本）」与 OG 的「跑构建」同步改掉。边界性质照实：提示词是劝说，桥不拦截这些命令；真正的闸门仍是宿主自己的审批与工具权限。"
   source: "2026-10-26 宿主使用边界"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-10-27T08:22:16
+  kind: decision
+  summary: "站点只留使用者页面（2026-10-27）：/testing、/dev、/changelog 与两页 2026-09 设计稿从站点撤掉，14 → 9 页、导航四组；仓库文档一份不删。sync.mjs 拷贝 docs 时跳过 testing.md 与 superpowers/，不再生成 changelog.md；README「开发」一节进 OMITTED_SECTIONS，拆分不变式改为「未认领的节必须在豁免表里」。旧地址直接 404，不做重定向。"
+  source: "website/scripts/pages.mjs, website/scripts/sync.mjs, CHANGELOG.md"
   affects: [a2a-mcp-bridge]
