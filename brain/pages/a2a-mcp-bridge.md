@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-27T08:22:16"
+updated: "2026-10-27T14:42:21"
 ---
 
 <!-- compiled_truth -->
@@ -1272,3 +1272,15 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   summary: "站点只留使用者页面（2026-10-27）：/testing、/dev、/changelog 与两页 2026-09 设计稿从站点撤掉，14 → 9 页、导航四组；仓库文档一份不删。sync.mjs 拷贝 docs 时跳过 testing.md 与 superpowers/，不再生成 changelog.md；README「开发」一节进 OMITTED_SECTIONS，拆分不变式改为「未认领的节必须在豁免表里」。旧地址直接 404，不做重定向。"
   source: "website/scripts/pages.mjs, website/scripts/sync.mjs, CHANGELOG.md"
   affects: [a2a-mcp-bridge]
+
+- time: 2026-10-27T14:42:21
+  kind: decision
+  summary: "2026-10-27：`xfer_share` 的 `ttlSeconds` 上限钉在 2147483 秒（约 24.8 天）。原因不是产品口味，是 `setTimeout` 的延迟是有符号 32 位毫秒数：2147484 秒起回绕到约 0，共享刚开就关，而回包 `expiresAt` 仍写着以后的时间。真机在公网隧道上按 2147483 / 2147484 边界量过。超上限现在回 `isError`（`ttlSeconds must be at most 2147483 ...`）并写一条 `xfer` 审计；schema 带 `maximum`；`test/xfer.test.ts` 同时钉 schema 上限与超限拒绝。此前只按 >0 取整，没有上限。"
+  source: "2026-10-27 公网隧道实机测试"
+  affects: [src/xfer.ts, test/xfer.test.ts, docs/protocol.md]
+
+- time: 2026-10-27T14:42:21
+  kind: reversal
+  summary: "2026-10-27：提示词里两条说法被真机推翻，按实测改写。①「猜 `oldString`/`newString` 回 `File not found`」不成立：过期或猜的 `TAG` 回 `file changed between read and edit`，不是 hashline 格式的补丁按格式拒绝，`File not found` 只在路径本身不存在时出现。②「`xfer_stop` 只关自己开的」不成立：只有一个共享槽、token 共用，`xfer_stop` 关的是当时开着的那一份；原文改成照实写。同时补上 `$ROUTE` 的定义（`publicUrl` 或桥地址加 `/xfer/`），此前示例用了却没定义。两份 README 与 `docs/protocol.md` 同步；提示词 2907 → 3180 字符。"
+  source: "2026-10-27 公网隧道实机测试"
+  affects: [src/instructions.ts, README.md, README_ZN.md, docs/protocol.md]
