@@ -75,6 +75,13 @@ import { XFER_ROUTE } from "./server.ts";
 /** How long a share stays open when the caller does not say. */
 const DEFAULT_TTL_SECONDS = 3600;
 
+/**
+ * The longest TTL `setTimeout` can express. Its delay is a signed 32-bit
+ * millisecond count, so anything past this wraps and fires at once — the share
+ * would close immediately while `expiresAt` still named a later time.
+ */
+const MAX_TTL_SECONDS = Math.floor((2 ** 31 - 1) / 1000);
+
 /** Every tool this module owns. The bridge's catalog appends exactly these. */
 export const XFER_TOOL_NAMES = ["xfer_share", "xfer_status", "xfer_stop"] as const;
 
@@ -103,7 +110,8 @@ export const XFER_TOOLS: McpTool[] = [
 				},
 				ttlSeconds: {
 					type: "number",
-					description: `Seconds until the share closes itself. Default ${DEFAULT_TTL_SECONDS}.`,
+					maximum: MAX_TTL_SECONDS,
+					description: `Seconds until the share closes itself. Default ${DEFAULT_TTL_SECONDS}, at most ${MAX_TTL_SECONDS}.`,
 				},
 			},
 			required: ["path"],
@@ -318,6 +326,11 @@ export function createXfer(cfg: XferConfig, deps: XferDeps = {}): Xfer {
 		}
 		const path = resolveXferPath(a.path);
 		const ttl = typeof a.ttlSeconds === "number" && a.ttlSeconds > 0 ? Math.floor(a.ttlSeconds) : DEFAULT_TTL_SECONDS;
+		if (ttl > MAX_TTL_SECONDS) {
+			const why = `ttlSeconds must be at most ${MAX_TTL_SECONDS} (about 24.8 days); a longer delay wraps and closes the share at once`;
+			await auditXfer(sid, "share", { path, ttlSeconds: a.ttlSeconds }, why);
+			return text(why, true);
+		}
 
 		try {
 			await stat(path);

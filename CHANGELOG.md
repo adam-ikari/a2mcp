@@ -1,8 +1,19 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.10.3`（2026-10-26，提示词再压一版，3414 → 2907 字符，行为约束一条没减；协议面与 `v0.10.2` 相同），上一版是 `v0.10.2`（2026-10-26，提示词按首次调用重写并压短，写明共享双向、隧道复用与参考客户端自行克隆；协议面与 `v0.10.1` 相同），再上一版是 `v0.10.1`（2026-10-26，只在文档与提示词里补上公网隧道路由的 Cloudflare 边缘请求体上限与大文件切片做法；协议面与 `v0.10.0` 相同），再上一版是 `v0.10.0`（2026-10-24，取消请求体上限，删掉调用方代理，传文件交给 `curl` / `rclone` 这样的现成 WebDAV 客户端；`v0.9.0` 的代理只活了一版，见那节）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.10.4`（2026-10-27，实机测试抓到 `xfer_share` 的 TTL 越过 `setTimeout` 32 位上限会立刻关共享，另修正提示词里 `File not found` 与「只关自己开的」两处说法；`ttlSeconds` 新增上限 2147483 秒），上一版是 `v0.10.3`（2026-10-26，提示词再压一版，3414 → 2907 字符，行为约束一条没减；协议面与 `v0.10.2` 相同），再上一版是 `v0.10.2`（2026-10-26，提示词按首次调用重写并压短，写明共享双向、隧道复用与参考客户端自行克隆；协议面与 `v0.10.1` 相同），再上一版是 `v0.10.1`（2026-10-26，只在文档与提示词里补上公网隧道路由的 Cloudflare 边缘请求体上限与大文件切片做法；协议面与 `v0.10.0` 相同）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
+
+## 2026-10-27 — 实机测试抓到三处：TTL 越过 32 位、提示词两处说错
+
+公网隧道上把 `xfer_*`、宿主的 `bash`/`read`/`write`/`edit` 与 WebDAV 的 GET/Range/PUT/PATCH/PROPFIND 都跑了一遍，三条没过去。
+
+- fix: `xfer_share` 的 `ttlSeconds` 收进上限 2147483（约 24.8 天）。`setTimeout` 的延迟是有符号 32 位毫秒数，2147484 秒及更大被截成约 0：共享刚开就关，而回包里的 `expiresAt` 还写着以后的时间。超上限现在回 `isError` 并写一条 `xfer` 审计，schema 带 `maximum`；边界 2147483 / 2147484 有测试钉住。
+- docs: 提示词里「猜 `oldString`/`newString` 会回 `File not found`」不成立。实测：过期或猜的 `TAG` 回 `file changed between read and edit`，不是 hashline 格式的补丁按格式拒绝，`File not found` 只在路径本身不存在时出现。两份 README 的正文与提示词块逐字同步。
+- docs: 提示词里「`xfer_stop` 只关自己开的」不成立。只有一个共享槽，token 也是共用的，`xfer_stop` 关的是当时开着的那一份；改成照实写。`$ROUTE` 在示例里用了却没定义，补上取法（`publicUrl`，或桥地址加 `/xfer/`）。
+- docs: `docs/protocol.md` 的 `xfer_share` 参数与失败清单补上 TTL 上限与拒绝原文。提示词 2907 → 3180 字符，多出来的是三处纠正与 `$ROUTE` 的定义。
+- test: `bun test` 281 → 282 项，865 → 871 expect；新增一项同时钉住 schema 上限与超限拒绝。
+- 版本位: 调用方对超长 TTL 拿到的东西变了（从「开了就关」变成 `isError`），按既有判据进 patch 位，v0.10.4。
 
 ## 2026-10-27 — 站点只留使用者页面：14 → 9 页
 
@@ -483,6 +494,15 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.10.4 — TTL 收回 32 位，提示词按实机改掉两处错
+
+**这一版改的是 `xfer_share` 的 `ttlSeconds` 边界，以及提示词里两条被真机推翻的说法；工具名、回包字段、路由都没动。** 2147484 秒及更大的 TTL 会被 `setTimeout` 截成约 0：共享刚开就关，而回包 `expiresAt` 还写着以后。现在上限 2147483（约 24.8 天），超过回 `isError` 并写一条 `xfer` 审计，schema 带 `maximum`。提示词改成：过期或猜的 `TAG` 回 `file changed between read and edit`，不是 hashline 格式的补丁按格式拒绝，`File not found` 只在路径本身不存在时出现；`xfer_stop` 关的是当时开着的那一份（只有一个共享槽、token 共用）；补上 `$ROUTE` 的定义。提示词 2907 → 3180 字符。
+
+- 内容: 见上 2026-10-27 的「实机测试抓到三处：TTL 越过 32 位、提示词两处说错」一节。
+- 边界: `ttlSeconds` 的上限来自 `setTimeout` 的有符号 32 位毫秒延迟，不是产品期限；超过就拒绝，不静默改短。提示词仍是劝说，不是闸门；旧说法还在 v0.10.2 与 v0.10.3 的提示词里，读到那些版本的客户端会按旧说法理解。
+- 升级: `omp install https://github.com/adam-ikari/a2mcp.git` 重装并重启宿主会话即可，token 与端口不动。客户端不用改 `mcp.json`；`xfer_share` 若传过超大 `ttlSeconds`，现在会收到 `isError`，改到 2147483 以下。
+- 回归（发版前这一遍，2026-10-27，宿主 omp 18.12.1）: `bun test` 282 项 871 断言全绿（18 文件）；`lint` / `tsc` 干净；`test:tree` 通过；`test:registry` 5497 行全过；`SMOKE OK`（22 个工具）；`HARDEN OK`；`SCENARIOS: 85 steps, 0 failed`；`test:tunnel-xfer` PASS（真隧道 + 真 dufs，GET/Range/PUT/PATCH/401/stop 与 `publicUrl` 全过）；站点 `build` + `check` 9 页全过。`test:approval` / `test:takeover` / `test:install` / `test:obtain` / `test:bootstrap` / `test:mcp-call` 这一轮没跑。
 
 ## v0.10.3 — 提示词再压一版：3414 → 2907 字符，行为约束一条没减
 

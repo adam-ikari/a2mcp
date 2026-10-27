@@ -312,6 +312,22 @@ describe("xfer_share refusals", () => {
 		// Nothing was left listening on a port nobody owns.
 		expect(x.target()).toBeNull();
 	});
+
+	test("a TTL past setTimeout's 32-bit range is refused, not closed on arrival", async () => {
+		// 2^31-1 ms is the longest delay setTimeout can hold; one second more used to
+		// wrap to ~0, so the share closed as it opened while `expiresAt` still named a
+		// future time. Both the schema and the refusal are pinned at that boundary.
+		const schema = XFER_TOOLS[0].inputSchema.properties as Record<string, { maximum?: number }>;
+		expect(schema.ttlSeconds.maximum).toBe(2_147_483);
+		const x = makeXfer();
+		const r = await x.call("xfer_share", { path: dir, ttlSeconds: 2_147_484 }, "sid-1");
+		expect(r.isError).toBe(true);
+		expect(textOf(r)).toContain("2147483");
+		expect(x.target()).toBeNull();
+		const rec = JSON.parse((await recordsFor("2147484"))[0] ?? "{}") as { isError?: boolean; error?: string };
+		expect(rec.isError).toBe(true);
+		expect(rec.error).toContain("at most 2147483");
+	});
 });
 
 describe("xfer_share lifecycle", () => {
