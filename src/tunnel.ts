@@ -42,6 +42,8 @@ export interface QuickTunnelOptions {
 	port: number;
 	/** How long to wait for the hostname before giving up. Default 30s. */
 	timeoutMs?: number;
+	/** `auto`, `quic` or `http2`. Absent means cloudflared's own default (`auto`). */
+	protocol?: string;
 	env?: NodeJS.ProcessEnv;
 }
 
@@ -57,12 +59,20 @@ export type TunnelOpener = (opts: QuickTunnelOptions) => Promise<QuickTunnel>;
  */
 export function openQuickTunnel(opts: QuickTunnelOptions): Promise<QuickTunnel> {
 	const timeoutMs = opts.timeoutMs ?? 30_000;
+	// Operator escape hatch, not a speed knob: `auto` is cloudflared's default and it
+	// picks QUIC. On a network that blocks or throttles UDP, `http2` is the only way
+	// the tunnel comes up at all; nothing is passed when the variable is unset, so a
+	// run without it dials exactly as before.
+	const env = opts.env ?? process.env;
+	const protocol = (opts.protocol ?? env.A2MCP_TUNNEL_PROTOCOL ?? "").trim();
+	const args = ["tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${opts.port}`];
+	if (protocol !== "") args.push("--protocol", protocol);
 	return new Promise((resolve, reject) => {
 		let child: ChildProcess;
 		try {
-			child = spawn(opts.bin, ["tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${opts.port}`], {
+			child = spawn(opts.bin, args, {
 				stdio: ["ignore", "pipe", "pipe"],
-				env: opts.env ?? process.env,
+				env,
 			});
 		} catch (e) {
 			reject(new Error(`cannot start ${opts.bin}: ${(e as Error).message}`));
