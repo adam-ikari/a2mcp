@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [omp, extension, mcp]
 created: "2026-09-10T09:16:34"
-updated: "2026-10-27T14:42:21"
+updated: "2026-11-27T16:40:01"
 ---
 
 <!-- compiled_truth -->
@@ -1284,3 +1284,21 @@ baseUrl 选 `http://a2mcp.invalid/v1`（RFC 6761 保留域），不是 `127.0.0.
   summary: "2026-10-27：提示词里两条说法被真机推翻，按实测改写。①「猜 `oldString`/`newString` 回 `File not found`」不成立：过期或猜的 `TAG` 回 `file changed between read and edit`，不是 hashline 格式的补丁按格式拒绝，`File not found` 只在路径本身不存在时出现。②「`xfer_stop` 只关自己开的」不成立：只有一个共享槽、token 共用，`xfer_stop` 关的是当时开着的那一份；原文改成照实写。同时补上 `$ROUTE` 的定义（`publicUrl` 或桥地址加 `/xfer/`），此前示例用了却没定义。两份 README 与 `docs/protocol.md` 同步；提示词 2907 → 3180 字符。"
   source: "2026-10-27 公网隧道实机测试"
   affects: [src/instructions.ts, README.md, README_ZN.md, docs/protocol.md]
+
+- time: 2026-11-27T15:49:33
+  kind: evidence
+  summary: "隧道 URL 误报 https://api.trycloudflare.com 的根因已定位：src/tunnel.ts 的 QUICK_URL 允许 api 子域，且子进程输出中首个匹配会立即 resolve；cloudflared 输出若先出现 API 地址再出现随机 quick-tunnel 地址，公告、审计与 xfer publicUrl 都会采用固定 API 地址。最小复现正则已返回 https://api.trycloudflare.com；代码尚未修复。"
+  source: "用户报告 + src/tunnel.ts:24,91-113 静态检查 + bun 最小正则复现（2026-11-27）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-11-27T15:52:07
+  kind: evidence
+  summary: "用假 cloudflared 子进程端到端复现确认：先输出 INF API endpoint https://api.trycloudflare.com/client/v4/，再输出 https://calm-river-xyz.trycloudflare.com，openQuickTunnel 实际返回 https://api.trycloudflare.com；不是只对正则的静态推断。"
+  source: "bun -e 调用 openQuickTunnel + /tmp 假 cloudflared（2026-11-27）"
+  affects: [a2a-mcp-bridge]
+
+- time: 2026-11-27T16:40:01
+  kind: reversal
+  summary: "推翻同日两条 evidence 的「代码尚未修复」：src/tunnel.ts 的 QUICK_URL 已加 (?!api\\.) 负向前瞻，api.trycloudflare.com 不再冒充 quick tunnel 地址。回归测试先在坏代码上返回 https://api.trycloudflare.com 失败、修复后 tunnel.test 5/5 通过；全套 bun test 281 pass、2 fail 与 typecheck 报错经 stash 基线确认均为既有版本不匹配（node_modules 18.18.3、host omp 19.0.1 对 pin 18.12.1），与本改动无关。"
+  source: "红绿测试：test/tunnel.test.ts 新用例 + src/tunnel.ts 修复（2026-11-27）"
+  affects: [a2a-mcp-bridge]
