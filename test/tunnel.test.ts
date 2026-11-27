@@ -63,6 +63,29 @@ setTimeout(() => process.exit(0), 60_000);
 	return file;
 }
 
+/**
+ * A stand-in for cloudflared that prints its control-plane endpoint before the quick
+ * tunnel hostname — the order a real run uses. The writes are spaced so the reader
+ * sees the API line on its own: a reader that settles on the first match announces
+ * `api.trycloudflare.com`, the fixed endpoint, instead of the random hostname that
+ * actually fronts the bridge.
+ */
+function apiEndpointFirst(): string {
+	const file = join(dir, "api-endpoint-first");
+	writeFileSync(
+		file,
+		`#!/usr/bin/env bun
+import { writeSync } from "node:fs";
+writeSync(1, "INF API endpoint https://api.trycloudflare.com/client/v4/\\n");
+await Bun.sleep(20);
+writeSync(1, "INF | https://calm-river-xyz.trycloudflare.com | URL\\n");
+setTimeout(() => process.exit(0), 60_000);
+`,
+		{ mode: 0o755 },
+	);
+	return file;
+}
+
 const opened: { stop(): Promise<void> }[] = [];
 
 afterAll(async () => {
@@ -75,6 +98,16 @@ test("resolves with the hostname the child announces", async () => {
 	opened.push(t);
 	expect(t.url).toBe("https://chatty-tunnel.trycloudflare.com");
 	expect(t.port).toBe(41_000);
+});
+
+test("skips cloudflared's API endpoint and announces the quick-tunnel hostname", async () => {
+	// cloudflared prints `api.trycloudflare.com/client/v4/` before the random hostname.
+	// Both fit a `*.trycloudflare.com` shape, so a reader that settles on the first
+	// match hands the wrong host to the UI announcement, the audit line and xfer's
+	// publicUrl (2026-11-27).
+	const t = await openQuickTunnel({ bin: apiEndpointFirst(), port: 41_004, timeoutMs: 10_000 });
+	opened.push(t);
+	expect(t.url).toBe("https://calm-river-xyz.trycloudflare.com");
 });
 
 test("a child that quits before announcing one is an error, with its output", async () => {

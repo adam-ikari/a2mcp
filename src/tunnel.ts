@@ -20,8 +20,15 @@
  */
 import { type ChildProcess, spawn } from "node:child_process";
 
-/** The hostname cloudflared announces for a quick tunnel. */
-const QUICK_URL = /https:\/\/[a-z0-9][a-z0-9-]*\.trycloudflare\.com/;
+/**
+ * The hostname cloudflared announces for a quick tunnel.
+ *
+ * `api.trycloudflare.com` is cloudflared's own control-plane endpoint, printed in an
+ * early "API endpoint" line. It fits the quick-tunnel shape too, so without the
+ * lookahead the first match resolves with that fixed host and the random one that
+ * actually fronts the bridge never gets read (2026-11-27).
+ */
+const QUICK_URL = /https:\/\/(?!api\.)[a-z0-9][a-z0-9-]*\.trycloudflare\.com/;
 
 /** How much of the child's output to hold on to, in characters. */
 const TRANSCRIPT_LIMIT = 64 * 1024;

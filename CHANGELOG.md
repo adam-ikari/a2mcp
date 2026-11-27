@@ -1,8 +1,18 @@
 # Changelog
 
-首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.11.0`（2026-11-13，`/xfer` 传输逐档实测：隧道下行被限在约 0.23 MB/s、上行 1.3–1.4 MB/s，桥代理没有整包缓冲，也没有可测的每请求开销；新增 `A2MCP_TUNNEL_PROTOCOL` 可把 `--protocol` 传给 cloudflared，未设置时参数不变），上一版是 `v0.10.4`（2026-10-27，实机测试抓到 `xfer_share` 的 TTL 越过 `setTimeout` 32 位上限会立刻关共享，另修正提示词里 `File not found` 与「只关自己开的」两处说法；`ttlSeconds` 新增上限 2147483 秒），再上一版是 `v0.10.3`（2026-10-26，提示词再压一版，3414 → 2907 字符，行为约束一条没减；协议面与 `v0.10.2` 相同），再上一版是 `v0.10.2`（2026-10-26，提示词按首次调用重写并压短，写明共享双向、隧道复用与参考客户端自行克隆；协议面与 `v0.10.1` 相同），再上一版是 `v0.10.1`（2026-10-26，只在文档与提示词里补上公网隧道路由的 Cloudflare 边缘请求体上限与大文件切片做法；协议面与 `v0.10.0` 相同）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
+首个发布版：`v0.1.0`（git tag 与 GitHub Release）。**安装主路是 `omp install <git-url>`，不发布到 npm** —— 2026-10-20 曾把主路切到包名 `omp install a2mcp`（见那两节），同一天判据改口：不发包，主路回到 git URL；那段切 npm 的尝试记在历史里不重写，包名成为预留形态。可安装的 Release 现在是 `v0.11.1`（2026-11-27，隧道公告不再取到 `api.trycloudflare.com`：`QUICK_URL` 加 `(?!api\.)`，公告、审计与 `publicUrl` 拿到 cloudflared announce 的随机主机名），上一版是 `v0.11.0`（2026-11-13，`/xfer` 传输逐档实测：隧道下行被限在约 0.23 MB/s、上行 1.3–1.4 MB/s，桥代理没有整包缓冲，也没有可测的每请求开销；新增 `A2MCP_TUNNEL_PROTOCOL` 可把 `--protocol` 传给 cloudflared，未设置时参数不变），再上一版是 `v0.10.4`（2026-10-27，实机测试抓到 `xfer_share` 的 TTL 越过 `setTimeout` 32 位上限会立刻关共享，另修正提示词里 `File not found` 与「只关自己开的」两处说法；`ttlSeconds` 新增上限 2147483 秒），再上一版是 `v0.10.3`（2026-10-26，提示词再压一版，3414 → 2907 字符，行为约束一条没减；协议面与 `v0.10.2` 相同），再上一版是 `v0.10.2`（2026-10-26，提示词按首次调用重写并压短，写明共享双向、隧道复用与参考客户端自行克隆；协议面与 `v0.10.1` 相同），再上一版是 `v0.10.1`（2026-10-26，只在文档与提示词里补上公网隧道路由的 Cloudflare 边缘请求体上限与大文件切片做法；协议面与 `v0.10.0` 相同）：v0.1.0 与 v0.2.0 的 Release 已于 2026-10-16 撤下，`v0.2.1` 那份留着（它装得上，撤一个能用的入口不在那条发布卫生的判据里），历史 tag 全部保留（见 2026-10-16 那一节）。
 
 本文按日期倒序分节（组内按依赖顺序）；面向使用者与开发者的变更，纯内部记忆提交（`brain:`）不收录。括号内为 commit 短 sha。已发布的版本有 `## v<版本>` 总览节；未发布的逐日演进全部平铺在上面。
+
+## 2026-11-27 — 隧道公告取错地址：`api` 子域被当成 quick tunnel
+
+cloudflared 起 quick tunnel 时先打印 `INF API endpoint https://api.trycloudflare.com/client/v4/`，再打印随机主机名。`src/tunnel.ts` 的 `QUICK_URL` 允许 `api` 子域，`onData` 在第一个匹配处就 `resolve`——UI 公告、`auditTunnel` 与 xfer 的 `publicUrl` 拿到的是 Cloudflare 的固定 API 地址，不是那条真正转发桥端口的主机。
+
+- fix: `QUICK_URL` 加 `(?!api\.)` 负向前瞻。`api.trycloudflare.com` 仍匹配 `*.trycloudflare.com` 的形状，显式排掉；随机主机名不受影响。
+- test: `test/tunnel.test.ts` 加一只假 cloudflared，先输出 API endpoint、间隔 20 ms 再输出随机主机名。修复前它返回 `https://api.trycloudflare.com` 而红，修复后该项与原有四项共 5/5 绿；红在绿之前跑过，确认测试拦得住。
+- brain: `a2a-mcp-bridge` 里同日两条 evidence 的「代码尚未修复」由一条 `kind: reversal` 推翻，附红绿证据；`lint-links` OK。
+- 版本位: 工具名、回包字段与路由没动，改的是调用方拿到错的 `publicUrl` 这个值；按 v0.10.4 的先例进 patch 位，v0.11.1。
+- 回归: `bun test` 281 pass / 2 fail、`lint` 干净；2 项失败都在 `versions.test.ts`，本机 `node_modules` 的 `@oh-my-pi/pi-*` 是 18.18.3、宿主 omp 是 19.0.1，与 pin 18.12.1 不一致；`tsc` 仅余 `bridge.ts` / `takeover.ts` 的预存类型漂移。stash 掉本次改动后失败集合相同，与本版无关。`test:install` 的自包含半程通过（入口 import 图 12 模块、宿主包只剩 `@oh-my-pi/pi-coding-agent`），端到端半程被本机 Bun 1.3.14 挡住——宿主 `omp` 要求 ≥ 1.4.4；stash 回 v0.11.0 后同样失败。
 
 ## 2026-11-13 — 实测 `/xfer` 链路：隧道是限速点，桥代理不是
 
@@ -504,6 +514,16 @@ pin 是撞上来的一件事：本机宿主自己升到了 18.12.1，`package.js
 - docs: 两份 README 加了一段**给远程 agent 的提示词**（站点「使用指南」页跟着生成）——远程 agent 会拿宿主的工具当自己熟悉的同名工具调，而 `tools/list` 回的是宿主注册表逐字，这台机器的 `edit` 是补丁语法（`[PATH#TAG]` 加 `PUT N.=M:`），实测猜错换来 `File not found`
 - release: 撤下 v0.1.0 与 v0.2.0 的 GitHub Release（`gh release delete`，不加 `--cleanup-tag`），**三个 tag 全留**。v0.2.0 在部分机器上装不上，标成 prerelease 或加一句说明，发布入口里都还留着这个装不上的东西，索性把它和更早那个一起撤掉，可用入口只留 v0.2.1；CHANGELOG 那两节按历史保留，开头补一句现状
 - 回归（18.11.0 上重跑）：`lint` / `tsc` / `bun test` 161/161；`tree` 3 项、`registry` 5490 行（18.10.4 上是 5487）、`smoke`、`hardening` 34 项、`blob` 35 项、`install` 33 项 `PACKAGE OK`、`scenario` 54 步 0 失败、`takeover` 34 项 62.0 秒、审批 `VERDICT: B`
+
+## v0.11.1 — 隧道公告取错地址
+
+**这一版修的是 quick tunnel 主机名解析：`api.trycloudflare.com` 不再冒充隧道地址，UI 公告、`auditTunnel` 与 `publicUrl` 取到 cloudflared 真正 announce 的随机主机名。工具名、回包字段、路由与 v0.11.0 相同。** cloudflared 的输出里先有 `INF API endpoint https://api.trycloudflare.com/client/v4/`、后有随机主机名；`src/tunnel.ts` 的 `QUICK_URL` 原本允许 `api` 子域，`onData` 又在第一个匹配处 `resolve`。
+
+- 内容: 见上 2026-11-27 的「隧道公告取错地址：`api` 子域被当成 quick tunnel」一节。
+- 边界: 只排 `api` 子域，没有穷举 Cloudflare 可能打印的其他 `*.trycloudflare.com` 地址；证据是本机假 cloudflared 与 brain 里记录的真实输出顺序，没有在真实公网隧道上再跑一遍。改的是取到的值，不是协议面。
+- 升级: `omp install https://github.com/adam-ikari/a2mcp.git` 重装并重启宿主会话，token 与端口不动。隧道随旧会话关闭，新地址在重新 `/a2mcp tunnel` 时取到。
+- 版本位: 调用方经协议拿到的字段没变，变的是 `publicUrl` 原本错了的值；按 v0.10.4 的先例进 patch 位。
+- 回归（发版前这一遍，2026-11-27）: `bun test` 281 pass / 2 fail、`lint` 干净；2 项 `version guard` 因本机 `@oh-my-pi/pi-*` 18.18.3 与宿主 omp 19.0.1 均与 pin 18.12.1 不一致而失败，与本版改动无关（stash 后同样失败）；`tsc` 仅余 `bridge.ts` / `takeover.ts` 的预存类型漂移；`test:install` 的自包含半程通过、端到端半程因本机 Bun 1.3.14 低于宿主要求的 1.4.4 而未能跑完，stash 回 v0.11.0 后同样失败。
 
 ## v0.11.0 — `/xfer` 传输实测；隧道协议留出口
 
